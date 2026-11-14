@@ -1,0 +1,73 @@
+[package]
+name = "aivideoeditor"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+description = "Index footage, plan beat-synced edits, render and export timelines."
+authors = ["Lawrence Norton"]
+license = "MIT"
+repository = "https://github.com/lnorton89/aivideoeditor"
+readme = "README.md"
+publish = false
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+dirs = "7"
+env_logger = "0.11"
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+toml = "1.2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints.rust]
+warnings = "deny"
+dead_code = "deny"
+non_snake_case = "deny"
+non_upper_case_globals = "deny"
+non_camel_case_types = "deny"
+unused_variables = "deny"
+unused_imports = "forbid"
+unused_must_use = "forbid"
+unreachable_patterns = "forbid"
+unreachable_pub = "forbid"
+missing_docs = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+wildcard_enum_match_arm = "deny"
+match_wildcard_for_single_variants = "deny"
+match_wild_err_arm = "deny"
+rest_pat_in_fully_bound_structs = "deny"
+ignored_unit_patterns = "deny"
+allow_attributes = "deny"
+missing_safety_doc = "deny"
+undocumented_unsafe_blocks = "deny"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = "debuginfo"
+panic = "abort"
+
+# Optimised but quick to rebuild: `cargo run --profile release-fast`.
+[profile.release-fast]
+inherits = "release"
+lto = false
+incremental = true
+codegen-units = 16
+
+[profile.release-fast.package.aivideoeditor]
+codegen-units = 256
+
+[profile.dev.package."*"]
+debug = "line-tables-only"

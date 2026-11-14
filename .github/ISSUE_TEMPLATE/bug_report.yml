@@ -1,0 +1,64 @@
+# An issue *form*, which is why this is .yml and not .md. GitHub renders a
+# .md template as prose with optional YAML front matter; the schema below
+# (`body:` with typed fields) is only understood in a .yml file.
+name: Bug report
+description: Something is broken, or did the wrong thing
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please search the [existing issues](https://github.com/lnorton89/aivideoeditor/issues) first; it may already be known.
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Your operating system and how you got AI Video Editor.
+      placeholder: |
+        - OS: (e.g. Windows 11 23H2, Ubuntu 24.04)
+        - Install: release archive, or `cargo build --release`
+        - Version: aivideoeditor 0.1.0 (`aivideoeditor --version`), or the commit hash if you built from source
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: What you ran, clicked or typed, in order.
+      placeholder: |
+        1. Run ...
+        2. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: What happened instead? Include any error text.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output
+      description: Error text, a backtrace, or log output.
+      render: text
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Anything else that might help, such as whether it happens every time or once.
