@@ -86,6 +86,12 @@ pub const ACCENT: color::Rgb = match color::Rgb::from_hex("#ff3fb4") {
 /// The application id: config directory, single-instance mutex, tray host.
 pub const APP_ID: &str = "aivideoeditor";
 
+/// Installs the logger (stderr, `RUST_LOG`, default info). The window
+/// calls this too, so engine and player warnings reach a terminal.
+pub fn init_logging() {
+    logging::init();
+}
+
 /// Runs the headless subcommand in `cli`, writing its report to `out`.
 ///
 /// # Errors

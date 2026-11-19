@@ -68,6 +68,7 @@ fn main() -> std::process::ExitCode {
 
 /// Applies the command line to the saved preferences and opens the window.
 fn run(cli: Cli) -> anyhow::Result<()> {
+    aivideoeditor::init_logging();
     let mut config = if cli.reset {
         aivideoeditor::config::Config::default()
     } else {

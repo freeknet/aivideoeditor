@@ -27,15 +27,24 @@ fn main() -> anyhow::Result<()> {
         std::path::PathBuf::from,
     );
     std::fs::create_dir_all(&out)?;
-    let [width, height] = aivideoeditor::gui::DEFAULT_SIZE;
+    // A night to open (its _ave folder), so the pages show real content.
+    let night = std::env::var_os("AVE_SCREENSHOT_NIGHT").map(std::path::PathBuf::from);
+    let [width, height] = if night.is_some() {
+        [1680.0, 1000.0]
+    } else {
+        aivideoeditor::gui::DEFAULT_SIZE
+    };
     for page in Page::ALL {
         let mut harness = egui_kittest::Harness::builder()
             .with_size(egui::vec2(width, height))
             .build_ui_state(
                 |ui, app: &mut Option<App>| {
                     let app = app.get_or_insert_with(|| {
-                        let mut app =
-                            App::new(ui.ctx(), aivideoeditor::config::Config::default(), None);
+                        let mut app = App::new(
+                            ui.ctx(),
+                            aivideoeditor::config::Config::default(),
+                            night.clone(),
+                        );
                         app.apply(ui.ctx(), Action::Go(page));
                         app
                     });
@@ -43,8 +52,15 @@ fn main() -> anyhow::Result<()> {
                 },
                 None,
             );
-        // Long enough for the page's arrival animation to finish.
-        harness.run_steps(60);
+        // Long enough for the page's arrival animation to finish, and, with
+        // a night open, for thumbnails decoded on worker threads to land.
+        let rounds = if night.is_some() { 40 } else { 1 };
+        for _ in 0..rounds {
+            harness.run_steps(15);
+            if night.is_some() {
+                std::thread::sleep(std::time::Duration::from_millis(150));
+            }
+        }
         let image = harness
             .render()
             .map_err(|error| anyhow::anyhow!("rendering {page:?} failed: {error}"))?;
