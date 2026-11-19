@@ -63,6 +63,9 @@ pub(crate) struct PageCtx<'a> {
     pub(crate) actions: &'a mut Vec<Action>,
     /// Whether a modal is open (pages must not read shortcuts then).
     pub(crate) blocked: bool,
+    /// The keyboard preset in force: regions read their keys with
+    /// `keymap::chord(id, ctx.keymap)` (or `keymap::pressed`).
+    pub(crate) keymap: crate::gui::ui::keymap::Preset,
 }
 
 impl PageCtx<'_> {
