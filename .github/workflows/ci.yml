@@ -119,9 +119,10 @@ jobs:
 
       # cpal (the viewer's audio) links ALSA on Linux; its build script
       # fails without the headers. native-tls (the assistant's HTTPS) links
-      # OpenSSL on Linux.
+      # OpenSSL on Linux. DejaVu gives the GUI tests their symbol fallback
+      # (egui_kittest panics on a glyph no font has).
       - name: System libraries
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libssl-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libssl-dev pkg-config fonts-dejavu-core fonts-noto-core
 
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
