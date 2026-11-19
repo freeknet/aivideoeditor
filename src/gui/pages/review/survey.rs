@@ -107,7 +107,7 @@ pub(super) fn draw(
 ) -> usize {
     let theme = paint.theme;
     let n = survey.ids.len();
-    let w = ui.available_width().max(60.0);
+    let w = (super::visible_width(ui) - super::scroll_bar_width(ui)).max(60.0);
     let fit = (((w + GAP) / (TILE_MIN + GAP)).floor() as usize).max(1);
     // Two shots read best side by side, four as a square.
     let cols = if n <= 4 { fit.min(2) } else { fit.min(3) };

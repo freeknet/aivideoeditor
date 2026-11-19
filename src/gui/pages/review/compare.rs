@@ -32,7 +32,7 @@ pub(super) struct Compare {
 }
 
 /// Panes sit side by side once each can be this wide.
-const SIDE_BY_SIDE: f32 = 150.0;
+const SIDE_BY_SIDE: f32 = 110.0;
 
 /// The candidate `delta` results on from `from` in `order`, never the
 /// select. When `from` is not among the results, the result after the
@@ -71,7 +71,7 @@ pub(super) fn draw(
         .id_salt("review-compare")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            let w = ui.available_width();
+            let w = super::visible_width(ui);
             let side = w >= SIDE_BY_SIDE * 2.0 + SPACE_SM;
             let pane_w = if side { (w - SPACE_SM) / 2.0 } else { w };
             let panes = [

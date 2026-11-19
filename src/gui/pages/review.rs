@@ -1928,6 +1928,20 @@ pub(super) fn tooltip(ui: &mut egui::Ui, paint: &Paint<'_>, item: &Item) {
     }
 }
 
+/// The width left in `ui` that is actually on screen: a wide header row
+/// can stretch the pane's layout past its clip edge.
+pub(super) fn visible_width(ui: &egui::Ui) -> f32 {
+    ui.available_width()
+        .min(ui.clip_rect().right() - ui.cursor().left())
+        .max(0.0)
+}
+
+/// The room a vertical scroll bar takes.
+pub(super) fn scroll_bar_width(ui: &egui::Ui) -> f32 {
+    let s = &ui.spacing().scroll;
+    s.bar_width + s.bar_inner_margin + s.bar_outer_margin
+}
+
 /// A play triangle on a dark disc, centred at `c`, `r` across the disc's
 /// radius.
 pub(super) fn play_mark(painter: &egui::Painter, c: egui::Pos2, r: f32, color: egui::Color32) {
