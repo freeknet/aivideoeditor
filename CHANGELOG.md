@@ -38,3 +38,15 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   layout grid, action centre); `ave check` flags two shots from different clips
   closer than `lookalike` (default 0.12, calibrated on 2026-11-11) unless the
   people map names different performers.
+- Cross-week memory: `ave plan` avoids, and `ave check` rejects (rule
+  `reject_reused`), moments used by sibling nights' plans
+  (`<night>/../*/_ave/plans/*.toml`), matched by clip id, file size and range.
+- Planner: windows centre on each segment's best moment; the drop puts the
+  biggest burst on the downbeat (in-point at the burst onset); shot lengths
+  follow per-bar energy through a pacing DP that penalises uniform lengths, and
+  the pace eases when distinct footage runs out; the draft avoids look-alikes.
+
+### Fixed
+
+- Drafted crops are rounded inward so a two-decimal `cx` never leaves the frame,
+  and windows never run past the end of the file.

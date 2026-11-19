@@ -73,6 +73,9 @@ pub(crate) struct Rules {
     /// people map does not name either). 0 turns the rule off. Calibrated
     /// on 2026-11-11: see [`LOOKALIKE`].
     pub(crate) lookalike: f32,
+    /// Whether a shot reusing a moment from another night's plan fails the
+    /// check (see [`Memory`]). The drafter avoids them either way.
+    pub(crate) reject_reused: bool,
     /// Shots whose source range carries any of these flags fail the check.
     pub(crate) reject_flags: Vec<String>,
     /// The shot on the drop must have this subject (empty: no requirement).
@@ -89,6 +92,7 @@ impl Default for Rules {
             same_clip_gap: 30.0,
             person_gap: 8,
             lookalike: LOOKALIKE,
+            reject_reused: true,
             reject_flags: vec!["dark".into(), "whip".into(), "soft".into()],
             drop_subject: "fire".into(),
             reject_moments: vec!["transition".into(), "idle".into()],
@@ -105,6 +109,163 @@ impl Default for Rules {
 /// clips showing different performers start at 0.158 (p1), only 0.1 %
 /// under 0.12; other clips of the same performer, 4.1 % under 0.12.
 pub(crate) const LOOKALIKE: f32 = 0.12;
+
+/// How the render finishes the cut. Every field optional in the plan's
+/// `[finish]` table.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub(crate) struct Finish {
+    /// Cut this many frames ahead of the beat (editors' anticipation: the
+    /// picture changes a hair before the music does). 0 cuts on the beat.
+    pub(crate) cut_lead_frames: u32,
+    /// Match each shot's mid-tones (not black, not highlights, not
+    /// emitters) to the drop shot's, so colour does not jump between cuts.
+    pub(crate) match_colour: bool,
+}
+
+impl Default for Finish {
+    fn default() -> Self {
+        Self {
+            cut_lead_frames: 0,
+            match_colour: true,
+        }
+    }
+}
+
+/// Moments used by other nights' plans: the cross-week memory.
+///
+/// **How nights are found.** A night's work folder is `<night>/_ave`. The
+/// memory reads every *other* folder beside `<night>` (its siblings under
+/// the same parent, e.g. `Flow Night/2026-11-04` next to
+/// `Flow Night/2026-11-11`) and takes each `<sibling>/_ave/plans/*.toml`.
+/// Every shot of those plans becomes a used moment: clip id, the source
+/// file's size (from `<sibling>/_ave/clips/<id>.json` when present), and
+/// the time range it covered (length from `<sibling>/_ave/music.json`'s
+/// tempo, or 140 BPM). A shot here reuses a moment when its clip has the
+/// same id, the same file size where both are known (Canon numbers repeat
+/// every 9999 clips; size tells two files apart), and its range overlaps.
+/// The old pipeline's published edits are not read.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Memory {
+    /// Every used moment.
+    pub(crate) used: Vec<Used>,
+}
+
+/// One moment another night's plan used.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Used {
+    /// The night folder's name.
+    pub(crate) night: String,
+    /// The plan's name.
+    pub(crate) plan: String,
+    /// Clip id.
+    pub(crate) clip: String,
+    /// Source file size in bytes, when that night's clip cache says.
+    pub(crate) size: Option<u64>,
+    /// Start in the clip, seconds.
+    pub(crate) t0: f32,
+    /// End in the clip, seconds.
+    pub(crate) t1: f32,
+}
+
+impl Memory {
+    /// Reads the plans of every sibling night of the work folder `work`.
+    pub(crate) fn load(work: &Path) -> Self {
+        #[derive(serde::Deserialize)]
+        struct Tempo {
+            bpm: f32,
+        }
+        #[derive(serde::Deserialize)]
+        struct Stamp {
+            stamp: (u64, u64),
+        }
+        let mut used = Vec::new();
+        let night = if work.file_name().is_some_and(|n| n == "_ave") {
+            work.parent()
+        } else {
+            Some(work)
+        };
+        let Some(night) = night else {
+            return Self { used };
+        };
+        let Some(root) = night.parent() else {
+            return Self { used };
+        };
+        let Ok(entries) = std::fs::read_dir(root) else {
+            return Self { used };
+        };
+        let me = std::fs::canonicalize(night).unwrap_or_else(|_| night.to_path_buf());
+        for entry in entries.flatten() {
+            let dir = entry.path();
+            if !dir.is_dir() || std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone()) == me {
+                continue;
+            }
+            let other = dir.join("_ave");
+            let Ok(plans) = std::fs::read_dir(other.join("plans")) else {
+                continue;
+            };
+            let bpm = std::fs::read_to_string(other.join("music.json"))
+                .ok()
+                .and_then(|t| serde_json::from_str::<Tempo>(&t).ok())
+                .map_or(140.0, |t| t.bpm)
+                .max(1.0);
+            let night_name = dir
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let mut sizes: std::collections::BTreeMap<String, Option<u64>> =
+                std::collections::BTreeMap::new();
+            for p in plans.flatten().map(|e| e.path()) {
+                if p.extension().is_none_or(|e| e != "toml") {
+                    continue;
+                }
+                let Ok(plan) = Plan::load(&p) else {
+                    log::warn!("memory: skipping unreadable plan {}", p.display());
+                    continue;
+                };
+                for shot in &plan.shots {
+                    let size = *sizes.entry(shot.clip.clone()).or_insert_with(|| {
+                        std::fs::read_to_string(
+                            other.join("clips").join(format!("{}.json", shot.clip)),
+                        )
+                        .ok()
+                        .and_then(|t| serde_json::from_str::<Stamp>(&t).ok())
+                        .map(|s| s.stamp.0)
+                    });
+                    used.push(Used {
+                        night: night_name.clone(),
+                        plan: plan.name.clone(),
+                        clip: shot.clip.clone(),
+                        size,
+                        t0: shot.t_in,
+                        t1: shot.t_in + shot.beats as f32 * 60.0 / bpm,
+                    });
+                }
+            }
+        }
+        Self { used }
+    }
+
+    /// The memory for an index's night (empty when the index was not
+    /// loaded from a work folder).
+    pub(crate) fn for_index(index: &Index) -> Self {
+        index.work.as_deref().map(Self::load).unwrap_or_default()
+    }
+
+    /// The used moment `clip` `t0..t1` repeats, if any.
+    pub(crate) fn hit(&self, index: &Index, clip: &str, t0: f32, t1: f32) -> Option<&Used> {
+        let size = index.clip(clip).map(|c| c.stamp.0);
+        self.used.iter().find(|u| {
+            u.clip == clip
+                && match (u.size, size) {
+                    (Some(a), Some(b)) => a == b,
+                    (Some(_) | None, None) | (None, Some(_)) => true,
+                }
+                && u.t0 < t1
+                && t0 < u.t1
+        })
+    }
+}
 
 /// One cut.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -158,6 +319,9 @@ pub(crate) struct Plan {
     /// Rules this plan is checked against.
     #[serde(default)]
     pub(crate) rules: Rules,
+    /// Render finishing options.
+    #[serde(default)]
+    pub(crate) finish: Finish,
     /// The cuts, in order.
     #[serde(rename = "shot")]
     pub(crate) shots: Vec<Shot>,
@@ -212,6 +376,17 @@ pub(crate) struct Problem {
 
 /// Checks `plan` against its rules, the index and the music map.
 pub(crate) fn check(plan: &Plan, index: &Index, map: &MusicMap, people: &People) -> Vec<Problem> {
+    check_with(plan, index, map, people, &Memory::for_index(index))
+}
+
+/// [`check`] against an explicit cross-week memory.
+pub(crate) fn check_with(
+    plan: &Plan,
+    index: &Index,
+    map: &MusicMap,
+    people: &People,
+    memory: &Memory,
+) -> Vec<Problem> {
     let mut problems = Vec::new();
     let mut push = |shot: usize, message: String| problems.push(Problem { shot, message });
     let r = &plan.rules;
@@ -372,6 +547,17 @@ pub(crate) fn check(plan: &Plan, index: &Index, map: &MusicMap, people: &People)
                     ),
                 );
             }
+        }
+        if let Some(u) = memory.hit(index, &shot.clip, shot.t_in, t_out)
+            && r.reject_reused
+        {
+            push(
+                n,
+                format!(
+                    "reuses {} {:.1}-{:.1} from {} `{}`",
+                    u.clip, u.t0, u.t1, u.night, u.plan
+                ),
+            );
         }
     }
     if !hit_drop {
@@ -581,6 +767,7 @@ beats = 4
             end_bar: 4,
             end_card: String::new(),
             rules: Rules::default(),
+            finish: super::Finish::default(),
             shots: vec![shot("A", 10.0), shot("B", 10.0), shot("A", 60.0)],
         };
         let people = crate::people::People::default();
@@ -610,6 +797,137 @@ beats = 4
                 .iter()
                 .any(|p| p.shot == 0 && p.message.contains("beats")),
             "beat count off: {problems:?}"
+        );
+        Ok(())
+    }
+
+    /// A two-shot plan, A then B, both 4 beats in at 10 s.
+    fn two_shots() -> Plan {
+        let shot = |clip: &str| super::Shot {
+            clip: clip.into(),
+            t_in: 10.0,
+            beats: 4,
+            cx: 0.5,
+            who: String::new(),
+            seg: String::new(),
+            note: String::new(),
+        };
+        Plan {
+            name: "t".into(),
+            aspect: Aspect::Wide,
+            music: "m.wav".into(),
+            start_bar: 0,
+            drop_bar: 0,
+            card_bar: 2,
+            end_bar: 2,
+            end_card: String::new(),
+            rules: Rules::default(),
+            finish: super::Finish::default(),
+            shots: vec![shot("A"), shot("B")],
+        }
+    }
+
+    #[test]
+    fn look_alikes_need_the_same_spot_and_performer() -> anyhow::Result<()> {
+        let mut index = tiny_index();
+        let sig = crate::analyze::segments::Signature {
+            hist: (0..32).map(|i| if i == 3 { 1.0 } else { 0.0 }).collect(),
+            grid: (0..16).map(|i| if i == 5 { 1.0 } else { 0.0 }).collect(),
+            cx: 0.5,
+        };
+        for g in &mut index.segments {
+            g.seg.sig = sig.clone();
+        }
+        let plan = two_shots();
+        let unnamed = crate::people::People::default();
+        let problems = super::check_with(
+            &plan,
+            &index,
+            &tiny_map(),
+            &unnamed,
+            &super::Memory::default(),
+        );
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.shot == 2 && p.message.contains("looks like shot 1")),
+            "identical signatures, nobody named: {problems:?}"
+        );
+        let mut named = crate::people::People::default();
+        named.names.insert("A".into(), "ana".into());
+        named.names.insert("B".into(), "bo".into());
+        let problems = super::check_with(
+            &plan,
+            &index,
+            &tiny_map(),
+            &named,
+            &super::Memory::default(),
+        );
+        assert!(
+            !problems.iter().any(|p| p.message.contains("looks like")),
+            "two different performers at one spot are not a repeat: {problems:?}"
+        );
+        // A different spot: no look-alike even when unnamed.
+        index.segments[1].seg.sig.hist = (0..32).map(|i| if i == 20 { 1.0 } else { 0.0 }).collect();
+        let problems = super::check_with(
+            &plan,
+            &index,
+            &tiny_map(),
+            &unnamed,
+            &super::Memory::default(),
+        );
+        assert!(
+            !problems.iter().any(|p| p.message.contains("looks like")),
+            "another spot: {problems:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn moments_from_other_nights_are_remembered() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let past = root.path().join("2026-11-04").join("_ave");
+        std::fs::create_dir_all(past.join("plans"))?;
+        std::fs::create_dir_all(past.join("clips"))?;
+        let mut old = two_shots();
+        old.name = "reel-30".into();
+        old.shots.truncate(1);
+        old.save(&past.join("plans").join("reel-30.toml"))?;
+        std::fs::write(past.join("music.json"), r#"{"bpm": 120.0}"#)?;
+        std::fs::write(past.join("clips").join("A.json"), r#"{"stamp": [0, 0]}"#)?;
+        let work = root.path().join("2026-11-11").join("_ave");
+        std::fs::create_dir_all(&work)?;
+        // This night's own plans never count.
+        two_shots().save(&work.join("plans").join("mine.toml"))?;
+
+        let memory = super::Memory::load(&work);
+        assert_eq!(memory.used.len(), 1, "one used moment: {memory:?}");
+        let u = &memory.used[0];
+        assert!(
+            u.night == "2026-11-04" && (u.t1 - 12.0).abs() < 1e-3 && u.size == Some(0),
+            "range from the old tempo, size from the old cache: {u:?}"
+        );
+        let index = tiny_index();
+        let people = crate::people::People::default();
+        let problems = super::check_with(&two_shots(), &index, &tiny_map(), &people, &memory);
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.shot == 1 && p.message.contains("reuses A 10.0-12.0 from 2026-11-04")),
+            "shot 1 reuses last week's moment: {problems:?}"
+        );
+        assert!(
+            !problems
+                .iter()
+                .any(|p| p.shot == 2 && p.message.contains("reuses")),
+            "B was never used: {problems:?}"
+        );
+        let mut later = two_shots();
+        later.shots[0].t_in = 40.0;
+        let problems = super::check_with(&later, &index, &tiny_map(), &people, &memory);
+        assert!(
+            !problems.iter().any(|p| p.message.contains("reuses")),
+            "another moment of the same clip is fine: {problems:?}"
         );
         Ok(())
     }
