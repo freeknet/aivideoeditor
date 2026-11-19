@@ -12,6 +12,18 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Chat panel runs on Claude Code (the default when `claude` is on PATH): one headless
+  `claude -p` stream-json session per conversation with `ave mcp` as its only tool
+  server (no shell, no file edits, no user settings or MCP servers), resumed across
+  restarts, with live tool status lines, `look` contact sheets inline, cost per turn,
+  Stop, a repeat-call guard and a clear "log in once" message that falls back to the
+  Claude API or local model. The API and local providers now use the same `ave mcp`
+  tools in-process. Staged `plan_edit`s become Apply / Discard cards; `plan_edit`
+  takes `base_version` and refuses stale commits, and the agent may commit only when
+  the night's "Let the assistant apply edits" permission is on. The per-turn reminder
+  carries references, selection, playhead and matching skills (`agent/skills/`:
+  beat-sync-reel, suggest-moments, fix-check, weekly-deliverables); `ave://` links in
+  replies render as chips that select and show the shot, segment, range or bars.
 - Music tab: whole-track overview and FCP-style zoomed beat grid (sections, drops,
   song ranges, playhead), grid fixes (drag the downbeat, `,`/`.` beat, Shift 10 ms
   offset, tempo, `D` drop, rename sections, re-analyse), per-deliverable song ranges,

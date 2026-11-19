@@ -31,7 +31,7 @@ mod audio;
 pub(crate) mod clock;
 mod ring;
 pub(crate) mod transport;
-mod video;
+pub(crate) mod video;
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};

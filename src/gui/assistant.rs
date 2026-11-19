@@ -25,8 +25,11 @@
 //! | [`context`] | system prompt, per-message snapshot, the shot log copy |
 //! | [`tools`] | tool schemas and running them |
 //! | [`ops`] | edit operations, applying them, scope and beat checks |
-//! | [`agent`] | the tool loop of one turn |
+//! | [`agent`] | the tool loop of one turn, the events, the repeat guard |
+//! | [`claude_code`] | Claude Code as the runtime, over stream-json |
 //! | [`provider`] | Claude (streamed) and a local llama.cpp server |
+//! | [`skills`] | the agent's skills and trigger matching |
+//! | [`links`] | `ave://` links in the agent's text, shown as chips |
 //! | [`store`] | chat logs, plan versions, preferences |
 //! | [`complete`] | the `@` autocomplete and chip/token merging |
 //! | [`markdown`] | the bold/bullet text the model writes |
@@ -36,12 +39,15 @@
 //! the panel as it was.
 
 mod agent;
+mod claude_code;
 mod complete;
 mod context;
+mod links;
 mod markdown;
 mod model;
 pub(crate) mod ops;
 mod provider;
+mod skills;
 pub(crate) mod store;
 mod tools;
 
@@ -65,16 +71,21 @@ use crate::plan::{Plan, Problem, Shot};
 use crate::project::Project;
 use crate::refs::{Modifier, Reference, Target};
 
-/// Models the selector offers: id and label. `local` is the llama.cpp server.
-const MODELS: [(&str, &str); 4] = [
+/// Models the selector offers: id and label. `claude-code` is the Claude
+/// Code CLI on the person's own plan, `local` the llama.cpp server.
+const MODELS: [(&str, &str); 5] = [
+    (CLAUDE_CODE, "Claude Code"),
     ("claude-opus-5-5", "Claude Opus 5.5"),
     ("claude-sonnet-5-5", "Claude Sonnet 5.5"),
     ("claude-haiku-5-5", "Claude Haiku 5.5"),
     ("local", "Local (llama.cpp)"),
 ];
 
+/// The runtime id of Claude Code in [`MODELS`].
+const CLAUDE_CODE: &str = "claude-code";
+
 /// The settings key this panel uses in `ave.toml`'s `[pages]`.
-const PAGE_KEY: &str = "assistant";
+const PAGE_KEY: &str = crate::mcp::PAGE_KEY;
 
 /// What the request may touch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -188,6 +199,8 @@ struct Turn {
     thinking: String,
     /// Tools announced since the last complete message.
     tools: Vec<String>,
+    /// Whether Claude Code runs this turn (Stop kills its process).
+    claude: bool,
 }
 
 /// A proposal card's computed state.
@@ -234,6 +247,24 @@ pub(crate) struct State {
     cards: HashMap<String, Card>,
     /// The last error to show.
     error: Option<String>,
+    /// The `claude` executable, looked up once (`Some(None)`: not installed).
+    claude: Option<Option<PathBuf>>,
+    /// The running Claude Code session.
+    session: Option<claude_code::Session>,
+    /// Why Claude Code cannot be used right now (not signed in).
+    claude_down: Option<String>,
+    /// Contact sheets shown under tool calls.
+    images: Sheets,
+}
+
+/// Contact-sheet textures by file (`None`: unreadable).
+#[derive(Default)]
+struct Sheets(HashMap<String, Option<egui::TextureHandle>>);
+
+impl std::fmt::Debug for Sheets {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Sheets").field(&self.0.len()).finish()
+    }
 }
 
 /// Draws the panel.
@@ -254,6 +285,9 @@ pub(crate) fn panel(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
         let prefs = store::Prefs::load();
         state.url_draft = prefs.local();
         state.prefs = Some(prefs);
+    }
+    if state.claude.is_none() {
+        state.claude = Some(claude_code::find());
     }
     let Some(project) = ctx.project.as_ref() else {
         widgets::title(ui, ctx.theme, "Assistant");
@@ -371,14 +405,28 @@ fn open_chat(work: &Path, plan: &str) -> Chat {
     }
 }
 
-/// Drains the worker's events into the conversation.
+/// Drains the turn's events into the conversation.
 fn poll(ctx: &mut PageCtx<'_>, state: &mut State, egui_ctx: &egui::Context) {
     let Some(turn) = state.turn.as_mut() else {
         return;
     };
     egui_ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    if turn.claude && turn.cancel.load(Ordering::Relaxed) {
+        // Stop: the process goes; the next message resumes the session.
+        state.session = None;
+        state.turn = None;
+        if let Some(chat) = state.chat.as_mut() {
+            state.error = chat.push(LogLine::Notice {
+                text: "Stopped.".to_owned(),
+                error: false,
+            });
+        }
+        reload_after_edits(ctx, state);
+        return;
+    }
     let mut done = false;
     let mut proposals = Vec::new();
+    let mut committed = Vec::new();
     while let Ok(event) = turn.rx.try_recv() {
         let Some(chat) = state.chat.as_mut() else {
             break;
@@ -393,7 +441,13 @@ fn poll(ctx: &mut PageCtx<'_>, state: &mut State, egui_ctx: &egui::Context) {
                 None
             }
             Event::Delta(Delta::Tool(name)) => {
-                turn.tools.push(name);
+                // The in-process loop announces bare names; Claude Code
+                // sends a described label.
+                turn.tools.push(if name.contains(' ') {
+                    name
+                } else {
+                    tools::describe(&name, &serde_json::Value::Null, true)
+                });
                 None
             }
             Event::Msg(msg) => {
@@ -406,6 +460,15 @@ fn poll(ctx: &mut PageCtx<'_>, state: &mut State, egui_ctx: &egui::Context) {
                 proposals.push(p.id.clone());
                 chat.push(LogLine::Proposal { proposal: p })
             }
+            Event::Committed { id, version } => {
+                committed.push((id, version));
+                None
+            }
+            Event::Image {
+                tool_use_id,
+                mime,
+                data,
+            } => save_image(chat, &tool_use_id, &mime, &data),
             Event::Ask {
                 id,
                 question,
@@ -421,7 +484,12 @@ fn poll(ctx: &mut PageCtx<'_>, state: &mut State, egui_ctx: &egui::Context) {
                 None
             }
             Event::Notice { text, error } => chat.push(LogLine::Notice { text, error }),
-            Event::Done { secs, model, usage } => {
+            Event::Done {
+                secs,
+                model,
+                usage,
+                cost,
+            } => {
                 done = true;
                 chat.push(LogLine::Turn {
                     secs,
@@ -429,15 +497,42 @@ fn poll(ctx: &mut PageCtx<'_>, state: &mut State, egui_ctx: &egui::Context) {
                     input_tokens: usage.input,
                     output_tokens: usage.output,
                     cached_tokens: usage.cached,
+                    cost_usd: cost,
                 })
             }
         };
         if err.is_some() {
             state.error = err;
         }
+        if done {
+            break;
+        }
+    }
+    for (id, version) in committed {
+        let ops = state
+            .chat
+            .as_ref()
+            .and_then(|c| proposal_in(&c.log, &id))
+            .map(|p| (0..p.ops.len()).collect())
+            .unwrap_or_default();
+        set_status(
+            state,
+            &id,
+            Status::Applied {
+                version,
+                ops,
+                ts: model::now(),
+            },
+        );
+        proposals.retain(|p| *p != id);
     }
     if done {
+        let claude = state.turn.as_ref().is_some_and(|t| t.claude);
         state.turn = None;
+        if claude {
+            claude_turn_over(state);
+        }
+        reload_after_edits(ctx, state);
     }
     if auto_apply(ctx) {
         for id in proposals {
@@ -453,7 +548,95 @@ fn poll(ctx: &mut PageCtx<'_>, state: &mut State, egui_ctx: &egui::Context) {
     }
 }
 
-/// Whether this night applies clean proposals without asking.
+/// After a Claude Code turn: keep the session id for a restart, and fall
+/// back when the CLI is not signed in or died.
+fn claude_turn_over(state: &mut State) {
+    let Some(session) = state.session.as_ref() else {
+        return;
+    };
+    if session.auth_failed() {
+        state.claude_down =
+            Some("Claude Code is not signed in: run `claude` once and log in.".to_owned());
+        state.session = None;
+        return;
+    }
+    let (work, plan) = session.key.clone();
+    let file = claude_code::session_file(&work, &plan);
+    if !session.alive() {
+        // A session that cannot be resumed is not tried again.
+        let _ = std::fs::remove_file(&file);
+        state.session = None;
+        return;
+    }
+    if let Some(id) = session.session_id()
+        && std::fs::read_to_string(&file)
+            .ok()
+            .as_deref()
+            .map(str::trim)
+            != Some(id.as_str())
+        && let Err(e) = std::fs::write(&file, &id)
+    {
+        state.error = Some(format!("could not save the Claude Code session: {e}"));
+    }
+}
+
+/// Plans may have changed under the agent: re-read them.
+fn reload_after_edits(ctx: &mut PageCtx<'_>, state: &mut State) {
+    if let Some(chat) = state.chat.as_mut() {
+        chat.cached = None;
+    }
+    if let Some(project) = ctx.project.as_mut() {
+        project.reload_plans();
+    }
+}
+
+/// Saves a tool's image beside the chat log and records it.
+fn save_image(chat: &mut Chat, tool_use_id: &str, mime: &str, data: &str) -> Option<String> {
+    use base64::Engine as _;
+    let bytes = match base64::engine::general_purpose::STANDARD.decode(data) {
+        Ok(b) => b,
+        Err(e) => return Some(format!("a tool image could not be read: {e}")),
+    };
+    let ext = if mime.contains("png") { "png" } else { "jpg" };
+    let n = chat
+        .log
+        .iter()
+        .filter(|l| matches!(l, LogLine::Image { .. }))
+        .count();
+    let safe: String = tool_use_id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+        .collect();
+    let file = format!("img/{}-{safe}-{n}.{ext}", chat.plan);
+    let path = chat.work.join("chat").join(&file);
+    if let Some(dir) = path.parent()
+        && let Err(e) = std::fs::create_dir_all(dir)
+    {
+        return Some(format!("could not save a tool image: {e}"));
+    }
+    if let Err(e) = std::fs::write(&path, bytes) {
+        return Some(format!("could not save a tool image: {e}"));
+    }
+    chat.push(LogLine::Image {
+        tool_use_id: tool_use_id.to_owned(),
+        file,
+    })
+}
+
+/// Proposal `id` in a log.
+fn proposal_in(log: &[LogLine], id: &str) -> Option<Proposal> {
+    log.iter().find_map(|l| match l {
+        LogLine::Proposal { proposal } if proposal.id == id => Some((**proposal).clone()),
+        LogLine::Msg { .. }
+        | LogLine::Proposal { .. }
+        | LogLine::Status { .. }
+        | LogLine::Turn { .. }
+        | LogLine::Notice { .. }
+        | LogLine::Image { .. } => None,
+    })
+}
+
+// Whether this night applies clean proposals without asking.
 fn auto_apply(ctx: &PageCtx<'_>) -> bool {
     ctx.project
         .as_ref()
@@ -461,6 +644,13 @@ fn auto_apply(ctx: &PageCtx<'_>) -> bool {
         .and_then(|t| t.get("auto_apply"))
         .and_then(toml::Value::as_bool)
         .unwrap_or(false)
+}
+
+/// Whether this night lets the agent save edits itself.
+fn allow_commit(ctx: &PageCtx<'_>) -> bool {
+    ctx.project
+        .as_ref()
+        .is_some_and(crate::mcp::commits_allowed)
 }
 
 /// Saves one per-night option.
@@ -536,6 +726,9 @@ fn header(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
             {
                 let old = chat.log_path();
                 let kept = old.with_file_name(format!("{}.{}.jsonl", chat.plan, model::now()));
+                // A new conversation is a new Claude Code session too.
+                state.session = None;
+                let _ = std::fs::remove_file(claude_code::session_file(&chat.work, &chat.plan));
                 if let Err(e) = std::fs::rename(&old, &kept) {
                     state.error = Some(format!("could not archive the conversation: {e}"));
                 } else {
@@ -617,6 +810,27 @@ fn settings(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
             });
             widgets::muted(ui, theme, "llama.cpp's server (AVE_LLM_URL). Small local models plan poorly; use it offline.");
             ui.add_space(SPACE_XS);
+            let mut allow = allow_commit(ctx);
+            ui.label(RichText::new("Permission").strong());
+            ui.horizontal_wrapped(|ui| {
+                let mut changed = false;
+                changed |= ui
+                    .radio_value(&mut allow, false, "Ask")
+                    .on_hover_text("The assistant stages every edit as a card; you apply it.")
+                    .changed();
+                changed |= ui
+                    .radio_value(&mut allow, true, "Let the assistant apply edits")
+                    .on_hover_text("The assistant may save edits itself; each one is a card you can revert.")
+                    .changed();
+                if changed {
+                    state.error = set_page_option(
+                        ctx,
+                        crate::mcp::ALLOW_COMMIT,
+                        toml::Value::Boolean(allow),
+                    );
+                }
+            });
+            ui.add_space(SPACE_XS);
             let mut auto = auto_apply(ctx);
             if widgets::switch(ui, theme, &mut auto, "Apply proposals that keep the check clean")
                 .on_hover_text("Off: every proposal waits for you (suggest only). On: proposals that add no check problems are applied at once, still as a revertible version.")
@@ -628,25 +842,82 @@ fn settings(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
     ui.add_space(SPACE_XS);
 }
 
-/// The model the person picked.
+/// The model the person picked: Claude Code when it is installed and
+/// nothing else was chosen.
 fn model_id(state: &State) -> String {
     state
         .prefs
         .as_ref()
         .and_then(|p| p.model.clone())
-        .unwrap_or_else(|| MODELS[0].0.to_owned())
+        .unwrap_or_else(|| {
+            if matches!(state.claude, Some(Some(_))) {
+                CLAUDE_CODE.to_owned()
+            } else {
+                MODELS[1].0.to_owned()
+            }
+        })
+}
+
+/// What will answer the next message.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Runtime {
+    /// The Claude Code CLI.
+    ClaudeCode(PathBuf),
+    /// The Messages API with this model.
+    Api(String),
+    /// The local llama.cpp server.
+    Local,
+}
+
+/// The runtime for the picked model, falling back from Claude Code (not
+/// installed, or not signed in) to the API when there is a key, else local.
+fn runtime(state: &State) -> Runtime {
+    let model = model_id(state);
+    if model == CLAUDE_CODE {
+        if let (Some(Some(exe)), None) = (&state.claude, &state.claude_down) {
+            return Runtime::ClaudeCode(exe.clone());
+        }
+        return if state.prefs.as_ref().and_then(store::Prefs::key).is_some() {
+            Runtime::Api(MODELS[1].0.to_owned())
+        } else {
+            Runtime::Local
+        };
+    }
+    if model == "local" {
+        Runtime::Local
+    } else {
+        Runtime::Api(model)
+    }
 }
 
 /// Why sending is impossible right now, if it is.
 fn blocked_reason(state: &State) -> Option<String> {
-    let model = model_id(state);
-    if model != "local" && state.prefs.as_ref().and_then(store::Prefs::key).is_none() {
-        return Some(
-            "No Claude API key. Set ANTHROPIC_API_KEY, paste a key under ⚙, or pick the local model."
+    match runtime(state) {
+        Runtime::Api(_) if state.prefs.as_ref().and_then(store::Prefs::key).is_none() => Some(
+            "No Claude API key. Set ANTHROPIC_API_KEY, paste a key under ⚙, or pick Claude Code or              the local model."
                 .to_owned(),
-        );
+        ),
+        Runtime::ClaudeCode(_) | Runtime::Api(_) | Runtime::Local => None,
     }
-    None
+}
+
+/// A note when the picked runtime is not the one that will answer.
+fn fallback_note(state: &State) -> Option<String> {
+    if model_id(state) != CLAUDE_CODE {
+        return None;
+    }
+    let using = match runtime(state) {
+        Runtime::ClaudeCode(_) => return None,
+        Runtime::Api(m) => m,
+        Runtime::Local => "the local model".to_owned(),
+    };
+    Some(match (&state.claude, &state.claude_down) {
+        (_, Some(why)) => format!("{why} Using {using}."),
+        (Some(None) | None, None) => format!(
+            "Claude Code is not installed (no `claude` on PATH); using {using}. Install it from              claude.com/code and log in once."
+        ),
+        (Some(Some(_)), None) => format!("Using {using}."),
+    })
 }
 
 /// The scope in force: the person's pick, else the selection.
@@ -976,6 +1247,17 @@ fn composer(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                 .small()
                 .color(theme::rgb(theme.warning)),
         );
+    } else if let Some(note) = fallback_note(state) {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                RichText::new(note)
+                    .small()
+                    .color(theme::rgb(theme.text_muted)),
+            );
+            if state.claude_down.is_some() && ui.small_button("Retry Claude Code").clicked() {
+                state.claude_down = None;
+            }
+        });
     }
     if let Some(text) = send
         && !busy
@@ -1265,7 +1547,8 @@ fn sources(ctx: &PageCtx<'_>, state: &mut State) -> complete::Sources {
     s
 }
 
-/// Sends a message and starts the turn on a worker thread.
+/// Sends a message and starts the turn: on Claude Code, or on a worker
+/// thread running the in-process loop.
 fn submit(
     ctx: &mut PageCtx<'_>,
     state: &mut State,
@@ -1273,6 +1556,8 @@ fn submit(
     text: &str,
     choice: ScopeChoice,
 ) {
+    let runtime = runtime(state);
+    let playhead = playhead(ctx);
     let Some(project) = ctx.project.as_ref() else {
         return;
     };
@@ -1296,35 +1581,13 @@ fn submit(
         return;
     }
 
-    // The provider.
-    let model = prefs
-        .model
-        .clone()
-        .unwrap_or_else(|| MODELS[0].0.to_owned());
-    let provider: Box<dyn provider::Provider> = if model == "local" {
-        Box::new(provider::Local { url: prefs.local() })
-    } else {
-        let Some(key) = prefs.key() else {
-            state.error = blocked_reason(&State {
-                prefs: Some(prefs),
-                ..State::default()
-            });
-            return;
-        };
-        Box::new(provider::Claude {
-            key,
-            model,
-            base: std::env::var("ANTHROPIC_BASE_URL")
-                .unwrap_or_else(|_| "https://api.anthropic.com".to_owned()),
-        })
-    };
-
-    // The snapshot sent with the message.
+    // The reminder sent with the message.
     let index = project.index.as_ref();
     let music = project.music.as_ref();
     let problems = ops::check(&plan, index, music, &project.people);
     let plan_text = context::plan_text(&plan, music);
     let fresh = chat.sent_plan.as_deref() != Some(plan_text.as_str());
+    let skill_dir = skills_dir();
     let snapshot = context::Snapshot {
         plan: fresh.then(|| plan_text.clone()),
         music: if fresh {
@@ -1343,8 +1606,20 @@ fn submit(
             })
             .collect(),
         selection: selection.iter().map(ToString::to_string).collect(),
+        playhead,
+        skills: skills::matching(text)
+            .into_iter()
+            .map(|s| {
+                let file = skill_dir
+                    .as_ref()
+                    .map(|d| skills::file(d, &s.name).display().to_string())
+                    .unwrap_or_default();
+                (s.name, file)
+            })
+            .collect(),
     };
     chat.sent_plan = Some(plan_text);
+    let reminder = context::snapshot(&snapshot);
 
     // The message: answers to open calls first, then context, then text.
     let mut blocks = Vec::new();
@@ -1367,7 +1642,7 @@ fn submit(
         }));
     }
     blocks.push(Block::Context {
-        text: context::snapshot(&snapshot),
+        text: reminder.clone(),
     });
     let mut said = text.trim().to_owned();
     let typed = Reference::scan(text);
@@ -1380,35 +1655,109 @@ fn submit(
     if !extra.is_empty() {
         said = format!("{said}\n\n{}", extra.join(" "));
     }
-    blocks.push(Block::Text { text: said });
+    blocks.push(Block::Text { text: said.clone() });
     let msg = Msg::new(Role::User, blocks);
     if let Some(e) = chat.push(LogLine::Msg { msg }) {
         state.error = Some(e);
     }
+    let work = chat.work.clone();
+    let stem = chat.plan.clone();
 
-    // The worker.
+    let cancel = Arc::new(AtomicBool::new(false));
+    let started = match runtime {
+        Runtime::ClaudeCode(exe) => {
+            let message = format!("{reminder}\n\n{said}");
+            start_claude(state, egui_ctx, exe, &work, &stem, &message)
+        }
+        Runtime::Api(model) => {
+            let Some(key) = prefs.key() else {
+                state.error = blocked_reason(state);
+                return;
+            };
+            let provider = Box::new(provider::Claude {
+                key,
+                model,
+                base: std::env::var("ANTHROPIC_BASE_URL")
+                    .unwrap_or_else(|_| "https://api.anthropic.com".to_owned()),
+            });
+            start_loop(state, egui_ctx, provider, project, plan, scope, &cancel)
+        }
+        Runtime::Local => {
+            let provider = Box::new(provider::Local { url: prefs.local() });
+            start_loop(state, egui_ctx, provider, project, plan, scope, &cancel)
+        }
+    };
+    match started {
+        Ok((rx, claude)) => {
+            state.turn = Some(Turn {
+                rx,
+                cancel,
+                started: Instant::now(),
+                text: String::new(),
+                thinking: String::new(),
+                tools: Vec::new(),
+                claude,
+            });
+            state.input.clear();
+            state.dismissed = None;
+            if !ctx.refs.is_empty() {
+                ctx.actions.push(Action::ClearRefs);
+            }
+        }
+        Err(e) => state.error = Some(e),
+    }
+}
+
+/// Where the viewer is, for the reminder.
+fn playhead(ctx: &PageCtx<'_>) -> Option<String> {
+    let dur = ctx.player.duration();
+    (dur > 0.0).then(|| {
+        format!(
+            "{:.2}s into what the viewer has loaded ({dur:.2}s long)",
+            ctx.player.position()
+        )
+    })
+}
+
+/// The folder the skills are written to for Claude Code.
+fn skills_dir() -> Option<PathBuf> {
+    store::prefs_path()
+        .and_then(|p| p.parent().map(Path::to_path_buf))
+        .map(|d| d.join("agent").join("skills"))
+}
+
+/// Events of a turn, and whether Claude Code runs it.
+type Started = Result<(crossbeam_channel::Receiver<Event>, bool), String>;
+
+/// Starts the in-process loop on a worker thread.
+fn start_loop(
+    state: &State,
+    egui_ctx: &egui::Context,
+    provider: Box<dyn provider::Provider>,
+    project: &Project,
+    plan: Plan,
+    scope: Scope,
+    cancel: &Arc<AtomicBool>,
+) -> Started {
+    let chat = state.chat.as_ref().ok_or("no conversation")?;
     let env = tools::Env {
+        work: project.work.clone(),
         plan,
-        log: index
-            .map(|i| context::ShotLog::new(i, &project.people))
-            .unwrap_or_default(),
-        index: index.map(|i| Arc::new(i.clone())),
-        music: music.cloned(),
+        index: project.index.as_ref().map(|i| Arc::new(i.clone())),
         people: project.people.clone(),
         scope,
     };
     let job = agent::Job {
         provider,
-        system: context::SYSTEM.to_owned(),
+        system: context::system(),
         tools: tools::definitions(),
         msgs: model::messages(&chat.log),
         env,
     };
     let (tx, rx) = crossbeam_channel::unbounded();
-    let cancel = Arc::new(AtomicBool::new(false));
     let flag = cancel.clone();
     let repaint = egui_ctx.clone();
-    let spawned = std::thread::Builder::new()
+    std::thread::Builder::new()
         .name("assistant".to_owned())
         .spawn(move || {
             agent::run(
@@ -1419,28 +1768,72 @@ fn submit(
                 },
                 &flag,
             );
-        });
-    match spawned {
-        Ok(_) => {
-            state.turn = Some(Turn {
-                rx,
-                cancel,
-                started: Instant::now(),
-                text: String::new(),
-                thinking: String::new(),
-                tools: Vec::new(),
-            });
-            state.input.clear();
-            state.dismissed = None;
-            if !ctx.refs.is_empty() {
-                ctx.actions.push(Action::ClearRefs);
-            }
-        }
-        Err(e) => state.error = Some(format!("could not start the assistant: {e}")),
-    }
+        })
+        .map_err(|e| format!("could not start the assistant: {e}"))?;
+    Ok((rx, false))
 }
 
-/// The conversation.
+/// Sends `message` to this conversation's Claude Code session, starting
+/// (or resuming) the process when needed.
+fn start_claude(
+    state: &mut State,
+    egui_ctx: &egui::Context,
+    exe: PathBuf,
+    work: &Path,
+    plan: &str,
+    message: &str,
+) -> Started {
+    let key = (work.to_path_buf(), plan.to_owned());
+    if state
+        .session
+        .as_ref()
+        .is_none_or(|s| s.key != key || !s.alive())
+    {
+        state.session = None;
+        let cfg = claude_config(exe, work, plan)?;
+        let repaint = egui_ctx.clone();
+        state.session = Some(claude_code::Session::start(&cfg, plan, move || {
+            repaint.request_repaint();
+        })?);
+    }
+    let session = state.session.as_mut().ok_or("Claude Code did not start")?;
+    // Events left over from an earlier, stopped turn are not this turn's.
+    while session.rx.try_recv().is_ok() {}
+    session.send(message)?;
+    Ok((session.rx.clone(), true))
+}
+
+/// Writes the session's MCP config, prompt and skills, and reads the
+/// session to resume.
+fn claude_config(exe: PathBuf, work: &Path, plan: &str) -> Result<claude_code::Config, String> {
+    let fail = |what: &str, e: &dyn std::fmt::Display| format!("could not prepare {what}: {e}");
+    let skills = skills_dir().ok_or("no configuration folder for the skills")?;
+    let skills = skills::install(&skills).map_err(|e| fail("the skills", &e))?;
+    let chat = work.join("chat");
+    std::fs::create_dir_all(&chat).map_err(|e| fail("the chat folder", &e))?;
+    let ave = std::env::current_exe().map_err(|e| fail("ave's tool server", &e))?;
+    let mcp_config = chat.join("claude-mcp.json");
+    std::fs::write(&mcp_config, claude_code::mcp_config(&ave, work).to_string())
+        .map_err(|e| fail("the MCP config", &e))?;
+    let prompt_file = chat.join("claude-prompt.md");
+    let prompt = context::claude_code(&skills.display().to_string(), &skills::listing(&skills));
+    std::fs::write(&prompt_file, prompt).map_err(|e| fail("the prompt", &e))?;
+    let resume = std::fs::read_to_string(claude_code::session_file(work, plan))
+        .ok()
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty());
+    Ok(claude_code::Config {
+        exe,
+        work: work.to_path_buf(),
+        mcp_config,
+        prompt_file,
+        skills,
+        resume,
+        model: None,
+    })
+}
+
+// The conversation.
 fn conversation(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
     let theme = ctx.theme;
     let Some(chat) = state.chat.as_ref() else {
@@ -1470,10 +1863,23 @@ fn conversation(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
             LogLine::Msg { .. }
             | LogLine::Status { .. }
             | LogLine::Turn { .. }
-            | LogLine::Notice { .. } => None,
+            | LogLine::Notice { .. }
+            | LogLine::Image { .. } => None,
         })
         .collect();
+    // Images by call id.
+    let mut images: HashMap<String, Vec<String>> = HashMap::new();
+    for line in &chat.log {
+        if let LogLine::Image { tool_use_id, file } = line {
+            images
+                .entry(tool_use_id.clone())
+                .or_default()
+                .push(file.clone());
+        }
+    }
+    let chat_dir = chat.work.join("chat");
     let log = chat.log.clone();
+    let mut open: Option<Reference> = None;
     let open_ask = chat.ask.as_ref().map(|a| a.id.clone());
     let mut send: Option<String> = None;
 
@@ -1497,9 +1903,13 @@ fn conversation(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                                     {
                                         thought(ctx, ui, ("thought", i, k), thinking, false);
                                     }
-                                    Block::Text { text } => markdown_label(ctx, ui, text),
+                                    Block::Text { text } => {
+                                        if let Some(r) = message(ctx, ui, ("msg", i, k), text) {
+                                            open = Some(r);
+                                        }
+                                    }
                                     Block::ToolUse { id, name, input } => {
-                                        if name == tools::PROPOSE
+                                        if name == tools::EDIT
                                             && let Some(p) = proposals.get(id)
                                         {
                                             proposal_card(ctx, state, ui, p, &log);
@@ -1527,6 +1937,9 @@ fn conversation(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                                                 input,
                                                 results.get(id),
                                             );
+                                            for file in images.get(id).into_iter().flatten() {
+                                                sheet(state, ui, &chat_dir, file);
+                                            }
                                         }
                                     }
                                     Block::Thinking { .. }
@@ -1543,7 +1956,12 @@ fn conversation(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                         input_tokens,
                         output_tokens,
                         cached_tokens,
+                        cost_usd,
                     } => {
+                        let cost = cost_usd
+                            .filter(|c| *c > 0.0)
+                            .map(|c| format!(" · ${c:.3}"))
+                            .unwrap_or_default();
                         let cached = if *input_tokens > 0 {
                             format!(
                                 " ({:.0}% cached)",
@@ -1555,7 +1973,7 @@ fn conversation(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                         ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
                             ui.label(
                                 RichText::new(format!(
-                                    "{secs:.1}s · {model} · {} in{cached} · {} out",
+                                    "{secs:.1}s · {model} · {} in{cached} · {} out{cost}",
                                     kilo(*input_tokens),
                                     kilo(*output_tokens)
                                 ))
@@ -1572,7 +1990,7 @@ fn conversation(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                             theme.text_muted
                         })));
                     }
-                    LogLine::Proposal { .. } | LogLine::Status { .. } => {}
+                    LogLine::Proposal { .. } | LogLine::Status { .. } | LogLine::Image { .. } => {}
                 }
             }
             if let Some(turn) = &state.turn {
@@ -1587,7 +2005,7 @@ fn conversation(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                     );
                 }
                 if !turn.text.is_empty() {
-                    markdown_label(ctx, ui, &turn.text);
+                    markdown_label(ctx, ui, &link_labels(&turn.text));
                 }
                 ui.horizontal(|ui| {
                     ui.add(egui::Spinner::new().size(12.0));
@@ -1618,6 +2036,153 @@ fn conversation(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
             let scope = effective_scope(state, &refs, &selection);
             submit(ctx, state, ui.ctx(), &text, scope);
         }
+    }
+    if let Some(r) = open {
+        open_link(ctx, state, &r);
+    }
+}
+
+/// The model's text with `ave://` links: the prose (link labels inline),
+/// then a row of chips. Returns the link clicked.
+fn message(
+    ctx: &PageCtx<'_>,
+    ui: &mut Ui,
+    id: impl egui::AsIdSalt,
+    text: &str,
+) -> Option<Reference> {
+    let pieces = links::split(text);
+    markdown_label(ctx, ui, &link_labels(text));
+    let targets: Vec<(String, Reference)> = pieces
+        .into_iter()
+        .filter_map(|p| match p {
+            links::Piece::Link { label, target } => Some((label, target)),
+            links::Piece::Text(_) => None,
+        })
+        .collect();
+    if targets.is_empty() {
+        return None;
+    }
+    let mut clicked = None;
+    ui.push_id(id, |ui| {
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = Vec2::splat(SPACE_XS);
+            for (k, (label, target)) in targets.iter().enumerate() {
+                let r = ui
+                    .push_id(k, |ui| {
+                        ui.add(
+                            egui::Button::new(
+                                RichText::new(format!("◆ {label}"))
+                                    .small()
+                                    .color(theme::rgb(ctx.theme.accent)),
+                            )
+                            .small()
+                            .corner_radius(CornerRadius::same(theme::RADIUS)),
+                        )
+                    })
+                    .inner
+                    .on_hover_text(format!("{target} · select it and show it in the viewer"));
+                if r.clicked() {
+                    clicked = Some(target.clone());
+                }
+            }
+        });
+    });
+    clicked
+}
+
+/// `text` with every `ave://` link replaced by its label in bold.
+fn link_labels(text: &str) -> String {
+    links::split(text)
+        .into_iter()
+        .map(|p| match p {
+            links::Piece::Text(t) => t,
+            links::Piece::Link { label, .. } => format!("**{label}**"),
+        })
+        .collect()
+}
+
+/// A contact sheet under a tool call.
+fn sheet(state: &mut State, ui: &mut Ui, dir: &Path, file: &str) {
+    let tex = state.images.0.entry(file.to_owned()).or_insert_with(|| {
+        let bytes = std::fs::read(dir.join(file)).ok()?;
+        let img = image::load_from_memory(&bytes).ok()?.to_rgba8();
+        let size = [img.width() as usize, img.height() as usize];
+        let color = egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw());
+        Some(
+            ui.ctx()
+                .load_texture(format!("assistant-{file}"), color, Default::default()),
+        )
+    });
+    if let Some(tex) = tex {
+        let w = ui.available_width().min(tex.size_vec2().x);
+        let h = w * tex.size_vec2().y / tex.size_vec2().x.max(1.0);
+        ui.add(egui::Image::new((tex.id(), Vec2::new(w, h))));
+    }
+}
+
+/// Follows an `ave://` link: selects the thing and loads it in the viewer.
+fn open_link(ctx: &mut PageCtx<'_>, state: &mut State, r: &Reference) {
+    *ctx.selection = vec![r.clone()];
+    let Some(project) = ctx.project.as_ref() else {
+        return;
+    };
+    let index = project.index.as_ref();
+    match &r.target {
+        Target::Segment { id } => {
+            if let Some((path, s)) = index.and_then(|i| {
+                let s = i.segments.iter().find(|s| s.id == *id)?;
+                Some((i.clip(&s.clip)?.path.clone(), s))
+            }) {
+                let (t0, t1, cx) = (f64::from(s.seg.start), f64::from(s.seg.end), s.seg.cx);
+                ctx.player.open_clip(Path::new(&path), t0, t1, cx);
+            }
+        }
+        Target::Range { clip, t0, t1 } => {
+            if let Some(c) = index.and_then(|i| i.clip(clip)) {
+                let path = PathBuf::from(&c.path);
+                ctx.player
+                    .open_clip(&path, f64::from(*t0), f64::from(*t1), 0.5);
+            }
+        }
+        Target::Frame { clip, t } => {
+            if let Some(c) = index.and_then(|i| i.clip(clip)) {
+                let path = PathBuf::from(&c.path);
+                let t = f64::from(*t);
+                ctx.player.open_clip(&path, t, t + 2.0, 0.5);
+            }
+        }
+        Target::Shot { plan, index: k } => {
+            if let Some(p) = plan_on_disk(state, plan)
+                && let Some(music) = ctx.project.as_ref().and_then(|x| x.music.clone())
+            {
+                let at = p
+                    .timing(&music)
+                    .get(k.saturating_sub(1))
+                    .map_or(0.0, |(t, _)| f64::from(*t));
+                if load_sequence(ctx, &p) {
+                    ctx.player.seek(at);
+                }
+            }
+        }
+        Target::Bars { from, .. } => {
+            let open = state.chat.as_ref().map(|c| c.plan.clone());
+            if let Some(p) = open.and_then(|name| plan_on_disk(state, &name))
+                && let Some(music) = ctx.project.as_ref().and_then(|x| x.music.clone())
+                && *from >= p.start_bar
+                && *from < p.end_bar
+            {
+                let at = music.beat_time(*from, 0) - music.beat_time(p.start_bar, 0);
+                if load_sequence(ctx, &p) {
+                    ctx.player.seek(f64::from(at));
+                }
+            }
+        }
+        Target::Plan { name } => {
+            if let Some(p) = plan_on_disk(state, name) {
+                load_sequence(ctx, &p);
+            }
+        }
+        Target::Person { .. } => {}
     }
 }
 
@@ -1739,7 +2304,7 @@ fn tool_line(
     let label = format!(
         "{} {}",
         if failed { "✖" } else { "▸" },
-        tools::describe(name, input)
+        tools::describe(name, input, false)
     );
     egui::CollapsingHeader::new(RichText::new(label).small().color(theme::rgb(if failed {
         theme.warning
@@ -1816,14 +2381,7 @@ fn markdown_label(ctx: &PageCtx<'_>, ui: &mut Ui, text: &str) {
 /// The card's state for proposal `id`, computed if needed.
 fn card_for<'a>(ctx: &PageCtx<'_>, state: &'a mut State, id: &str) -> Option<&'a Card> {
     let chat = state.chat.as_ref()?;
-    let proposal = chat.log.iter().find_map(|l| match l {
-        LogLine::Proposal { proposal } if proposal.id == id => Some(proposal.clone()),
-        LogLine::Msg { .. }
-        | LogLine::Proposal { .. }
-        | LogLine::Status { .. }
-        | LogLine::Turn { .. }
-        | LogLine::Notice { .. } => None,
-    })?;
+    let proposal = proposal_in(&chat.log, id)?;
     let project = ctx.project.as_ref()?;
     let card = state.cards.entry(id.to_owned()).or_insert_with(|| Card {
         picked: vec![true; proposal.ops.len()],
@@ -1878,15 +2436,11 @@ fn proposal_card(
 ) {
     let theme = ctx.theme;
     let status = model::status_of(log, &p.id);
-    let current = state.chat.as_mut().and_then(Chat::current);
+    let current = plan_on_disk(state, &p.plan);
     let stale = current.as_ref().is_some_and(|c| *c != p.base);
     let mut action: Option<CardAction> = None;
     let pending = matches!(status, Status::Pending);
-    let stem = state
-        .chat
-        .as_ref()
-        .map(|c| c.plan.clone())
-        .unwrap_or_default();
+    let stem = p.plan.clone();
     ui.add_space(SPACE_XS);
     egui::Frame::new()
         .fill(theme::rgb(theme.raised))
@@ -1906,6 +2460,19 @@ fn proposal_card(
                         .color(theme::rgb(theme.accent)),
                 );
                 ui.label(RichText::new(&p.summary).color(theme::rgb(theme.text)));
+                if p.plan
+                    != state
+                        .chat
+                        .as_ref()
+                        .map(|c| c.plan.as_str())
+                        .unwrap_or_default()
+                {
+                    ui.label(
+                        RichText::new(format!("in {}", p.plan))
+                            .small()
+                            .color(theme::rgb(theme.text_muted)),
+                    );
+                }
             });
             let Some(card) = card_for(ctx, state, &p.id) else {
                 return;
@@ -2184,7 +2751,9 @@ fn set_status(state: &mut State, id: &str, status: Status) {
     }
 }
 
-/// Applies the ticked ops of proposal `id`: a new plan version.
+/// Applies the ticked ops of proposal `id`: a new plan version, through
+/// the same engine path as the agent's `plan_edit` with `commit` (so a plan
+/// that moved since the proposal is refused).
 fn apply(ctx: &mut PageCtx<'_>, state: &mut State, id: &str) {
     let Some(card) = card_for(ctx, state, id) else {
         return;
@@ -2206,24 +2775,20 @@ fn apply(ctx: &mut PageCtx<'_>, state: &mut State, id: &str) {
     let Some(chat) = state.chat.as_mut() else {
         return;
     };
-    let summary = chat
-        .log
-        .iter()
-        .find_map(|l| match l {
-            LogLine::Proposal { proposal } if proposal.id == id => Some(proposal.summary.clone()),
-            LogLine::Msg { .. }
-            | LogLine::Proposal { .. }
-            | LogLine::Status { .. }
-            | LogLine::Turn { .. }
-            | LogLine::Notice { .. } => None,
-        })
-        .unwrap_or_default();
-    match store::save_version(
-        &chat.work,
-        &chat.plan,
-        &after,
-        &format!("assistant: {summary}"),
-    ) {
+    let Some(p) = proposal_in(&chat.log, id) else {
+        return;
+    };
+    let reason = format!("assistant: {}", p.summary);
+    let saved = if p.base_version.is_empty() {
+        store::save_version(&chat.work, &p.plan, &after, &reason)
+    } else {
+        let ops: Vec<EditOp> = picked
+            .iter()
+            .filter_map(|k| p.ops.get(*k).cloned())
+            .collect();
+        crate::mcp::commit_edit(&chat.work, &p.plan, &ops, &reason, &p.base_version)
+    };
+    match saved {
         Ok(version) => {
             chat.cached = None;
             set_status(
@@ -2239,7 +2804,7 @@ fn apply(ctx: &mut PageCtx<'_>, state: &mut State, id: &str) {
                 project.reload_plans();
             }
         }
-        Err(e) => state.error = Some(format!("could not save the plan: {e:#}")),
+        Err(e) => state.error = Some(format!("could not apply: {e:#}")),
     }
 }
 
@@ -2250,7 +2815,7 @@ fn revert(ctx: &mut PageCtx<'_>, state: &mut State, p: &Proposal) {
     };
     match store::save_version(
         &chat.work,
-        &chat.plan,
+        &p.plan,
         &p.base,
         &format!("revert: {}", p.summary),
     ) {
@@ -2272,6 +2837,15 @@ fn revert(ctx: &mut PageCtx<'_>, state: &mut State, p: &Proposal) {
     }
 }
 
+/// Plan `name` as it is on disk now.
+fn plan_on_disk(state: &mut State, name: &str) -> Option<Plan> {
+    let chat = state.chat.as_mut()?;
+    if chat.plan == name {
+        return chat.current();
+    }
+    Plan::load(&chat.work.join("plans").join(format!("{name}.toml"))).ok()
+}
+
 /// Plays the edited plan in the viewer.
 fn preview(ctx: &mut PageCtx<'_>, state: &mut State, id: &str) {
     let plan = match card_for(ctx, state, id).map(|c| &c.result) {
@@ -2283,11 +2857,19 @@ fn preview(ctx: &mut PageCtx<'_>, state: &mut State, id: &str) {
 
 /// Opens `plan` as a sequence in the viewer and plays it.
 fn play(ctx: &mut PageCtx<'_>, plan: &Plan) {
+    if load_sequence(ctx, plan) {
+        ctx.player.play();
+    }
+}
+
+/// Loads `plan` as a sequence in the viewer; false when the night cannot
+/// (no index or music map yet).
+fn load_sequence(ctx: &mut PageCtx<'_>, plan: &Plan) -> bool {
     let Some(project) = ctx.project.as_ref() else {
-        return;
+        return false;
     };
     let (Some(music), Some(index)) = (project.music.as_ref(), project.index.as_ref()) else {
-        return;
+        return false;
     };
     let shots: Vec<crate::gui::player::SeqShot> = plan
         .shots
@@ -2306,7 +2888,7 @@ fn play(ctx: &mut PageCtx<'_>, plan: &Plan) {
     let start = f64::from(music.beat_time(plan.start_bar, 0));
     ctx.player
         .open_sequence(shots, Some((plan.music.clone().into(), start)));
-    ctx.player.play();
+    true
 }
 
 /// The History tab: what the assistant applied, and every saved version.
@@ -2325,19 +2907,8 @@ fn history(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
             let mut any = false;
             for line in chat.log.iter().rev() {
                 if let LogLine::Status { id, status } = line {
-                    let summary = chat
-                        .log
-                        .iter()
-                        .find_map(|l| match l {
-                            LogLine::Proposal { proposal } if proposal.id == *id => {
-                                Some(proposal.summary.clone())
-                            }
-                            LogLine::Msg { .. }
-                            | LogLine::Proposal { .. }
-                            | LogLine::Status { .. }
-                            | LogLine::Turn { .. }
-                            | LogLine::Notice { .. } => None,
-                        })
+                    let summary = proposal_in(&chat.log, id)
+                        .map(|p| p.summary)
                         .unwrap_or_default();
                     let text = match status {
                         Status::Applied { version, ops, ts } => format!(
