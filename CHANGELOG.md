@@ -12,6 +12,13 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Music tab: whole-track overview and FCP-style zoomed beat grid (sections, drops,
+  song ranges, playhead), grid fixes (drag the downbeat, `,`/`.` beat, Shift 10 ms
+  offset, tempo, `D` drop, rename sections, re-analyse), per-deliverable song ranges,
+  and bar selections as `@bars` references. `ave beats` now also finds song sections
+  (intro / build / drop / break / outro) on phrase lines, scores drops by their build,
+  keeps an energy envelope, and stores the user's grid corrections in `music.json`,
+  applied on load and kept across re-analysis.
 - Project scaffolded with create-rust-app.
 - Assistant chat panel: a conversation per plan (`<work>/chat/<plan>.jsonl`) with
   Claude (Messages API, streamed, adaptive thinking, prompt caching; key from

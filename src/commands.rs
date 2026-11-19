@@ -164,9 +164,7 @@ pub(crate) fn execute(command: Cmd, out: &mut impl Write) -> anyhow::Result<()> 
             )?;
         }
         Cmd::Beats { track, work } => {
-            let map = crate::beats::analyze(&track)?;
-            std::fs::create_dir_all(&work)?;
-            std::fs::write(work.join("music.json"), serde_json::to_string_pretty(&map)?)?;
+            let map = crate::beats::reanalyze(&track, &work)?;
             writeln!(
                 out,
                 "{:.1} BPM, {} bars, {:.1}s",
@@ -177,7 +175,7 @@ pub(crate) fn execute(command: Cmd, out: &mut impl Write) -> anyhow::Result<()> 
             for d in map.drops.iter().take(4) {
                 writeln!(
                     out,
-                    "drop candidate: bar {} at {:.2}s (jump {:.2})",
+                    "drop candidate: bar {} at {:.2}s (score {:.2})",
                     d.bar, d.t, d.score
                 )?;
             }
