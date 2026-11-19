@@ -19,11 +19,14 @@
 //!
 //! ## The signature theme
 //!
-//! [`signature`] is a dark theme whose accent is the colour this project
-//! was scaffolded with ([`crate::ACCENT`]). An accent that would fail the
-//! readability rules is walked through a few lightnesses at the same hue,
-//! and if none of them reads, the theme keeps its own default — so the app
-//! cannot open unreadable, whatever colour was picked.
+//! [`signature`] is the editing-app look Selects uses: neutral-900 surfaces,
+//! hairline borders the colour of white at about 10 %, and a lime key
+//! accent ([`SIGNATURE_ACCENT`], `#a3e635`) with dark text on it, for
+//! active controls and mentions. An accent that would fail the readability
+//! rules is walked through a few lightnesses at the same hue, and if none
+//! of them reads, the theme keeps its own default — so the app cannot open
+//! unreadable, whatever colour is picked. (The brand mark keeps the colour
+//! the project was scaffolded with, [`crate::ACCENT`].)
 //!
 //! ## The catalog
 //!
@@ -339,41 +342,48 @@ impl Palette {
     }
 }
 
-/// The base the signature theme is built on: a deep blue-black.
+/// The base the signature theme is built on: Selects' neutral greys.
 fn signature_spec(accent: Rgb) -> ThemeSpec {
     ThemeSpec {
         id: "signature".to_string(),
         name: "Signature".to_string(),
         mode: Mode::Dark,
-        // Neutral studio greys, as editing apps use: no colour cast in the
-        // chrome, so the footage carries the colour.
-        app: "#121212".to_string(),
-        panel: "#191919".to_string(),
-        raised: "#212121".to_string(),
-        hover: "#2b2b2b".to_string(),
-        border: "#303030".to_string(),
+        // Tailwind's neutral ramp, as Selects uses it: no colour cast in the
+        // chrome, so the footage carries the colour. `panel` is neutral-900,
+        // `app` neutral-950, and the border is white at 10 % over the panel.
+        app: "#0a0a0a".to_string(),
+        panel: "#171717".to_string(),
+        raised: "#1f1f1f".to_string(),
+        hover: "#2a2a2a".to_string(),
+        border: "#2e2e2e".to_string(),
         accent: accent.to_hex(),
-        text: "#ececec".to_string(),
-        text_muted: "#a3a3a3".to_string(),
-        danger: "#ff5c7a".to_string(),
-        warning: "#ffb347".to_string(),
-        success: "#4ade80".to_string(),
+        text: "#fafafa".to_string(),
+        // A shade above neutral-400 (#a3a3a3): at that exact grey, muted
+        // text on the lime-tinted selection falls just short of 4.5:1.
+        text_muted: "#a8a8a8".to_string(),
+        danger: "#ef4444".to_string(),
+        warning: "#f59e0b".to_string(),
+        success: "#22c55e".to_string(),
         rainbow_span: Some(280.0),
     }
 }
 
-/// The accent the signature theme falls back to when the scaffolded one
+/// The signature theme's key colour: Selects' lime (Tailwind lime-400),
+/// with dark text on it.
+pub const SIGNATURE_ACCENT: Rgb = Rgb::new(0xa3, 0xe6, 0x35);
+
+/// The accent the signature theme falls back to when the key colour
 /// cannot be made readable on its surfaces.
 const FALLBACK_ACCENT: Rgb = Rgb::new(0x4c, 0xc9, 0xf0);
 
-/// The signature theme: the dark base with [`crate::ACCENT`] as its accent.
+/// The signature theme: the neutral base with [`SIGNATURE_ACCENT`].
 ///
 /// See the module docs: an accent that fails the rules is tried at a few
 /// lightnesses of the same hue before the base's own accent is used.
 #[must_use]
 pub fn signature() -> Palette {
-    let seed = Oklch::from_rgb(crate::ACCENT);
-    let candidates = std::iter::once(crate::ACCENT)
+    let seed = Oklch::from_rgb(SIGNATURE_ACCENT);
+    let candidates = std::iter::once(SIGNATURE_ACCENT)
         .chain(
             [0.72, 0.78, 0.84, 0.66]
                 .into_iter()
@@ -558,6 +568,16 @@ mod tests {
         let theme = signature();
         let issues = theme.readability_issues();
         assert!(issues.is_empty(), "signature theme: {issues:?}");
+    }
+
+    #[test]
+    fn the_signature_theme_keeps_the_selects_lime_with_dark_text() {
+        let theme = signature();
+        assert_eq!(theme.accent, SIGNATURE_ACCENT, "the lime reads as it is");
+        assert!(
+            !theme.accent.prefers_light_text(),
+            "the lime carries dark text"
+        );
     }
 
     #[test]

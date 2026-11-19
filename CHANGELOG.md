@@ -32,6 +32,18 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   assistant asking for a plan to approve), a read-only banner while
   `plans/.lock-<name>` is held by a chat edit, and a storyboard lane of shot cards with
   their notes grouped by song section.
+- Workspace laid out as Selects: chat 22 % full height, browser 21 % · viewer 58 % ·
+  inspector 21 % over a timeline at 45 % of the height, every split a fraction
+  remembered in the config; chat, browser, inspector and timeline fold to labelled
+  rails (click to unfold) with top-bar toggles that mirror them; view modes Default,
+  Vertical (9:16 viewer centred), Comment and Preview (`Alt+1…4`, persisted); a
+  centred top-bar search with a popover of recent searches and facet hints; one
+  command table driving shortcuts, the palette and a `?` shortcut sheet, with ave /
+  Premiere / Final Cut presets in Settings (Selects' `Shift+1…4` panel focus); a
+  shared `widgets::mention_menu` for "Mention in chat ▸ intent" in any context menu;
+  the signature theme on Selects' tokens (neutral-900, white-10 % hairlines, lime
+  `#a3e635` key), 12/14 px type, tighter controls, and Inter (SIL OFL 1.1) bundled
+  as the UI face.
 - Music tab: whole-track overview and FCP-style zoomed beat grid (sections, drops,
   song ranges, playhead), grid fixes (drag the downbeat, `,`/`.` beat, Shift 10 ms
   offset, tempo, `D` drop, rename sections, re-analyse), per-deliverable song ranges,

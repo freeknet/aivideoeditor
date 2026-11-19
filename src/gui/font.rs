@@ -1,18 +1,26 @@
 // ============================================================================
 // Module:       gui::font
-// Description:  Installs a UI typeface by family name from the machine's own
-//               font directories, falling back to the bundled faces.
+// Description:  Installs the bundled UI face (Inter), or a typeface named in
+//               the config from the machine's own font directories.
 //
-// Dependencies: egui (FontDefinitions); std::fs for the font directories
+// Dependencies: egui (FontDefinitions); std::fs for the font directories;
+//               assets/fonts/Inter-Regular.ttf (SIL OFL 1.1)
 // ============================================================================
 
 //! The UI typeface.
 //!
-//! egui ships its own faces compiled into the binary. This lets the window
-//! take a face that is *installed on the machine* instead, by name, without
-//! a font file entering the repository: reading an installed font is what
-//! every other application on the machine does, while committing one to
-//! `assets/` would be redistributing it under whatever licence it carries.
+//! The window draws in **Inter** (`assets/fonts/Inter-Regular.ttf`, from
+//! the project's own GitHub release, v4.1), compiled in with
+//! `include_bytes!`. It is under the SIL Open Font License 1.1, whose text
+//! ships beside it as `assets/fonts/OFL.txt`; the OFL allows bundling a
+//! font inside software as long as the licence travels with it and the font
+//! is not sold on its own. Inter is what Selects uses for its numbers and is
+//! drawn for small sizes on screens, which is where an editor's dense 12 px
+//! chrome lives.
+//!
+//! A face *installed on the machine* can still be put in front of it, by
+//! name, through the config's `font` key: reading an installed font is what
+//! every other application on the machine does.
 //!
 //! ## The bundled faces stay underneath
 //!
@@ -33,6 +41,12 @@ use std::path::{Path, PathBuf};
 /// The name the loaded face is registered under.
 const KEY: &str = "configured-ui-face";
 
+/// The bundled UI face: Inter Regular, SIL OFL 1.1 (see the module docs).
+const INTER: &[u8] = include_bytes!("../../assets/fonts/Inter-Regular.ttf");
+
+/// The name the bundled face is registered under.
+const INTER_KEY: &str = "inter";
+
 /// Files tried, in order, for symbols the bundled faces lack (✕ ▶ ⏸ ✔ ★ …):
 /// Segoe UI Symbol on Windows, Noto / DejaVu on Linux, Apple Symbols on macOS.
 const SYMBOL_FALLBACKS: [&str; 4] = [
@@ -45,13 +59,22 @@ const SYMBOL_FALLBACKS: [&str; 4] = [
 /// The name the symbol fallback is registered under.
 const SYMBOLS: &str = "symbol-fallback";
 
-/// Installs the fonts: the bundled faces, `family` (when given and found)
-/// in front of them, and a system symbol face behind them, so a symbol in a
-/// label draws instead of showing an empty box.
+/// Installs the fonts: Inter in front of egui's own faces, `family` (when
+/// given and found) in front of Inter, and a system symbol face behind
+/// them all, so a symbol in a label draws instead of showing an empty box.
 ///
 /// Returns the file `family` was loaded from, if it was.
 pub fn setup(ctx: &egui::Context, family: Option<&str>) -> Option<PathBuf> {
     let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert(
+        INTER_KEY.to_owned(),
+        std::sync::Arc::new(egui::FontData::from_static(INTER)),
+    );
+    fonts
+        .families
+        .entry(egui::FontFamily::Proportional)
+        .or_default()
+        .insert(0, INTER_KEY.to_owned());
     let face = family.and_then(locate);
     if let Some(path) = &face
         && let Ok(bytes) = std::fs::read(path)
@@ -184,6 +207,15 @@ mod tests {
 
     fn files(names: &[&str]) -> Vec<PathBuf> {
         names.iter().map(PathBuf::from).collect()
+    }
+
+    #[test]
+    fn the_bundled_face_is_a_truetype_font() {
+        assert_eq!(
+            INTER.get(..4),
+            Some(&[0x00, 0x01, 0x00, 0x00][..]),
+            "assets/fonts/Inter-Regular.ttf must be a TrueType file"
+        );
     }
 
     #[test]

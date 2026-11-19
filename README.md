@@ -118,6 +118,11 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the rest.
 
 MIT. See [`LICENSE`](LICENSE).
 
+The desktop app bundles the [Inter](https://github.com/rsms/inter) typeface
+(`assets/fonts/Inter-Regular.ttf`), © The Inter Project Authors, under the SIL
+Open Font License 1.1; its licence text is in
+[`assets/fonts/OFL.txt`](assets/fonts/OFL.txt).
+
 ---
 
 <sub>Scaffolded with [create-rust-app](https://github.com/freeknet/create-rust-app).</sub>

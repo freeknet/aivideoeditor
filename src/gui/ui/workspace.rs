@@ -1,41 +1,60 @@
 // ============================================================================
 // Module:       gui::ui::workspace
-// Description:  The editing workspace: top bar with search and export, chat on
-//               the left, browser, viewer and inspector, timeline at the foot.
+// Description:  The editing workspace, laid out as Selects': chat full height on
+//               the left; browser, viewer and inspector above the timeline;
+//               every split a remembered fraction, every side panel foldable
+//               to a labelled rail, four view modes.
 //
-// Dependencies: egui; crate::gui::{app, pages, assistant}
+// Dependencies: egui; super::{layout, topbar, chrome, widgets, theme};
+//               crate::gui::{app, pages, assistant}
 // ============================================================================
 
 //! The workspace layout.
 //!
-//! One window, laid out the way editing apps (Selects, Resolve's Cut page)
-//! are, because the work moves between finding footage, watching it,
-//! talking about it and placing it on the timeline without changing screens:
+//! One window, laid out the way Selects lays out its editor, because the
+//! work moves between finding footage, watching it, talking about it and
+//! placing it on the timeline without changing screens:
 //!
 //! ```text
-//! ┌ top bar: home · night · [ search shots, captions, people… ] · export ┐
-//! │ chat     │ browser   │        viewer          │ inspector            │
-//! │ (refs,   │ Shots     │                        │ (selection's         │
-//! │  composer│ People    │                        │  properties)         │
-//! │  )       │ Music     │                        │                      │
-//! │          ├───────────┴────────────────────────┴──────────────────────┤
-//! │          │ timeline: V1 shots on the beat grid · A1 music · checks   │
-//! └──────────┴───────────────────────────────────────────────────────────┘
+//! ┌ top bar: home · night · [ search … ] · view ▾ · export · ▤▤▤▤ · ⚙ ─────┐
+//! │ chat 22% │ browser 21% │       viewer 58%        │ inspector 21%       │
+//! │          │ Shots       │                         │                     │
+//! │          │ People      │                         │                     │
+//! │          │ Music       │                         │                     │
+//! │          ├─────────────┴─────────────────────────┴─────────────────────┤
+//! │          │ timeline, 45% of the height                                 │
+//! └──────────┴─────────────────────────────────────────────────────────────┘
 //! ```
+//!
+//! **Splits are fractions** of the region they divide (see
+//! [`super::layout`]), so the layout keeps its proportions when the window
+//! is resized, and a drag updates the fraction, which the config keeps.
+//! egui's panels remember sizes in pixels; to make them proportional each
+//! panel's id carries its parent's size, so a new parent size starts the
+//! panel afresh from its fraction.
+//!
+//! **Folded panels leave a rail** with their name on it; clicking the rail
+//! unfolds the panel. The top bar's toggles and `Ctrl+J/B/I/T` fold and
+//! unfold them too.
+//!
+//! **View modes** rearrange the same panels: Vertical makes the viewer a
+//! 9:16 column between browser and inspector, Comment widens the viewer and
+//! timeline and folds the browser, Preview folds everything but the viewer.
 //!
 //! The Home screen (pipeline, recent nights) replaces all of it when no
 //! night is open or the home button is pressed; Export docks on the right.
 //!
 //! Selection is app-wide: whatever is selected in the browser, timeline or
-//! inspector is a list of [`Reference`]s. `R` stages it for the chat;
+//! inspector is a list of [`Reference`]s. `R` mentions it in the chat;
 //! `Shift-R` asks which intent (keep, avoid, replace, more like, feature).
 
-use super::theme::{self, SPACE_MD, SPACE_SM};
-use super::{paint_glyph, widgets};
-use crate::gui::app::{Action, App, BrowserTab, Page};
+use super::layout::{self, Region, ViewMode};
+use super::theme::{self, SPACE_SM, SPACE_XS};
+use super::widgets;
+use crate::gui::app::{Action, App, BrowserTab};
 use crate::gui::pages::PageCtx;
 use crate::refs::{Modifier, Reference};
-use egui::{Align, Layout, Ui};
+use egui::{Align, Layout, Rangef, Ui};
 
 /// Builds a [`PageCtx`] from the app's fields; used once per region.
 macro_rules! page_ctx {
@@ -57,9 +76,23 @@ macro_rules! page_ctx {
     };
 }
 
+/// The width of the docked export panel.
+const EXPORT_WIDTH: f32 = 380.0;
+
+/// Which edge a split is attached to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Side {
+    /// Attached to the left edge; sized by width.
+    Left,
+    /// Attached to the right edge; sized by width.
+    Right,
+    /// Attached to the foot; sized by height.
+    Bottom,
+}
+
 /// Draws everything below the window frame.
 pub fn draw(app: &mut App, ui: &mut Ui, actions: &mut Vec<Action>, blocked: bool) {
-    top_bar(app, ui, actions);
+    super::topbar::draw(app, ui, actions);
     super::chrome::status_bar(app, ui);
     // Home's pipeline queue and Export's render queue advance every frame,
     // whether or not their page is on screen.
@@ -76,43 +109,77 @@ pub fn draw(app: &mut App, ui: &mut Ui, actions: &mut Vec<Action>, blocked: bool
         return;
     }
 
-    let panel = theme::rgb(app.theme.panel);
-    let line = egui::Stroke::new(1.0, theme::rgb(app.theme.border));
-    let frame = egui::Frame::new()
-        .fill(panel)
-        .stroke(line)
-        .inner_margin(theme::margin(SPACE_SM));
+    let mode = app.layout.mode;
+    let folds = app.layout.folds();
+    let mut sizes = app.layout.sizes();
+    let frame = panel_frame(app);
 
-    if app.chat_open {
-        egui::Panel::left("chat")
-            .resizable(true)
-            .default_size(330.0)
-            .size_range(260.0..=560.0)
-            .frame(frame)
-            .show(ui, |ui| {
+    // The chat: full height, leftmost.
+    let window = ui.available_rect_before_wrap().width();
+    if folds.chat {
+        let width = layout::span(sizes.chat, window, layout::MIN_CHAT);
+        let dragged = split(
+            ui,
+            Side::Left,
+            ("chat", mode),
+            window,
+            width,
+            limits(layout::MIN_CHAT, window),
+            true,
+            frame,
+            |ui| {
                 let mut ctx = page_ctx!(app, actions, blocked);
                 crate::gui::assistant::panel(&mut ctx, &mut app.pages.assistant, ui);
-            });
+            },
+        );
+        if let Some(width) = dragged {
+            sizes.chat = width / window;
+        }
+    } else {
+        rail(app, ui, Region::Chat, actions);
     }
-    egui::Panel::bottom("timeline")
-        .resizable(true)
-        .default_size(300.0)
-        .size_range(160.0..=640.0)
-        .frame(frame)
-        .show(ui, |ui| {
-            let mut ctx = page_ctx!(app, actions, blocked);
-            crate::gui::pages::plan::draw(&mut ctx, &mut app.pages.plan, ui);
-        });
+
+    // The timeline, under browser, viewer and inspector but not the chat.
+    let editor = ui.available_rect_before_wrap();
+    if folds.timeline {
+        let range = Rangef::new(
+            layout::MIN_TIMELINE.min(editor.height()),
+            (editor.height() * 0.7).max(layout::MIN_TIMELINE.min(editor.height())),
+        );
+        let height = (sizes.timeline * editor.height()).clamp(range.min, range.max);
+        let dragged = split(
+            ui,
+            Side::Bottom,
+            ("timeline", mode),
+            editor.height(),
+            height,
+            range,
+            true,
+            frame,
+            |ui| {
+                let mut ctx = page_ctx!(app, actions, blocked);
+                crate::gui::pages::plan::draw(&mut ctx, &mut app.pages.plan, ui);
+            },
+        );
+        if let Some(height) = dragged {
+            sizes.timeline = height / editor.height();
+        }
+    } else {
+        rail(app, ui, Region::Timeline, actions);
+    }
+
     if app.export_open {
         egui::Panel::right("export")
             .resizable(true)
-            .default_size(380.0)
+            .default_size(EXPORT_WIDTH)
             .frame(frame)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     widgets::title(ui, &app.theme, "Export");
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.small_button("✕").on_hover_text("Close export").clicked() {
+                        let close = widgets::icon_button(ui, &app.theme, "Close export");
+                        super::paint_glyph(ui, &close, super::glyph::CLOSE);
+                        if close.response.clicked() {
                             app.export_open = false;
                         }
                     });
@@ -121,38 +188,61 @@ pub fn draw(app: &mut App, ui: &mut Ui, actions: &mut Vec<Action>, blocked: bool
                 crate::gui::pages::deliver::draw(&mut ctx, &mut app.pages.deliver, ui);
             });
     }
-    if app.inspector_open {
-        egui::Panel::right("inspector")
-            .resizable(true)
-            .default_size(270.0)
-            .size_range(220.0..=480.0)
-            .frame(frame)
-            .show(ui, |ui| {
+
+    // The upper row: inspector right, browser left, viewer between. In the
+    // Vertical view the sides are whatever leaves the viewer a 9:16 column.
+    let upper = ui.available_rect_before_wrap();
+    let vertical = mode == ViewMode::Vertical;
+    let side = layout::vertical_sides(upper.width(), upper.height());
+    if folds.inspector {
+        let width = if vertical {
+            side
+        } else {
+            layout::span(sizes.inspector, editor.width(), layout::MIN_INSPECTOR)
+        };
+        let dragged = split(
+            ui,
+            Side::Right,
+            ("inspector", mode),
+            editor.width(),
+            width,
+            limits(layout::MIN_INSPECTOR, editor.width()),
+            !vertical,
+            frame,
+            |ui| {
                 let mut ctx = page_ctx!(app, actions, blocked);
                 crate::gui::pages::inspector::draw(&mut ctx, &mut app.pages.inspector, ui);
-            });
+            },
+        );
+        if let Some(width) = dragged.filter(|_| !vertical) {
+            sizes.inspector = width / editor.width();
+        }
+    } else {
+        rail(app, ui, Region::Inspector, actions);
     }
-    egui::Panel::left("browser")
-        .resizable(true)
-        .default_size(400.0)
-        .size_range(280.0..=900.0)
-        .frame(frame)
-        .show(ui, |ui| {
-            browser_tabs(app, ui);
-            ui.separator();
-            let mut ctx = page_ctx!(app, actions, blocked);
-            match app.browser_tab {
-                BrowserTab::Shots => {
-                    crate::gui::pages::review::draw(&mut ctx, &mut app.pages.review, ui)
-                }
-                BrowserTab::People => {
-                    crate::gui::pages::people::draw(&mut ctx, &mut app.pages.people, ui)
-                }
-                BrowserTab::Music => {
-                    crate::gui::pages::music::draw(&mut ctx, &mut app.pages.music, ui)
-                }
-            }
-        });
+    if folds.browser {
+        let width = if vertical {
+            side
+        } else {
+            layout::span(sizes.browser, editor.width(), layout::MIN_BROWSER)
+        };
+        let dragged = split(
+            ui,
+            Side::Left,
+            ("browser", mode),
+            editor.width(),
+            width,
+            limits(layout::MIN_BROWSER, editor.width()),
+            !vertical,
+            frame,
+            |ui| browser(app, ui, actions, blocked),
+        );
+        if let Some(width) = dragged.filter(|_| !vertical) {
+            sizes.browser = width / editor.width();
+        }
+    } else {
+        rail(app, ui, Region::Browser, actions);
+    }
     egui::CentralPanel::default()
         .frame(
             egui::Frame::new()
@@ -164,53 +254,154 @@ pub fn draw(app: &mut App, ui: &mut Ui, actions: &mut Vec<Action>, blocked: bool
             crate::gui::pages::viewer::draw(&mut ctx, &mut app.pages.viewer, ui);
         });
 
-    if !blocked && !ui.ctx().egui_wants_keyboard_input() {
-        reference_keys(app, ui, actions);
+    if let Some(slot) = app.layout.sizes_mut()
+        && sizes.is_valid()
+    {
+        *slot = sizes;
     }
     reference_popup(app, ui.ctx(), actions);
 }
 
-/// The browser's tab strip.
-fn browser_tabs(app: &mut App, ui: &mut Ui) {
+/// The frame every docked panel is drawn in: the panel surface, a small
+/// inset, and no outline (the separator line is the hairline between).
+fn panel_frame(app: &App) -> egui::Frame {
+    egui::Frame::new()
+        .fill(theme::rgb(app.theme.panel))
+        .inner_margin(theme::margin(SPACE_SM))
+}
+
+/// The size range of a side panel `min` wide at least, in a parent `total`.
+fn limits(min: f32, total: f32) -> Rangef {
+    let max = (total * layout::MAX_SHARE).max(min.min(total));
+    Rangef::new(min.min(max), max)
+}
+
+/// Shows a resizable panel on `side`, `size` points across, and returns
+/// its new size if the user dragged it this frame.
+///
+/// The id carries `total` (the parent's size), so a resized window starts
+/// the panel afresh from `size`: that is what keeps the split a fraction.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one call per panel; a struct for the arguments would only rename them"
+)]
+fn split(
+    ui: &mut Ui,
+    side: Side,
+    salt: impl std::hash::Hash + std::fmt::Debug,
+    total: f32,
+    size: f32,
+    range: Rangef,
+    resizable: bool,
+    frame: egui::Frame,
+    add: impl FnOnce(&mut Ui),
+) -> Option<f32> {
+    let id = (salt, total.round() as i64);
+    let panel = match side {
+        Side::Left => egui::Panel::left(id),
+        Side::Right => egui::Panel::right(id),
+        Side::Bottom => egui::Panel::bottom(id),
+    };
+    let panel = if resizable {
+        panel.resizable(true).default_size(size).size_range(range)
+    } else {
+        panel.resizable(false).exact_size(size)
+    };
+    // The region draws into a child fenced to the panel's own rect: egui
+    // grows a panel to fit whatever its contents ask for, and a region that
+    // fills "all available height" would otherwise ratchet its panel up to
+    // the maximum and be taken for a drag.
+    let shown = panel.frame(frame).show(ui, |ui| {
+        let rect = ui.max_rect();
+        let mut fenced = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(rect)
+                .layout(Layout::top_down(Align::Min)),
+        );
+        fenced.shrink_clip_rect(rect);
+        add(&mut fenced);
+        ui.advance_cursor_after_rect(rect);
+    });
+    let got = match side {
+        Side::Left | Side::Right => shown.response.rect.width(),
+        Side::Bottom => shown.response.rect.height(),
+    };
+    ((got - size).abs() > 0.5 && got > 0.0).then_some(got)
+}
+
+/// A folded panel's rail: its name, read down the rail (or across, for the
+/// timeline); a click unfolds it.
+fn rail(app: &App, ui: &mut Ui, region: Region, actions: &mut Vec<Action>) {
+    let id = ("rail", region.key());
+    let panel = match region {
+        Region::Chat | Region::Browser => egui::Panel::left(id),
+        Region::Inspector => egui::Panel::right(id),
+        Region::Timeline => egui::Panel::bottom(id),
+    };
+    let keys = super::keymap::command(region.toggle_command())
+        .map(|command| command.hint(app.keymap))
+        .unwrap_or_default();
+    let hint = if keys.is_empty() {
+        format!("Show the {}", region.label().to_lowercase())
+    } else {
+        format!("Show the {} ({keys})", region.label().to_lowercase())
+    };
+    let side = match region {
+        Region::Timeline => widgets::RailSide::Horizontal,
+        Region::Chat | Region::Browser | Region::Inspector => widgets::RailSide::Vertical,
+    };
+    panel
+        .exact_size(layout::RAIL)
+        .resizable(false)
+        .frame(egui::Frame::new().fill(theme::rgb(app.theme.panel)))
+        .show(ui, |ui| {
+            if widgets::rail(ui, &app.theme, region.label(), &hint, side).clicked() {
+                actions.push(Action::TogglePanel(region));
+            }
+        });
+}
+
+/// The browser: its tab strip with a fold button, then the open tab.
+fn browser(app: &mut App, ui: &mut Ui, actions: &mut Vec<Action>, blocked: bool) {
     ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
         for tab in BrowserTab::ALL {
-            let on = app.browser_tab == tab;
-            let text = egui::RichText::new(tab.label()).color(theme::rgb(if on {
-                app.theme.text
-            } else {
-                app.theme.text_muted
-            }));
-            if ui.selectable_label(on, text).clicked() {
+            if widgets::tab(ui, &app.theme, tab.label(), app.browser_tab == tab).clicked() {
                 app.browser_tab = tab;
             }
         }
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            let fold = widgets::icon_button(ui, &app.theme, "Fold the browser (Ctrl+B)");
+            let center = fold.icon.center();
+            widgets::chevron(ui.painter(), center, -egui::Vec2::X, fold.ink);
+            if fold.response.clicked() {
+                actions.push(Action::TogglePanel(Region::Browser));
+            }
+        });
     });
-}
-
-/// `R` stages the selection for the chat; `Shift-R` asks for an intent.
-fn reference_keys(app: &mut App, ui: &Ui, actions: &mut Vec<Action>) {
-    let (r, shift) = ui.input(|i| (i.key_pressed(egui::Key::R), i.modifiers.shift));
-    if !r || app.selection.is_empty() || ui.input(|i| i.modifiers.command || i.modifiers.alt) {
-        return;
-    }
-    if shift {
-        app.ref_popup = true;
-    } else {
-        for item in app.selection.clone() {
-            actions.push(Action::AddRef(item));
-        }
-        app.chat_open = true;
+    let line = ui.available_rect_before_wrap();
+    ui.painter().hline(
+        line.x_range().expand(SPACE_SM),
+        line.top(),
+        theme::ink_line(&app.theme),
+    );
+    ui.add_space(SPACE_XS);
+    let mut ctx = page_ctx!(app, actions, blocked);
+    match app.browser_tab {
+        BrowserTab::Shots => crate::gui::pages::review::draw(&mut ctx, &mut app.pages.review, ui),
+        BrowserTab::People => crate::gui::pages::people::draw(&mut ctx, &mut app.pages.people, ui),
+        BrowserTab::Music => crate::gui::pages::music::draw(&mut ctx, &mut app.pages.music, ui),
     }
 }
 
-/// The "reference as…" chooser.
+/// The "mention in chat as…" chooser (`Shift+R`).
 fn reference_popup(app: &mut App, ctx: &egui::Context, actions: &mut Vec<Action>) {
     if !app.ref_popup {
         return;
     }
     let mut open = true;
     let mut chosen = None;
-    egui::Window::new("Reference in chat as…")
+    egui::Window::new("Mention in chat as…")
         .collapsible(false)
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
@@ -218,28 +409,14 @@ fn reference_popup(app: &mut App, ctx: &egui::Context, actions: &mut Vec<Action>
         .show(ctx, |ui| {
             ui.label(format!("{} selected", app.selection.len()));
             for m in Modifier::ALL {
-                let label = format!(
-                    "{}  {}",
-                    if m.prefix().is_empty() {
-                        "·"
-                    } else {
-                        m.prefix()
-                    },
-                    m.label()
-                );
-                if ui.button(label).clicked() {
+                if ui.button(widgets::mention_label(m)).clicked() {
                     chosen = Some(m);
                 }
             }
         });
     if let Some(m) = chosen {
-        for item in app.selection.clone() {
-            actions.push(Action::AddRef(Reference {
-                modifier: m,
-                ..item
-            }));
-        }
-        app.chat_open = true;
+        let picked: Vec<Reference> = app.selection.clone();
+        actions.extend(widgets::mention_actions(&picked, m));
         open = false;
     }
     if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
@@ -248,81 +425,15 @@ fn reference_popup(app: &mut App, ctx: &egui::Context, actions: &mut Vec<Action>
     app.ref_popup = open;
 }
 
-/// The top bar: home, the night, search, export and app controls.
-fn top_bar(app: &mut App, ui: &mut Ui, actions: &mut Vec<Action>) {
-    let theme = app.theme.clone();
-    egui::Panel::top("topbar")
-        .exact_size(theme::HEADER_HEIGHT - 8.0)
-        .resizable(false)
-        .show_separator_line(false)
-        .frame(
-            egui::Frame::new()
-                .fill(theme::rgb(theme.app))
-                .inner_margin(theme::margin_xy(SPACE_MD, 0.0)),
-        )
-        .show(ui, |ui| {
-            ui.horizontal_centered(|ui| {
-                let home = widgets::icon_button(ui, &theme, "Home: pipeline and recent nights");
-                paint_glyph(ui, &home, super::glyph::NIGHT);
-                if home.response.clicked() {
-                    actions.push(Action::Go(if app.home {
-                        Page::Review
-                    } else {
-                        Page::Night
-                    }));
-                }
-                let name = app
-                    .project
-                    .as_ref()
-                    .map_or_else(|| crate::NAME.to_owned(), crate::project::Project::name);
-                ui.label(
-                    egui::RichText::new(name)
-                        .font(theme::font(theme::TITLE_SIZE))
-                        .color(theme::rgb(theme.text))
-                        .strong(),
-                );
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let settings = widgets::icon_button(ui, &theme, "Settings (Ctrl+,)");
-                    paint_glyph(ui, &settings, super::glyph::SETTINGS);
-                    if settings.response.clicked() {
-                        actions.push(Action::OpenSettings);
-                    }
-                    let commands = widgets::icon_button(ui, &theme, "Commands (Ctrl+K)");
-                    paint_glyph(ui, &commands, super::glyph::COMMAND);
-                    if commands.response.clicked() {
-                        actions.push(Action::OpenCommands);
-                    }
-                    let export = widgets::icon_button(ui, &theme, "Export (Ctrl+E)");
-                    paint_glyph(ui, &export, super::glyph::DELIVER);
-                    if export.response.clicked() {
-                        app.export_open = !app.export_open;
-                    }
-                    let inspector = widgets::icon_button(ui, &theme, "Inspector (Ctrl+I)");
-                    paint_glyph(ui, &inspector, super::glyph::ABOUT);
-                    if inspector.response.clicked() {
-                        app.inspector_open = !app.inspector_open;
-                    }
-                    let chat = widgets::icon_button(ui, &theme, "Chat (Ctrl+J)");
-                    paint_glyph(ui, &chat, super::glyph::PLAN);
-                    if chat.response.clicked() {
-                        app.chat_open = !app.chat_open;
-                    }
-                    // The search box takes the middle, centred in what is left.
-                    let width = (ui.available_width() - 40.0).clamp(160.0, 520.0);
-                    let pad = ((ui.available_width() - width) / 2.0).max(0.0);
-                    ui.add_space(pad);
-                    let search = egui::TextEdit::singleline(&mut app.search)
-                        .hint_text("Search shots, captions, people…   fire>0.3  dark  person:…")
-                        .desired_width(width);
-                    let response = ui.add(search);
-                    if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::F)) {
-                        response.request_focus();
-                    }
-                    if response.changed() {
-                        app.browser_tab = BrowserTab::Shots;
-                    }
-                });
-            });
-        });
+    #[test]
+    fn a_side_panel_range_never_inverts() {
+        for total in [0.0, 100.0, 400.0, 1800.0] {
+            let range = limits(layout::MIN_BROWSER, total);
+            assert!(range.min <= range.max, "{total}: {range:?}");
+        }
+    }
 }

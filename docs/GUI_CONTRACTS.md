@@ -37,16 +37,33 @@ Home screen (`pages::night`) replaces the workspace when no night is open or Hom
 Look: neutral studio greys (signature theme), small type, flat panels with 1 px borders,
 thumbnails carry the colour. Reference: Selects (tryselects.com) — study its density.
 
-| Region | Module | Shortcut |
+Proportions are Selects': chat 22 % of the window; browser 21 %, viewer 58 %,
+inspector 21 % of the editor width; timeline 45 % of the editor height. Every
+split is a fraction (`Config::panel_sizes`), chat / browser / inspector /
+timeline fold to labelled rails, and the view modes Default / Vertical /
+Comment / Preview (`Alt+1…4`) rearrange them (`gui::ui::layout`).
+
+Keys live in one table, `gui::ui::keymap::COMMANDS` (id, label, scope, ave /
+Premiere / Final Cut keys). Global rows are dispatched by the shell; region
+rows document keys a region reads and give it `keymap::chord(id, preset)` to
+adopt the user's preset. `?` prints the table.
+
+| Region | Module | Shortcut (ave preset) |
 |---|---|---|
 | Home | `gui::pages::night` | home button, Ctrl+1 |
-| Browser · Shots / People / Music | `gui::pages::{review,people,music}` | Ctrl+2 / 3 / 4 |
+| Browser · Shots / People / Music | `gui::pages::{review,people,music}` | Ctrl+B fold, Shift+1 focus, Ctrl+2 / 3 / 4 |
 | Viewer | `gui::pages::viewer` (+ `gui::player`) | — |
-| Inspector | `gui::pages::inspector` | Ctrl+I |
-| Timeline | `gui::pages::plan` | Ctrl+5 |
+| Inspector | `gui::pages::inspector` | Ctrl+I fold, Shift+4 focus |
+| Timeline | `gui::pages::plan` | Ctrl+T fold, Shift+3 focus, Ctrl+5 |
 | Export | `gui::pages::deliver` | Ctrl+E, Ctrl+6 |
-| Chat | `gui::assistant` | Ctrl+J |
+| Chat | `gui::assistant` | Ctrl+J fold, Shift+2 focus |
 | Search | top bar → `ctx.search` | Ctrl+F |
+
+**Mention in chat** from a context menu: call
+`crate::gui::ui::widgets::mention_menu(ui, ctx.actions, &reference)` (or
+`mention_menu_many` for a selection, in timeline order). It renders "Mention
+in chat ▸ about / keep / avoid / replace / more like / feature" and pushes
+`Action::AddRef`.
 
 ## Code map
 

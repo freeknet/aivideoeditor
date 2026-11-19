@@ -36,25 +36,25 @@ pub const SPACE_SM: f32 = 8.0;
 pub const SPACE_MD: f32 = 12.0;
 
 /// Between sections, and around a modal's body.
-pub const SPACE_LG: f32 = 20.0;
+pub const SPACE_LG: f32 = 16.0;
 
 /// Around a page's content.
-pub const SPACE_XL: f32 = 28.0;
+pub const SPACE_XL: f32 = 24.0;
 
-/// The corner radius on chips and buttons.
+/// The corner radius on chips, buttons, tabs and fields (Selects' `sm`).
 pub const RADIUS: u8 = 6;
 
-/// The corner radius on cards and modals.
+/// The corner radius on cards, popovers and modals (Selects' `lg`).
 pub const RADIUS_LG: u8 = 10;
 
 /// The height of buttons, nav items and fields.
-pub const CONTROL_HEIGHT: f32 = 32.0;
+pub const CONTROL_HEIGHT: f32 = 26.0;
 
 /// The height of the header bar.
-pub const HEADER_HEIGHT: f32 = 52.0;
+pub const HEADER_HEIGHT: f32 = 44.0;
 
 /// The height of the status bar.
-pub const STATUS_HEIGHT: f32 = 26.0;
+pub const STATUS_HEIGHT: f32 = 22.0;
 
 /// The width of the expanded sidebar.
 pub const SIDEBAR_WIDTH: f32 = 196.0;
@@ -66,14 +66,30 @@ pub const SIDEBAR_MINI_WIDTH: f32 = CONTROL_HEIGHT + SPACE_MD * 2.0;
 /// selection fill is a light tint, so this is what makes it unmistakable.
 pub const SELECTION_BAR: f32 = 3.0;
 
-/// Body text size.
-pub const BODY_SIZE: f32 = 14.0;
+/// The dense UI text size: labels, buttons, lists (Selects' 12/16).
+pub const BODY_SIZE: f32 = 12.0;
+
+/// Reading text: the composer, messages, body copy (Selects' 14/20).
+pub const LARGE_SIZE: f32 = 14.0;
+
+/// Captions, units, badges.
+pub const SMALL_SIZE: f32 = 11.0;
 
 /// Page heading size.
-pub const HEADING_SIZE: f32 = 22.0;
+pub const HEADING_SIZE: f32 = 18.0;
 
 /// Card and section title size.
-pub const TITLE_SIZE: f32 = 16.0;
+pub const TITLE_SIZE: f32 = 14.0;
+
+/// The opacity of a hairline: white (or black) at about 10 %, Selects'
+/// `border` token.
+pub const INK_LINE: u8 = 26;
+
+/// The opacity of a field's outline and a hovered hairline (about 15 %).
+pub const INK_STRONG: u8 = 38;
+
+/// The opacity of a hover fill laid over any surface (about 6 %).
+pub const INK_HOVER: u8 = 15;
 
 // Relations between constants, checked when the crate is compiled.
 const _: () = {
@@ -84,7 +100,23 @@ const _: () = {
         "collapsing must narrow it"
     );
     assert!(HEADER_HEIGHT > CONTROL_HEIGHT, "the header holds a control");
+    assert!(SMALL_SIZE < BODY_SIZE && BODY_SIZE < LARGE_SIZE);
+    assert!(INK_HOVER < INK_LINE && INK_LINE < INK_STRONG);
 };
+
+/// A hairline in the theme's ink: its text colour at [`INK_LINE`], so a
+/// divider reads the same on every surface it crosses.
+#[must_use]
+pub fn ink_line(theme: &Palette) -> Stroke {
+    Stroke::new(1.0, translucent(theme.text, INK_LINE))
+}
+
+/// The hover fill: the theme's ink at [`INK_HOVER`], laid over whatever
+/// surface the control sits on.
+#[must_use]
+pub fn ink_hover(theme: &Palette) -> Color32 {
+    translucent(theme.text, INK_HOVER)
+}
 
 /// Installs `theme` into egui's style. Called once per frame, first.
 pub fn apply(ctx: &egui::Context, theme: &Palette) {
@@ -98,26 +130,29 @@ pub fn apply(ctx: &egui::Context, theme: &Palette) {
     let derived = visuals(theme);
     ctx.all_styles_mut(|style| {
         style.visuals = derived.clone();
-        style.spacing.item_spacing = Vec2::new(SPACE_SM, SPACE_SM);
-        style.spacing.button_padding = Vec2::new(SPACE_MD, SPACE_XS);
-        style.spacing.interact_size = Vec2::new(0.0, CONTROL_HEIGHT - SPACE_SM);
+        // Dense, as Selects is: 4 px rows, 8 px between controls in a row.
+        style.spacing.item_spacing = Vec2::new(SPACE_SM - SPACE_XS / 2.0, SPACE_XS);
+        style.spacing.button_padding = Vec2::new(SPACE_SM, SPACE_XS / 2.0);
+        style.spacing.interact_size = Vec2::new(0.0, CONTROL_HEIGHT - SPACE_XS);
+        style.spacing.menu_margin = margin(SPACE_XS);
+        style.spacing.window_margin = margin(SPACE_MD);
         // Solid scrollbars: a floating bar is invisible until the pointer
         // is already on it.
         style.spacing.scroll = egui::style::ScrollStyle::solid();
-        style.spacing.scroll.bar_width = SPACE_SM;
+        style.spacing.scroll.bar_width = SPACE_SM - 2.0;
         // Labels are not text fields; a selectable label makes the pointer
         // an I-beam over every piece of chrome.
         style.interaction.selectable_labels = false;
         for (text_style, size, family) in [
             (TextStyle::Body, BODY_SIZE, egui::FontFamily::Proportional),
             (TextStyle::Button, BODY_SIZE, egui::FontFamily::Proportional),
-            (TextStyle::Small, 12.0, egui::FontFamily::Proportional),
+            (TextStyle::Small, SMALL_SIZE, egui::FontFamily::Proportional),
             (
                 TextStyle::Heading,
                 HEADING_SIZE,
                 egui::FontFamily::Proportional,
             ),
-            (TextStyle::Monospace, 13.0, egui::FontFamily::Monospace),
+            (TextStyle::Monospace, BODY_SIZE, egui::FontFamily::Monospace),
         ] {
             style
                 .text_styles
@@ -175,8 +210,6 @@ pub fn visuals(theme: &Palette) -> egui::Visuals {
         Mode::Light => egui::Visuals::light(),
     };
     visuals.panel_fill = rgb(theme.panel);
-    visuals.window_fill = rgb(theme.raised);
-    visuals.window_stroke = Stroke::new(1.0, rgb(theme.border));
     visuals.window_corner_radius = CornerRadius::same(RADIUS_LG);
     visuals.menu_corner_radius = CornerRadius::same(RADIUS);
     visuals.faint_bg_color = rgb(theme.raised);
@@ -211,15 +244,30 @@ pub fn visuals(theme: &Palette) -> egui::Visuals {
     ] {
         state.weak_bg_fill = rgb(surface);
         state.bg_fill = rgb(control);
-        state.bg_stroke = Stroke::new(1.0, rgb(theme.border));
+        // Hairlines are ink, not a separate grey: the same line reads the
+        // same on a panel, a card or a popover.
+        state.bg_stroke = ink_line(theme);
         state.fg_stroke = Stroke::new(1.0, rgb(theme.text));
         state.corner_radius = CornerRadius::same(RADIUS);
         // No growth on hover: it nudges neighbouring widgets.
         state.expansion = 0.0;
     }
     visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, rgb(theme.text_muted));
-    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, rgb(theme.border_strong));
-    visuals.widgets.active.bg_stroke = Stroke::new(2.0, rgb(theme.accent));
+    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, rgb(theme.text_muted));
+    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, translucent(theme.text, INK_STRONG));
+    visuals.widgets.active.bg_stroke = Stroke::new(1.0, rgb(theme.accent));
+    // Flat panels; only floating things (menus, popovers, windows) carry a
+    // shadow, and a faint one.
+    let shadow = egui::Shadow {
+        offset: [0, 2],
+        blur: 8,
+        spread: 0,
+        color: Color32::from_black_alpha(60),
+    };
+    visuals.popup_shadow = shadow;
+    visuals.window_shadow = shadow;
+    visuals.window_stroke = ink_line(theme);
+    visuals.window_fill = rgb(theme.raised);
     visuals
 }
 

@@ -11,31 +11,37 @@
 //! [`draw`] runs in full every frame and lays the window out in a fixed
 //! order, because egui's panels claim space in the order they are shown:
 //!
-//! 1. **The header** (top) and **the status bar** (bottom), full width.
-//! 2. **The sidebar** (left), the height between them.
-//! 3. **The page**, in whatever is left.
-//! 4. **Overlays**: the settings card and anything else modal.
+//! 1. **The top bar** and **the status bar**, full width.
+//! 2. **The chat** (left), the height between them, or its rail.
+//! 3. **The timeline** along the foot of what is left, then the browser,
+//!    inspector and export beside the viewer, which takes the rest.
+//! 4. **Overlays**: settings, the command palette, the shortcut sheet.
 //!
 //! Drawing never changes the app directly: it returns [`Action`]s, which
 //! [`App::apply`](crate::gui::app::App::apply) carries out after the frame.
 //! A shortcut, a button and a menu entry for the same thing are therefore
 //! the same code path.
 //!
-//! Shortcuts are read before the page draws, and not at all while a modal
-//! is open, so a keystroke aimed at a dialog cannot also act behind it.
+//! Shortcuts come from one table, [`keymap::COMMANDS`], and are read
+//! before the page draws, and not at all while a modal is open, so a
+//! keystroke aimed at a dialog cannot also act behind it.
 
 pub mod chrome;
 pub mod command_palette;
 pub mod icon;
+pub mod keymap;
+pub mod layout;
 pub mod modal;
 pub mod motion;
 pub mod settings;
+pub mod shortcut_sheet;
 pub mod theme;
+pub mod topbar;
 pub mod widgets;
 pub mod workspace;
 
-use crate::gui::app::{Action, App, Page};
-use egui::{Key, Ui};
+use crate::gui::app::{Action, App};
+use egui::Ui;
 use theme::{SPACE_LG, SPACE_MD, SPACE_SM};
 
 /// What a control shows in its icon slot: an icon from the drawn set.
@@ -69,6 +75,8 @@ pub mod glyph {
     pub const CLOSE: Glyph = Icon::Close;
     /// The command palette.
     pub const COMMAND: Glyph = Icon::Command;
+    /// Search.
+    pub const SEARCH: Glyph = Icon::Search;
     /// A card: speed.
     pub const BOLT: Glyph = Icon::Bolt;
     /// A card: structure.
@@ -107,77 +115,31 @@ pub fn draw(app: &mut App, ui: &mut Ui) -> Vec<Action> {
     theme::apply(ui.ctx(), &app.theme);
     motion::set_reduced(app.reduce_motion);
 
-    let blocked = app.settings_open;
-    let blocked = blocked || app.commands.open;
+    let blocked = app.settings_open || app.commands.open || app.shortcuts_open;
     if !blocked {
-        shortcuts(ui, &mut actions);
+        shortcuts(ui, app.keymap, &mut actions);
     }
 
     workspace::draw(app, ui, &mut actions, blocked);
 
     settings::draw(app, ui.ctx(), &mut actions);
     command_palette::draw(app, ui.ctx(), &mut actions);
+    shortcut_sheet::draw(app, ui.ctx(), &mut actions);
     actions
 }
 
-/// Reads the keyboard shortcuts into actions. See [`SHORTCUTS`].
-fn shortcuts(ui: &Ui, actions: &mut Vec<Action>) {
+/// Reads the global keyboard shortcuts into actions, from the command
+/// table under the preset in force. See [`keymap`].
+fn shortcuts(ui: &Ui, preset: keymap::Preset, actions: &mut Vec<Action>) {
     // A shortcut must not fire while a text field has focus.
     if ui.ctx().egui_wants_keyboard_input() {
         return;
     }
-    ui.ctx().input(|input| {
-        let command = input.modifiers.command;
-        if command && input.key_pressed(Key::Comma) {
-            actions.push(Action::OpenSettings);
-        }
-        if command && input.key_pressed(Key::E) {
-            actions.push(Action::ToggleExport);
-        }
-        // Ctrl+Shift+I is the viewer's info overlay.
-        if command && !input.modifiers.shift && input.key_pressed(Key::I) {
-            actions.push(Action::ToggleInspector);
-        }
-        if command && input.key_pressed(Key::J) {
-            actions.push(Action::ToggleChat);
-        }
-        if command && input.key_pressed(Key::O) {
-            actions.push(Action::PickProject);
-        }
-        let numbers = [
-            Key::Num1,
-            Key::Num2,
-            Key::Num3,
-            Key::Num4,
-            Key::Num5,
-            Key::Num6,
-        ];
-        for (key, page) in numbers.into_iter().zip(Page::ALL) {
-            if command && input.key_pressed(key) {
-                actions.push(Action::Go(page));
-            }
-        }
-    });
+    // While the palette is open this does not run, and the palette reads
+    // its own key to close; with a text field focused, it reads it to open.
+    let fired = ui.ctx().input_mut(|input| keymap::dispatch(input, preset));
+    actions.extend(fired);
 }
-
-/// The shortcuts, as data, so the about page and the handler above cannot
-/// drift apart without the test below noticing.
-pub const SHORTCUTS: &[(&str, &str)] = &[
-    ("Ctrl+,", "Open settings"),
-    ("Ctrl+1…6", "Switch page"),
-    ("Ctrl+O", "Open a night"),
-    ("Ctrl+F", "Search shots"),
-    ("Ctrl+J", "Show or hide the chat"),
-    ("Ctrl+I", "Show or hide the inspector"),
-    ("Ctrl+E", "Show or hide export"),
-    ("R", "Reference the selection in chat"),
-    (
-        "Shift+R",
-        "Reference the selection as keep / avoid / replace / more like / feature",
-    ),
-    ("Ctrl+K", "Open the command palette"),
-    ("Esc", "Close a dialog"),
-];
 
 /// The about page: the mark, the version and the shortcuts.
 pub fn about(app: &App, ui: &mut Ui) {
@@ -196,37 +158,18 @@ pub fn about(app: &App, ui: &mut Ui) {
         .num_columns(2)
         .spacing([SPACE_LG, SPACE_SM])
         .show(ui, |ui| {
-            for (keys, what) in SHORTCUTS {
+            for command in keymap::COMMANDS {
+                let keys = command.hint(app.keymap);
+                if keys.is_empty() {
+                    continue;
+                }
                 ui.label(
-                    egui::RichText::new(*keys)
+                    egui::RichText::new(keys)
                         .monospace()
                         .color(theme::rgb(theme.accent)),
                 );
-                ui.label(egui::RichText::new(*what).color(theme::rgb(theme.text_muted)));
+                ui.label(egui::RichText::new(command.label).color(theme::rgb(theme.text_muted)));
                 ui.end_row();
             }
         });
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn every_page_has_a_numbered_shortcut() {
-        assert_eq!(
-            Page::ALL.len(),
-            6,
-            "update the Ctrl+1…6 shortcut and SHORTCUTS"
-        );
-    }
-
-    #[test]
-    fn every_shortcut_is_documented_once() {
-        let mut keys: Vec<&str> = SHORTCUTS.iter().map(|(keys, _)| *keys).collect();
-        let count = keys.len();
-        keys.sort_unstable();
-        keys.dedup();
-        assert_eq!(keys.len(), count, "a shortcut is listed twice");
-    }
 }
