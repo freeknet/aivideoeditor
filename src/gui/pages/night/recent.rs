@@ -42,7 +42,7 @@ pub(crate) enum Progress {
 
 impl Progress {
     /// The word the list shows.
-    fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::New => "new",
             Self::Indexed => "indexed",
@@ -206,6 +206,16 @@ impl State {
             .map(|s| s.work.clone())
             .find(|w| Some(w.as_path()) != except)
     }
+
+    /// The nights found by the last scan.
+    pub(crate) fn list(&self) -> &[Summary] {
+        &self.list
+    }
+
+    /// Whether a scan is in flight.
+    pub(crate) fn scanning(&self) -> bool {
+        self.scanning.is_some()
+    }
 }
 
 /// How often the list rescans by itself.
@@ -230,7 +240,7 @@ fn inputs(ctx: &PageCtx<'_>) -> Vec<PathBuf> {
 }
 
 /// Starts a scan when the inputs changed, a job finished, or it is stale.
-fn refresh(ctx: &PageCtx<'_>, state: &mut State, force: bool) {
+pub(crate) fn refresh(ctx: &PageCtx<'_>, state: &mut State, force: bool) {
     if let Some(rx) = &state.scanning {
         if let Ok(list) = rx.try_recv() {
             state.list = list;
@@ -263,39 +273,57 @@ fn refresh(ctx: &PageCtx<'_>, state: &mut State, force: bool) {
     state.scanning = Some(rx);
 }
 
-/// Asks for the new night's footage folder and sets the night up from the
-/// last one. Returns what was carried over, for the user.
-pub(crate) fn new_night(ctx: &mut PageCtx<'_>, state: &State) -> Option<String> {
-    let open = ctx.project.as_ref().map(|p| p.work.clone());
-    let previous = open.clone().or_else(|| state.last_night(None));
+/// The night a new one carries over from: the open one, else the newest.
+pub(crate) fn previous(ctx: &PageCtx<'_>, state: &State) -> Option<PathBuf> {
+    ctx.project
+        .as_ref()
+        .map(|p| p.work.clone())
+        .or_else(|| state.last_night(None))
+}
+
+/// Asks for this week's footage folder, starting beside the last night.
+pub(crate) fn pick_footage(ctx: &PageCtx<'_>, state: &State) -> Option<PathBuf> {
     let mut dialog = rfd::FileDialog::new().set_title("New night: pick this week's footage folder");
-    if let Some(parent) = previous
+    if let Some(parent) = previous(ctx, state)
         .as_deref()
         .and_then(|p| recipe::night_dir(p).parent().map(Path::to_path_buf))
     {
         dialog = dialog.set_directory(parent);
     }
-    let footage = dialog.pick_folder()?;
-    let previous = previous.filter(|p| *p != crate::project::work_dir_for(&footage));
-    match recipe::new_night(&footage, previous.as_deref()) {
-        Ok(made) => {
-            ctx.actions.push(Action::OpenProject(made.work.clone()));
-            let from = previous
-                .as_deref()
-                .map(|p| format!(" from {}", recipe::Names::for_work(p).night))
-                .unwrap_or_default();
-            Some(if made.notes.is_empty() {
-                format!("New night set up{from}.")
-            } else {
-                format!("New night set up{from}: {}.", made.notes.join(", "))
-            })
-        }
-        Err(e) => Some(format!("Could not set up the night: {e:#}")),
-    }
+    dialog.pick_folder()
 }
 
-/// Draws the column. Returns a notice for the main area, if any.
-pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) -> Option<String> {
+/// A night [`set_up`] made.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SetUp {
+    /// Its work folder.
+    pub(crate) work: PathBuf,
+    /// The night it carried over from.
+    pub(crate) previous: Option<PathBuf>,
+    /// What was carried over or found, one line each.
+    pub(crate) notes: Vec<String>,
+}
+
+/// Sets a night up for `footage` from the last one (`recipe::new_night`)
+/// and opens it.
+pub(crate) fn set_up(
+    ctx: &mut PageCtx<'_>,
+    state: &State,
+    footage: &Path,
+) -> anyhow::Result<SetUp> {
+    let previous = previous(ctx, state).filter(|p| *p != crate::project::work_dir_for(footage));
+    let made = recipe::new_night(footage, previous.as_deref())?;
+    ctx.actions.push(Action::OpenProject(made.work.clone()));
+    Ok(SetUp {
+        work: made.work,
+        previous,
+        notes: made.notes,
+    })
+}
+
+/// Draws the column. Returns a footage folder the user picked for a new
+/// night, for the page to set up.
+pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) -> Option<PathBuf> {
     refresh(ctx, state, false);
     let mut notice = None;
     let theme = ctx.theme;
@@ -307,7 +335,7 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
             )
             .clicked()
         {
-            notice = new_night(ctx, state);
+            notice = pick_footage(ctx, state);
         }
         if widgets::button(ui, theme, "Open…", widgets::Emphasis::Secondary)
             .on_hover_text("Open a night's footage folder or _ave folder (Ctrl+O)")

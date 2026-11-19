@@ -4,7 +4,7 @@
 //               in parallel), scores and flags segments, and writes the
 //               machine index and the human/LLM-readable shot log.
 //
-// Dependencies: crate::analyze, rayon, serde_json
+// Dependencies: crate::analyze, crate::commands (progress), rayon, serde_json
 // ============================================================================
 
 //! The footage index.
@@ -57,12 +57,15 @@
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use rayon::prelude::*;
 
 use crate::analyze::segments::{Camera, Segment, median};
 use crate::analyze::{self, ClipIndex};
+use crate::commands::{ItemState, Progress, Report};
 
 /// File extensions treated as video.
 const VIDEO_EXT: [&str; 8] = ["mov", "mp4", "m4v", "mkv", "avi", "mts", "mxf", "webm"];
@@ -295,7 +298,7 @@ impl Index {
 }
 
 /// Size and mtime of a file, for cache invalidation.
-fn stamp(path: &Path) -> Result<(u64, u64)> {
+pub(crate) fn stamp(path: &Path) -> Result<(u64, u64)> {
     let meta = std::fs::metadata(path)?;
     let mtime = meta
         .modified()
@@ -322,13 +325,26 @@ pub(crate) fn list_videos(dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(out)
 }
 
-/// Analyses (or loads from cache) one clip.
-fn clip_index(path: &Path, cache: &Path, force: bool) -> Result<ClipIndex> {
-    let st = stamp(path)?;
-    let id = path
-        .file_stem()
+/// The clip id of a source file: its file stem.
+pub(crate) fn clip_id(path: &Path) -> String {
+    path.file_stem()
         .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
+
+/// What happened to one clip.
+struct Analysed {
+    /// Its analysis.
+    clip: ClipIndex,
+    /// Seconds spent analysing it; `None` when it came from the cache.
+    took: Option<f32>,
+}
+
+/// Analyses (or loads from cache) one clip; `started` runs just before a
+/// real analysis begins (not for a cache hit).
+fn clip_index(path: &Path, cache: &Path, force: bool, started: &dyn Fn()) -> Result<Analysed> {
+    let st = stamp(path)?;
+    let id = clip_id(path);
     let cached = cache.join(format!("{id}.json"));
     if !force
         && let Ok(text) = std::fs::read_to_string(&cached)
@@ -336,19 +352,22 @@ fn clip_index(path: &Path, cache: &Path, force: bool) -> Result<ClipIndex> {
         && clip.stamp == st
         && clip.version >= analyze::ANALYSIS_VERSION
     {
-        return Ok(clip);
+        return Ok(Analysed { clip, took: None });
     }
-    let started = std::time::Instant::now();
+    started();
+    let began = std::time::Instant::now();
     let clip =
         analyze::analyze_clip(path, st).with_context(|| format!("analysing {}", path.display()))?;
-    log::info!(
-        "{id}: {:.1}s, {} segments, analysed in {:.1}s",
+    log::debug!(
+        "{id}: {:.1}s, {} segments",
         clip.probe.duration,
-        clip.segments.len(),
-        started.elapsed().as_secs_f32()
+        clip.segments.len()
     );
     std::fs::write(&cached, serde_json::to_string(&clip)?)?;
-    Ok(clip)
+    Ok(Analysed {
+        clip,
+        took: Some(began.elapsed().as_secs_f32()),
+    })
 }
 
 /// Whether a segment is dark under `t`, with the reason.
@@ -453,7 +472,17 @@ pub(crate) fn score(clips: &[ClipIndex], t: &Thresholds) -> (f32, Vec<Scored>) {
 }
 
 /// Indexes `source` into `work`, keeping captions from an earlier run.
-pub(crate) fn run(source: &Path, work: &Path, jobs: usize, force: bool) -> Result<Index> {
+///
+/// Reports every clip to `progress` (`index 12/81 MVI_7925: done 3.2s`) and
+/// stops between clips when it is cancelled; clips analysed before the stop
+/// stay in the cache, so the next run picks up where this one stopped.
+pub(crate) fn run(
+    source: &Path,
+    work: &Path,
+    jobs: usize,
+    force: bool,
+    progress: &Progress,
+) -> Result<Index> {
     let cache = work.join("clips");
     std::fs::create_dir_all(&cache)?;
     let videos = list_videos(source)?;
@@ -463,15 +492,67 @@ pub(crate) fn run(source: &Path, work: &Path, jobs: usize, force: bool) -> Resul
         videos.len(),
         source.display()
     );
+    progress.stage("index", format!("{} clips to check", videos.len()));
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(jobs.max(1))
         .build()?;
-    let clips: Vec<ClipIndex> = pool.install(|| {
-        videos
-            .par_iter()
-            .map(|p| clip_index(p, &cache, force))
-            .collect::<Result<Vec<_>>>()
-    })?;
+    let total = videos.len();
+    let finished = AtomicUsize::new(0);
+    let analysed = AtomicUsize::new(0);
+    let began = Instant::now();
+    let one = |path: &PathBuf| -> Result<ClipIndex> {
+        progress.check()?;
+        let id = clip_id(path);
+        let start = || {
+            let n = finished.load(Ordering::Relaxed);
+            progress.report(&Report::item(
+                "index",
+                n,
+                total,
+                id.as_str(),
+                ItemState::Started,
+            ));
+        };
+        let result = clip_index(path, &cache, force, &start);
+        let n = finished.fetch_add(1, Ordering::Relaxed) + 1;
+        match &result {
+            Ok(Analysed { took: None, .. }) => {
+                progress.report(&Report::item(
+                    "index",
+                    n,
+                    total,
+                    id.as_str(),
+                    ItemState::Cached,
+                ));
+            }
+            Ok(Analysed {
+                took: Some(secs), ..
+            }) => {
+                let done = analysed.fetch_add(1, Ordering::Relaxed) + 1;
+                let elapsed = began.elapsed().as_secs_f32();
+                // Wall seconds per analysed clip (parallelism included),
+                // assuming the clips left all need real analysis.
+                let eta = elapsed / done as f32 * total.saturating_sub(n) as f32;
+                progress.report(
+                    &Report::item("index", n, total, id.as_str(), ItemState::Done)
+                        .took(*secs)
+                        .remaining(Some(eta)),
+                );
+            }
+            Err(e) if !progress.cancelled() => {
+                progress.report(
+                    &Report::item("index", n, total, id.as_str(), ItemState::Failed)
+                        .because(&format!("{e:#}")),
+                );
+            }
+            Err(_) => {}
+        }
+        result.map(|a| a.clip)
+    };
+    let clips: Vec<ClipIndex> =
+        pool.install(|| videos.par_iter().map(one).collect::<Result<Vec<_>>>())?;
+    progress.check()?;
+    progress.stage("index", "scoring segments");
     let thresholds = Thresholds::for_work(work);
     let (sharp_ref, mut segments) = score(&clips, &thresholds);
     if let Ok(old) = Index::load(work) {

@@ -24,9 +24,10 @@
 //! people.toml, plans that do not exist yet). Re-drafting people or plans
 //! from their own step asks first, because those are the files a user edits.
 //!
-//! Progress: a job's lines are searched for `N/M` (`120/417 captioned`);
-//! indexing, which reports nothing until the end, is measured by counting
-//! the per-clip cache files it writes.
+//! Progress: the job's parsed reports (`crate::jobs::JobProgress`) give
+//! items done, total and time left; output without reports falls back to
+//! any `N/M` in its lines, and indexing to counting the per-clip cache
+//! files it writes.
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -188,7 +189,11 @@ impl State {
                 Some(Status::Failed(e)) => {
                     let label = jobs.get(id).map(|j| j.label.clone()).unwrap_or_default();
                     let first = e.lines().next().unwrap_or_default().to_owned();
-                    self.stopped = Some(format!("{label} failed: {first}"));
+                    self.stopped = Some(if crate::commands::is_cancelled(&e) {
+                        format!("{label} cancelled; what it finished is kept")
+                    } else {
+                        format!("{label} failed: {first}")
+                    });
                     self.queue.clear();
                     self.current = None;
                     return;
@@ -204,8 +209,32 @@ impl State {
         }
     }
 
+    /// Stops the run: drops what is queued and asks the running job to stop
+    /// after the clip or segment in hand.
+    pub(crate) fn cancel(&mut self, jobs: &mut Jobs) {
+        self.queue.clear();
+        if let Some(id) = self.current {
+            jobs.cancel(id);
+        }
+    }
+
+    /// Whether anything is queued or running.
+    pub(crate) fn active(&self) -> bool {
+        self.current.is_some() || !self.queue.is_empty()
+    }
+
+    /// Labels of the jobs waiting to start, in order.
+    pub(crate) fn queued(&self) -> impl Iterator<Item = &str> {
+        self.queue.iter().map(|(l, _)| l.as_str())
+    }
+
+    /// Why the queue stopped, if it did.
+    pub(crate) fn stopped(&self) -> Option<&str> {
+        self.stopped.as_deref()
+    }
+
     /// Appends jobs to the queue, skipping any already queued or running.
-    fn enqueue(&mut self, jobs: &Jobs, list: Vec<(String, Cmd)>) {
+    pub(crate) fn enqueue(&mut self, jobs: &Jobs, list: Vec<(String, Cmd)>) {
         if self.current.is_none() && self.queue.is_empty() {
             self.started = 0;
             self.total = 0;
@@ -351,7 +380,7 @@ enum Run {
 }
 
 /// The index step.
-fn index_cmd(work: &Path, footage: &Path, force: bool) -> (String, Cmd) {
+pub(crate) fn index_cmd(work: &Path, footage: &Path, force: bool) -> (String, Cmd) {
     (
         "index".to_owned(),
         Cmd::Index {
@@ -364,7 +393,7 @@ fn index_cmd(work: &Path, footage: &Path, force: bool) -> (String, Cmd) {
 }
 
 /// The caption step.
-fn caption_cmd(work: &Path) -> (String, Cmd) {
+pub(crate) fn caption_cmd(work: &Path) -> (String, Cmd) {
     (
         "caption".to_owned(),
         Cmd::Caption {
@@ -377,7 +406,7 @@ fn caption_cmd(work: &Path) -> (String, Cmd) {
 }
 
 /// The plan jobs for these deliverables.
-fn plan_cmds(ctx: &PageCtx<'_>, recipe: &Recipe, ids: &[String]) -> Vec<(String, Cmd)> {
+pub(crate) fn plan_cmds(ctx: &PageCtx<'_>, recipe: &Recipe, ids: &[String]) -> Vec<(String, Cmd)> {
     let Some(p) = ctx.project.as_ref() else {
         return Vec::new();
     };
@@ -982,15 +1011,28 @@ fn log(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
             theme.danger,
         ),
     };
-    let fraction = match (&job.status, progress(&job.lines)) {
-        (Status::Running, Some((n, m))) => Some((n as f32 / m as f32, format!("{n}/{m}"))),
-        (Status::Running, None) if job.label == "index" => {
+    let elapsed = job.started.elapsed().as_secs_f32();
+    let reported = job.progress.fraction().map(|f| {
+        let left = job
+            .progress
+            .remaining(elapsed)
+            .map(|s| format!(" \u{b7} {} left", crate::project::duration_text(s)))
+            .unwrap_or_default();
+        (
+            f,
+            format!("{}/{}{left}", job.progress.done, job.progress.total),
+        )
+    });
+    let fraction = match (&job.status, reported, progress(&job.lines)) {
+        (Status::Running, Some(r), _) => Some(r),
+        (Status::Running, None, Some((n, m))) => Some((n as f32 / m as f32, format!("{n}/{m}"))),
+        (Status::Running, None, None) if job.label == "index" => {
             state.facts.videos.filter(|v| *v > 0).map(|v| {
                 let n = state.facts.cached.min(v);
                 (n as f32 / v as f32, format!("{n}/{v} clips analysed"))
             })
         }
-        (Status::Running | Status::Done | Status::Failed(_), _) => None,
+        (Status::Running | Status::Done | Status::Failed(_), _, _) => None,
     };
     let retry =
         matches!(job.status, Status::Failed(_)).then(|| (job.label.clone(), job.cmd.clone()));
@@ -1037,15 +1079,7 @@ fn log(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
             }
             ui.add_space(theme::SPACE_XS);
             if lines.is_empty() {
-                widgets::muted(
-                    ui,
-                    theme,
-                    if running {
-                        "Working… (this step reports when it finishes)"
-                    } else {
-                        "No output."
-                    },
-                );
+                widgets::muted(ui, theme, if running { "Working…" } else { "No output." });
             }
             for line in &lines {
                 ui.label(
