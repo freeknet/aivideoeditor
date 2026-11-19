@@ -50,6 +50,7 @@ macro_rules! page_ctx {
             refs: &mut $app.refs,
             selection: &mut $app.selection,
             search: &mut $app.search,
+            chat_inbox: &mut $app.chat_inbox,
             actions: $actions,
             blocked: $blocked,
         }

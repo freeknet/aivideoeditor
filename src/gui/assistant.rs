@@ -238,6 +238,18 @@ pub(crate) struct State {
 
 /// Draws the panel.
 pub(crate) fn panel(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
+    // Messages handed over by other regions (timeline comments) land in the
+    // composer for the user to send.
+    for message in ctx.chat_inbox.drain(..) {
+        if !state.input.is_empty() {
+            state.input.push_str(
+                "
+
+",
+            );
+        }
+        state.input.push_str(&message);
+    }
     if state.prefs.is_none() {
         let prefs = store::Prefs::load();
         state.url_draft = prefs.local();

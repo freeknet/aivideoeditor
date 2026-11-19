@@ -160,6 +160,9 @@ pub enum Action {
     AddRef(crate::refs::Reference),
     /// Drop every staged reference.
     ClearRefs,
+    /// Hand a message to the chat (e.g. a batch of timeline comments); the
+    /// assistant shows it in its composer or sends it, and opens the panel.
+    ChatInbox(String),
     /// Show or hide the chat panel.
     ToggleChat,
     /// Show or hide the inspector.
@@ -220,6 +223,9 @@ pub struct App {
     pub(crate) browser_tab: BrowserTab,
     /// Whether the "reference as…" chooser is open.
     pub(crate) ref_popup: bool,
+    /// Messages handed to the chat by other regions, oldest first; the
+    /// assistant takes them.
+    pub(crate) chat_inbox: Vec<String>,
 }
 
 impl App {
@@ -263,6 +269,7 @@ impl App {
             inspector_open: true,
             browser_tab: BrowserTab::Shots,
             ref_popup: false,
+            chat_inbox: Vec::new(),
         };
         app.jobs.set_context(ctx);
         let reopen = open.or_else(|| {
@@ -315,6 +322,10 @@ impl App {
                     Page::Deliver => self.export_open = true,
                     Page::Night | Page::Plan => {}
                 }
+            }
+            Action::ChatInbox(text) => {
+                self.chat_inbox.push(text);
+                self.chat_open = true;
             }
             Action::ToggleChat => self.chat_open = !self.chat_open,
             Action::ToggleInspector => self.inspector_open = !self.inspector_open,

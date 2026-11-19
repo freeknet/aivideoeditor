@@ -57,6 +57,8 @@ pub(crate) struct PageCtx<'a> {
     pub(crate) selection: &'a mut Vec<crate::refs::Reference>,
     /// The top bar's search text.
     pub(crate) search: &'a mut String,
+    /// Messages handed to the chat (`Action::ChatInbox`); the assistant drains it.
+    pub(crate) chat_inbox: &'a mut Vec<String>,
     /// App-wide actions to apply after the frame.
     pub(crate) actions: &'a mut Vec<Action>,
     /// Whether a modal is open (pages must not read shortcuts then).
