@@ -54,6 +54,13 @@
 //! Each key is optional and read on its own; a bad value costs that key,
 //! not the table. `[thresholds]` wins over `[pages.thresholds]` key by key.
 //! Re-run `ave index` after editing: cached clips make that a re-score.
+//!
+//! **One bad clip does not cost the night.** A clip that cannot be read
+//! (ffprobe or ffmpeg fails, no frame decodes, the file is garbage) is
+//! skipped with a warning and the rest index as usual. Skipped clips are
+//! recorded in `index.json` (`skipped`, with the reason) and listed at the
+//! top of the shot log; they are not cached, so the next run tries them
+//! again. The run fails only when every clip is skipped.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -241,6 +248,15 @@ pub(crate) struct Scored {
     pub(crate) caption: Option<crate::caption::Caption>,
 }
 
+/// A clip the index could not read, and why.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct Skipped {
+    /// Clip id (file stem).
+    pub(crate) clip: String,
+    /// The error, one line.
+    pub(crate) reason: String,
+}
+
 /// The whole index.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Index {
@@ -255,6 +271,9 @@ pub(crate) struct Index {
     /// The cull thresholds the flags were raised with.
     #[serde(default)]
     pub(crate) thresholds: Thresholds,
+    /// Clips that could not be read, in name order; absent from `clips`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) skipped: Vec<Skipped>,
     /// The work folder this index was loaded from or written to (not
     /// stored): how the planner finds sibling nights' plans.
     #[serde(skip)]
@@ -471,11 +490,47 @@ pub(crate) fn score(clips: &[ClipIndex], t: &Thresholds) -> (f32, Vec<Scored>) {
     (sharp_ref, out)
 }
 
+/// Splits per-clip results into the clips that indexed and the ones to
+/// skip, in input order. Fails when nothing indexed: a night with no
+/// readable clip is an error, not an empty shot log.
+fn gather(results: Vec<(String, Result<ClipIndex>)>) -> Result<(Vec<ClipIndex>, Vec<Skipped>)> {
+    let mut clips = Vec::new();
+    let mut skipped = Vec::new();
+    for (id, result) in results {
+        match result {
+            Ok(clip) => clips.push(clip),
+            Err(e) => {
+                let reason = format!("{e:#}")
+                    .lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                log::warn!("skipping {id}: {reason}");
+                skipped.push(Skipped { clip: id, reason });
+            }
+        }
+    }
+    if clips.is_empty() {
+        let first = skipped
+            .first()
+            .map(|s| format!(" (first: {}: {})", s.clip, s.reason))
+            .unwrap_or_default();
+        anyhow::bail!(
+            "every clip failed to index: {} skipped{first}",
+            skipped.len()
+        );
+    }
+    Ok((clips, skipped))
+}
+
 /// Indexes `source` into `work`, keeping captions from an earlier run.
 ///
 /// Reports every clip to `progress` (`index 12/81 MVI_7925: done 3.2s`) and
 /// stops between clips when it is cancelled; clips analysed before the stop
 /// stay in the cache, so the next run picks up where this one stopped.
+/// A clip that fails is reported `failed` with its reason and skipped (see
+/// the module docs); the run fails only when every clip does.
 pub(crate) fn run(
     source: &Path,
     work: &Path,
@@ -500,9 +555,11 @@ pub(crate) fn run(
     let finished = AtomicUsize::new(0);
     let analysed = AtomicUsize::new(0);
     let began = Instant::now();
-    let one = |path: &PathBuf| -> Result<ClipIndex> {
-        progress.check()?;
+    let one = |path: &PathBuf| -> (String, Result<ClipIndex>) {
         let id = clip_id(path);
+        if let Err(e) = progress.check() {
+            return (id, Err(e));
+        }
         let start = || {
             let n = finished.load(Ordering::Relaxed);
             progress.report(&Report::item(
@@ -547,11 +604,12 @@ pub(crate) fn run(
             }
             Err(_) => {}
         }
-        result.map(|a| a.clip)
+        (id, result.map(|a| a.clip))
     };
-    let clips: Vec<ClipIndex> =
-        pool.install(|| videos.par_iter().map(one).collect::<Result<Vec<_>>>())?;
+    let results: Vec<(String, Result<ClipIndex>)> =
+        pool.install(|| videos.par_iter().map(one).collect());
     progress.check()?;
+    let (clips, skipped) = gather(results)?;
     progress.stage("index", "scoring segments");
     let thresholds = Thresholds::for_work(work);
     let (sharp_ref, mut segments) = score(&clips, &thresholds);
@@ -574,6 +632,7 @@ pub(crate) fn run(
         clips,
         segments,
         thresholds,
+        skipped,
         work: Some(work.to_path_buf()),
     };
     index.save(work)?;
@@ -598,6 +657,17 @@ pub(crate) fn shotlog(index: &Index) -> String {
         total / 60.0,
         index.source
     );
+    if !index.skipped.is_empty() {
+        let _ = writeln!(
+            s,
+            "**Skipped {} clip(s)** that could not be read (not in this log; re-run `ave index` to retry):\n",
+            index.skipped.len()
+        );
+        for k in &index.skipped {
+            let _ = writeln!(s, "- `{}`: {}", k.clip, k.reason);
+        }
+        s.push('\n');
+    }
     let _ = writeln!(
         s,
         "Each line: `id` time · camera · exposure (mean/p95 luma, then mean luma of the lit region and how much \
@@ -697,7 +767,7 @@ pub(crate) fn shotlog(index: &Index) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Thresholds, score};
+    use super::{Index, Skipped, Thresholds, gather, score, shotlog};
     use crate::analyze::ClipIndex;
     use crate::analyze::segments::{Camera, Segment};
     use crate::media::Probe;
@@ -832,6 +902,136 @@ min_lit = 0
                 .any(|s| s.clip == "spinner" && s.flags.contains(&"dark".to_owned())),
             "thresholds are honoured"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn a_bad_clip_is_skipped_and_every_bad_clip_fails() -> anyhow::Result<()> {
+        let results = vec![
+            ("A".to_owned(), Ok(clip("A", 0.1, 0.5, 0.4, 0.05))),
+            (
+                "B".to_owned(),
+                Err(anyhow::anyhow!("ffprobe exited 1").context("analysing B.mp4")),
+            ),
+            ("C".to_owned(), Ok(clip("C", 0.1, 0.5, 0.4, 0.05))),
+        ];
+        let (clips, skipped) = gather(results)?;
+        let ids: Vec<&str> = clips.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, ["A", "C"], "the good clips index, in order");
+        assert_eq!(
+            skipped,
+            [Skipped {
+                clip: "B".into(),
+                reason: "analysing B.mp4: ffprobe exited 1".into(),
+            }],
+            "the bad one is recorded with its reason on one line"
+        );
+        let all_bad = vec![
+            ("A".to_owned(), Err(anyhow::anyhow!("no frames decoded"))),
+            ("B".to_owned(), Err(anyhow::anyhow!("ffprobe exited 1"))),
+        ];
+        let err = gather(all_bad)
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("every clip failing must fail the run"))?;
+        let text = format!("{err:#}");
+        assert!(
+            text.contains("2 skipped") && text.contains("no frames decoded"),
+            "{text}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn old_index_files_load_and_skips_reach_the_shotlog() -> anyhow::Result<()> {
+        let old: Index =
+            serde_json::from_str(r#"{"source":"x","sharp_ref":1.0,"clips":[],"segments":[]}"#)?;
+        assert!(old.skipped.is_empty(), "no `skipped` field, none skipped");
+        let index = Index {
+            skipped: vec![Skipped {
+                clip: "BROKEN".into(),
+                reason: "no frames decoded".into(),
+            }],
+            ..Index::default()
+        };
+        let log = shotlog(&index);
+        let head: String = log.lines().take(8).collect::<Vec<_>>().join("\n");
+        assert!(
+            head.contains("Skipped 1 clip") && head.contains("`BROKEN`: no frames decoded"),
+            "listed at the top: {head}"
+        );
+        let back: Index = serde_json::from_str(&serde_json::to_string(&index)?)?;
+        assert_eq!(
+            back.skipped, index.skipped,
+            "round-trips through index.json"
+        );
+        Ok(())
+    }
+
+    /// Writes a 2 s test clip, or `None` when ffmpeg is missing.
+    fn test_clip(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+        let out = dir.join(name);
+        let status = std::process::Command::new(crate::media::tool("ffmpeg"))
+            .args(["-v", "error", "-nostdin", "-y", "-f", "lavfi", "-i"])
+            .arg("testsrc=size=320x180:rate=24:duration=2")
+            .args(["-pix_fmt", "yuv420p"])
+            .arg(&out)
+            .status()
+            .ok()?;
+        status.success().then_some(out)
+    }
+
+    #[test]
+    fn a_garbage_clip_does_not_stop_the_night() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let footage = dir.path().join("video");
+        std::fs::create_dir_all(&footage)?;
+        if test_clip(&footage, "GOOD.mp4").is_none() {
+            eprintln!("ffmpeg not available; skipping");
+            return Ok(());
+        }
+        std::fs::write(footage.join("BAD.mp4"), b"this is not a video at all")?;
+        let work = dir.path().join("_ave");
+        let mut out = Vec::new();
+        crate::commands::execute_with(
+            crate::commands::Cmd::Index {
+                footage: footage.clone(),
+                work: work.clone(),
+                jobs: 2,
+                force: false,
+            },
+            &mut out,
+            &crate::commands::Progress::default(),
+        )?;
+        let printed = String::from_utf8_lossy(&out);
+        assert!(printed.starts_with("1 clips, "), "{printed}");
+        assert!(printed.contains(", 1 skipped -> "), "{printed}");
+        let index = Index::load(&work)?;
+        let ids: Vec<&str> = index.clips.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, ["GOOD"], "the good clip indexed");
+        assert_eq!(
+            index
+                .skipped
+                .iter()
+                .map(|k| k.clip.as_str())
+                .collect::<Vec<_>>(),
+            ["BAD"],
+            "the garbage one is recorded"
+        );
+        let log = std::fs::read_to_string(work.join("shotlog.md"))?;
+        assert!(log.contains("`BAD`:"), "the shot log lists it: {log}");
+        // Only garbage: the run fails.
+        std::fs::remove_file(footage.join("GOOD.mp4"))?;
+        let all_bad = crate::commands::execute_with(
+            crate::commands::Cmd::Index {
+                footage,
+                work,
+                jobs: 1,
+                force: false,
+            },
+            &mut Vec::new(),
+            &crate::commands::Progress::default(),
+        );
+        assert!(all_bad.is_err(), "every clip failing is an error");
         Ok(())
     }
 }

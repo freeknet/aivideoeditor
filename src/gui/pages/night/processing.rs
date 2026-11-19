@@ -83,8 +83,9 @@ pub(crate) enum Phase {
         /// `120/417 · 4 min left`.
         text: String,
     },
-    /// Finished, in this many seconds.
-    Done(f32),
+    /// Finished, in this many seconds, with this many items skipped
+    /// (clips the index could not read).
+    Done(f32, usize),
     /// Failed, with the first line of the error.
     Failed(String),
     /// Stopped by the user.
@@ -120,7 +121,7 @@ fn phase(job: Option<&Job>, queued: bool) -> Phase {
                     text,
                 }
             }
-            Status::Done => Phase::Done(j.took.unwrap_or(0.0)),
+            Status::Done => Phase::Done(j.took.unwrap_or(0.0), j.progress.failed),
             Status::Failed(_) if j.cancelled() => Phase::Cancelled,
             Status::Failed(e) => Phase::Failed(e.lines().next().unwrap_or_default().to_owned()),
         },
@@ -144,7 +145,7 @@ pub(crate) fn remaining(steps: &[(Phase, f32)]) -> f32 {
                 elapsed,
                 ..
             } => (estimate - elapsed).max(0.0),
-            Phase::Done(_) | Phase::Failed(_) | Phase::Cancelled | Phase::Skipped => 0.0,
+            Phase::Done(..) | Phase::Failed(_) | Phase::Cancelled | Phase::Skipped => 0.0,
         })
         .sum()
 }
@@ -378,11 +379,18 @@ fn steps(ctx: &PageCtx<'_>, ui: &mut egui::Ui, phases: &[(Planned, Phase)]) {
                             None => text.clone(),
                         },
                     ),
-                    Phase::Done(took) => (
+                    Phase::Done(took, skipped) => (
                         "done",
                         theme.success,
                         1.0,
-                        format!("took {}", project::duration_text(*took)),
+                        if *skipped > 0 {
+                            format!(
+                                "took {} \u{b7} {skipped} skipped",
+                                project::duration_text(*took)
+                            )
+                        } else {
+                            format!("took {}", project::duration_text(*took))
+                        },
                     ),
                     Phase::Failed(e) => ("failed", theme.danger, 0.0, e.clone()),
                     Phase::Cancelled => {
@@ -593,7 +601,7 @@ mod tests {
     #[test]
     fn remaining_time_adds_reports_and_estimates() {
         let steps = [
-            (Phase::Done(30.0), 40.0),
+            (Phase::Done(30.0, 0), 40.0),
             (
                 Phase::Running {
                     fraction: Some(0.5),

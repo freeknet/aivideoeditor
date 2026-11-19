@@ -146,6 +146,11 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- `ave index` no longer stops the night at one unreadable clip: a clip that fails
+  (ffmpeg error, no frames, garbage file) is skipped with a warning, recorded in
+  `index.json` (`skipped`, with the reason) and listed at the top of `shotlog.md`;
+  the command prints `N clips, M segments, K skipped` and fails only when every clip
+  does. The processing page shows the skip count on a finished index step.
 - Drafted crops are rounded inward so a two-decimal `cx` never leaves the frame,
   and windows never run past the end of the file.
 - GUI timeline: plans on the beat grid (ruler in seconds and bars, V1 shots with
