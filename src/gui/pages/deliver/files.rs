@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use crossbeam_channel::Receiver;
 
 /// A path with Windows separators, for Explorer.
+#[cfg(windows)]
 fn native(path: &Path) -> String {
     path.display().to_string().replace('/', "\\")
 }
