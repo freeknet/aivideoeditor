@@ -12,6 +12,16 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Start and processing flow, after Selects: a start page (drop zone or "Open footage
+  folder", a first request with templates that goes to the chat once the night is set up,
+  recent nights as thumbnail cards), a get-started wizard (footage → music and end cards
+  with last week's carried over → deliverables → an analysis approval card with time
+  estimates from measured throughput), and a processing page (a bar per step, elapsed and
+  remaining time, Stop, every clip's status, "Open editor" as soon as indexing is done).
+  `ave index` and `ave caption` report per clip / segment progress with ETA
+  (`index 12/81 MVI_7925: done 3.2s eta 40s`), beats/plan/render report stages, every
+  step can be cancelled between items, and `<work>/status.json` keeps per-clip status,
+  failure reasons and measured speeds.
 - Music tab: whole-track overview and FCP-style zoomed beat grid (sections, drops,
   song ranges, playhead), grid fixes (drag the downbeat, `,`/`.` beat, Shift 10 ms
   offset, tempo, `D` drop, rename sections, re-analyse), per-deliverable song ranges,

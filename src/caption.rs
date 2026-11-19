@@ -3,7 +3,8 @@
 // Description:  Captions segments with a local vision-language model (Qwen3-VL
 //               on llama.cpp's OpenAI-compatible server), schema-constrained.
 //
-// Dependencies: crate::index, crate::media, ureq, base64, serde_json
+// Dependencies: crate::index, crate::media, crate::commands (progress), ureq,
+//               base64, serde_json
 // ============================================================================
 
 //! Vision captions.
@@ -25,6 +26,7 @@ use anyhow::{Context, Result, bail};
 use base64::Engine as _;
 use rayon::prelude::*;
 
+use crate::commands::{ItemState, Progress, Report};
 use crate::index::{Index, Scored};
 use crate::media;
 
@@ -250,8 +252,16 @@ fn caption_one(
 }
 
 /// Captions every segment of `work`'s index that passes `min_q` and has no
-/// caption yet (or every one, with `redo`). Saves as it goes.
-pub(crate) fn run(work: &Path, min_q: f32, redo: bool, parallel: usize) -> Result<usize> {
+/// caption yet (or every one, with `redo`). Saves as it goes, reports every
+/// segment to `progress` (`caption 120/417 MVI_7925/3: done 6.8s eta 2210s`)
+/// and stops after the batch in flight when it is cancelled.
+pub(crate) fn run(
+    work: &Path,
+    min_q: f32,
+    redo: bool,
+    parallel: usize,
+    progress: &Progress,
+) -> Result<usize> {
     let mut index = Index::load(work)?;
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(180)))
@@ -276,7 +286,9 @@ pub(crate) fn run(work: &Path, min_q: f32, redo: bool, parallel: usize) -> Resul
         .map(|(i, _)| i)
         .collect();
     log::info!("captioning {} segments ({parallel} at a time)", todo.len());
+    progress.stage("caption", format!("{} segments to caption", todo.len()));
     let started = Instant::now();
+    let total = todo.len();
     let done = Mutex::new(0_usize);
     let snapshot = index.clone();
     let pool = rayon::ThreadPoolBuilder::new()
@@ -284,24 +296,43 @@ pub(crate) fn run(work: &Path, min_q: f32, redo: bool, parallel: usize) -> Resul
         .build()?;
     let mut ok = 0;
     // Batches, saving after each, so a long run shows progress in the shot
-    // log and an interrupted one keeps what it finished.
+    // log and an interrupted (or cancelled) one keeps what it finished.
     for batch in todo.chunks(24) {
         let results: Vec<(usize, Result<Caption>)> = pool.install(|| {
             batch
                 .par_iter()
                 .map(|&i| {
-                    let r = caption_one(&agent, &url, &snapshot, &snapshot.segments[i], &tmp);
-                    if let Ok(mut n) = done.lock() {
-                        *n += 1;
-                        if *n % 10 == 0 {
-                            log::info!(
-                                "{}/{} captioned, {:.0}s",
-                                *n,
-                                todo.len(),
-                                started.elapsed().as_secs_f32()
-                            );
-                        }
+                    if let Err(e) = progress.check() {
+                        return (i, Err(e));
                     }
+                    let seg = &snapshot.segments[i];
+                    let n = done.lock().map_or(0, |n| *n);
+                    progress.report(&Report::item(
+                        "caption",
+                        n,
+                        total,
+                        seg.id.as_str(),
+                        ItemState::Started,
+                    ));
+                    let began = Instant::now();
+                    let r = caption_one(&agent, &url, &snapshot, seg, &tmp);
+                    let n = done.lock().map_or(0, |mut n| {
+                        *n += 1;
+                        *n
+                    });
+                    let elapsed = started.elapsed().as_secs_f32();
+                    let report = match &r {
+                        Ok(_) => {
+                            Report::item("caption", n, total, seg.id.as_str(), ItemState::Done)
+                                .took(began.elapsed().as_secs_f32())
+                                .remaining(crate::commands::eta(elapsed, n, total))
+                        }
+                        Err(e) => {
+                            Report::item("caption", n, total, seg.id.as_str(), ItemState::Failed)
+                                .because(&format!("{e:#}"))
+                        }
+                    };
+                    progress.report(&report);
                     (i, r)
                 })
                 .collect()
@@ -312,10 +343,14 @@ pub(crate) fn run(work: &Path, min_q: f32, redo: bool, parallel: usize) -> Resul
                     index.segments[i].caption = Some(c);
                     ok += 1;
                 }
-                Err(e) => log::warn!("{}: {e:#}", index.segments[i].id),
+                Err(e) if !progress.cancelled() => {
+                    log::warn!("{}: {e:#}", index.segments[i].id);
+                }
+                Err(_) => {}
             }
         }
         index.save(work)?;
+        progress.check()?;
     }
     Ok(ok)
 }
