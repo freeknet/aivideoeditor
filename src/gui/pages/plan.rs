@@ -3,58 +3,1365 @@
 // Description:  The timeline at the foot of the workspace: plan shots on the
 //               beat grid over the music, versions, swap alternatives, checks.
 //
-// Dependencies: egui; crate::{plan, gui::pages, gui::player}
+// Dependencies: egui; crate::{plan, alternatives, beats, refs, commands},
+//               crate::gui::{pages, player, thumbs}
 // ============================================================================
 
-//! The timeline. See `docs/GUI_CONTRACTS.md` and
-//! `docs/research/02-ui-and-workflow.md` §9.7 for what it is meant to become.
+//! The timeline.
+//!
+//! One plan at a time, drawn the way editing apps draw a sequence: a ruler
+//! in seconds and bars, V1 with the shots where `Plan::timing` puts them,
+//! A1 with the song's waveform, the drop as a flag, a playhead tied to the
+//! shared viewer. **The music is the clock**: every edit keeps the footage
+//! filling `start_bar..card_bar` (see [`edit`]), so a reorder swaps content
+//! between slots, dragging an edit point rolls beats between neighbours,
+//! and Alt-drag slips the in-point.
+//!
+//! Every change goes on an undo stack, re-runs `plan::check` (the check bar
+//! and the red edges), and is saved a moment later as a new version
+//! ([`history`]): `plans/<name>.toml` for the engine, a numbered copy for
+//! the version menu. `A` on a shot ranks replacements that fit its slot
+//! ([`crate::alternatives`]); `1`–`8` swaps one in.
+//!
+//! Layout and the rest of the region contract: `docs/GUI_CONTRACTS.md`;
+//! the spec this follows: `docs/research/02-ui-and-workflow.md` §3, §9.7.
+
+mod edit;
+mod history;
+mod strips;
+mod timeline;
+mod waveform;
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant, SystemTime};
 
 use super::PageCtx;
-use crate::gui::player::SeqShot;
+use crate::alternatives::Alternative;
+use crate::beats::MusicMap;
+use crate::gui::app::Action;
+use crate::gui::player::{Player, SeqShot, Source};
+use crate::gui::thumbs::Thumbs;
+use crate::gui::ui::theme;
+use crate::plan::{Aspect, Plan, Problem};
+use crate::project::Project;
+use crate::refs::{Reference, Target};
+use crate::theme::Palette;
+
+/// Seconds after the last change before it is saved as a version.
+const AUTOSAVE_AFTER: f32 = 1.2;
+/// How often the live file is checked for changes made elsewhere.
+const DISK_CHECK: Duration = Duration::from_secs(1);
+/// Key of this page's table in the night's settings.
+const PAGE_KEY: &str = "plan";
+/// Alternatives shown in the strip.
+const ALTERNATIVES: usize = 8;
+
+/// The pointer tool.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Tool {
+    /// Click selects, drag reorders, edges roll.
+    #[default]
+    Select,
+    /// Drag slips the in-point.
+    Slip,
+}
+
+/// A drag in progress.
+#[derive(Debug)]
+enum Drag {
+    /// Rolling the edit point before shot `edit`.
+    Roll {
+        /// Index of the shot right of the edit.
+        edit: usize,
+        /// The plan when the drag began.
+        before: Plan,
+    },
+    /// Moving shot `from` to slot `to`.
+    Move {
+        /// Where it was.
+        from: usize,
+        /// Where it would land.
+        to: usize,
+    },
+    /// Slipping shot `shot`'s in-point.
+    Slip {
+        /// The shot.
+        shot: usize,
+        /// Its in-point when the drag began.
+        t0: f32,
+        /// The plan when the drag began.
+        before: Plan,
+    },
+    /// Moving the crop centre in the framing strip.
+    Frame {
+        /// The shot.
+        shot: usize,
+        /// The plan when the drag began.
+        before: Plan,
+    },
+}
+
+/// The alternatives strip.
+#[derive(Debug)]
+struct Alts {
+    /// Slot (0-based).
+    slot: usize,
+    /// Plan revision they were ranked for.
+    rev: u64,
+    /// Best first.
+    items: Vec<Alternative>,
+}
+
+/// The "Draft new…" form.
+#[derive(Debug)]
+struct DraftForm {
+    /// Plan name.
+    name: String,
+    /// Frame shape.
+    aspect: Aspect,
+    /// Target length.
+    seconds: f32,
+    /// End card image.
+    end_card: String,
+    /// Bars the card holds.
+    card_bars: usize,
+    /// Why the last attempt was refused.
+    error: Option<String>,
+}
+
+/// A past version shown read-only.
+#[derive(Debug)]
+struct Viewing {
+    /// Which.
+    version: history::Version,
+    /// Its plan.
+    plan: Plan,
+}
+
+/// Zoom and scroll.
+#[derive(Debug)]
+struct View {
+    /// Pixels per second.
+    pps: f32,
+    /// Seconds at the left edge.
+    scroll: f32,
+    /// Fit the whole plan on the next frame.
+    fit: bool,
+    /// Keep the playhead in view while playing.
+    follow: bool,
+    /// A span (seconds) to scroll into view on the next frame.
+    reveal: Option<(f32, f32)>,
+}
+
+impl Default for View {
+    fn default() -> Self {
+        Self {
+            pps: 40.0,
+            scroll: 0.0,
+            fit: true,
+            follow: true,
+            reveal: None,
+        }
+    }
+}
 
 /// The timeline's own state, kept across frames.
 #[derive(Debug, Default)]
-pub(crate) struct State {}
+pub(crate) struct State {
+    /// The night the state belongs to.
+    work: Option<PathBuf>,
+    /// The open plan's name (file stem).
+    name: Option<String>,
+    /// The open plan as edited.
+    plan: Option<Plan>,
+    /// Why the plan could not be read.
+    load_error: Option<String>,
+    /// The live file's mtime after our last load or save.
+    disk_stamp: Option<SystemTime>,
+    /// When the live file was last checked.
+    last_disk_check: Option<Instant>,
+    /// Undo / redo.
+    undo: edit::Undo,
+    /// An unsaved change: when, and what.
+    dirty: Option<(Instant, String)>,
+    /// The save line in the header.
+    status: String,
+    /// Bumped on every change to the plan.
+    rev: u64,
+    /// What `problems` was computed for: revision and viewed version.
+    checked: Option<(u64, Option<u32>)>,
+    /// `plan::check` on the shown plan.
+    problems: Vec<Problem>,
+    /// Zoom and scroll.
+    view: View,
+    /// The pointer tool.
+    tool: Tool,
+    /// A drag in progress.
+    drag: Option<Drag>,
+    /// The anchor of Shift-click ranges.
+    anchor: Option<usize>,
+    /// The shot a context menu is open on.
+    menu_shot: Option<usize>,
+    /// The alternatives strip, when open.
+    alts: Option<Alts>,
+    /// A past version on show.
+    viewing: Option<Viewing>,
+    /// The open plan's versions, oldest first.
+    versions: Vec<history::Version>,
+    /// The "Draft new…" form, when open.
+    draft: Option<DraftForm>,
+    /// A draft job and the plan it writes.
+    pending_job: Option<(u64, String)>,
+    /// Music peaks.
+    waves: waveform::Waves,
+    /// V1 drawn without thumbnails.
+    hide_thumbs: bool,
+    /// A1's waveform dimmed.
+    mute_music: bool,
+    /// V1 dimmed to read the music.
+    solo_music: bool,
+    /// The note being typed for a shot.
+    note_edit: Option<(usize, String)>,
+}
+
+/// Everything about the shown plan a frame needs, computed once.
+struct Shown<'a> {
+    /// The palette.
+    theme: &'a Palette,
+    /// The night.
+    project: &'a Project,
+    /// The music map.
+    map: &'a MusicMap,
+    /// The plan on show (a version, or the one being edited).
+    plan: Plan,
+    /// Its name.
+    name: String,
+    /// Start and length of each shot, seconds from the plan start.
+    timing: Vec<(f32, f32)>,
+    /// Every beat's time from the start bar to the end bar.
+    grid: Vec<f32>,
+    /// Beat at which each shot starts, plus the end.
+    starts: Vec<usize>,
+    /// Seconds to the end card.
+    card: f32,
+    /// Seconds to the end bar.
+    total: f32,
+    /// Selected shots, 0-based.
+    sel: BTreeSet<usize>,
+    /// Problems per shot (0-based); whole-plan ones are not here.
+    issues: BTreeMap<usize, Vec<String>>,
+    /// Whether edits are allowed (not viewing an old version).
+    editable: bool,
+    /// The plan as the viewer plays it.
+    seq: Vec<SeqShot>,
+    /// The music under it and the second it starts at.
+    music: Option<(PathBuf, f64)>,
+    /// The plan revision this frame started from.
+    rev: u64,
+    /// Whether the viewer is playing this plan.
+    ours: bool,
+}
+
+impl Shown<'_> {
+    /// The source file of a clip.
+    fn clip_path(&self, clip: &str) -> Option<PathBuf> {
+        self.project
+            .index
+            .as_ref()
+            .and_then(|i| i.clip(clip))
+            .map(|c| PathBuf::from(&c.path))
+    }
+
+    /// A clip's length in seconds.
+    fn clip_len(&self, clip: &str) -> Option<f32> {
+        self.project
+            .index
+            .as_ref()
+            .and_then(|i| i.clip(clip))
+            .map(|c| c.probe.duration as f32)
+    }
+
+    /// The shot-log subject at a shot's in-point.
+    fn subject(&self, clip: &str, t: f32) -> &str {
+        self.project
+            .index
+            .as_ref()
+            .and_then(|i| {
+                i.segments
+                    .iter()
+                    .find(|g| g.clip == clip && g.seg.start <= t && t < g.seg.end)
+            })
+            .map_or("", |g| g.subject.as_str())
+    }
+
+    /// The single selected shot.
+    fn single(&self) -> Option<usize> {
+        (self.sel.len() == 1)
+            .then(|| self.sel.first().copied())
+            .flatten()
+    }
+}
+
+/// The shared things a frame changes.
+struct Io<'a> {
+    /// Thumbnails.
+    thumbs: &'a mut Thumbs,
+    /// The viewer.
+    player: &'a mut Player,
+    /// The app-wide selection.
+    selection: &'a mut Vec<Reference>,
+    /// Actions for after the frame.
+    actions: &'a mut Vec<Action>,
+}
+
+impl Io<'_> {
+    /// Replaces the app-wide selection with shots of `name` (0-based).
+    fn select(&mut self, name: &str, shots: &BTreeSet<usize>) {
+        *self.selection = shots
+            .iter()
+            .map(|&k| {
+                Reference::new(Target::Shot {
+                    plan: name.to_owned(),
+                    index: k + 1,
+                })
+            })
+            .collect();
+    }
+
+    /// Loads the shown plan into the viewer unless it is already there.
+    fn load(&mut self, s: &Shown<'_>) {
+        if !s.ours {
+            self.player.open_sequence(s.seq.clone(), s.music.clone());
+        }
+    }
+
+    /// Seeks the viewer to `t` seconds into the plan, loading it first.
+    fn seek(&mut self, s: &Shown<'_>, t: f32) {
+        self.load(s);
+        self.player.seek(f64::from(t.max(0.0)));
+    }
+}
+
+/// The aspect's file key (`9x16`).
+fn aspect_key(a: Aspect) -> &'static str {
+    match a {
+        Aspect::Vertical => "9x16",
+        Aspect::Feed => "4x5",
+        Aspect::Wide => "16x9",
+    }
+}
+
+/// Output width over height.
+fn aspect_ratio(a: Aspect) -> f32 {
+    let (w, h) = a.size();
+    w as f32 / h as f32
+}
+
+/// The modification time of a file.
+fn mtime(path: &Path) -> Option<SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
+}
+
+/// Whether a problem is structural (an error) rather than a content rule
+/// the plan bends (a warning). `ave check` fails on both.
+fn is_error(p: &Problem) -> bool {
+    p.shot == 0
+        || [
+            "not in the index",
+            "runs outside",
+            "crop centre",
+            "the drop lands",
+        ]
+        .iter()
+        .any(|k| p.message.contains(k))
+}
+
+/// The plan's shots as the viewer plays them.
+fn sequence(
+    plan: &Plan,
+    project: &Project,
+    map: &MusicMap,
+) -> (Vec<SeqShot>, Option<(PathBuf, f64)>) {
+    let shots = plan
+        .shots
+        .iter()
+        .zip(plan.timing(map))
+        .map(|(s, (_, dur))| {
+            let clip = project.index.as_ref().and_then(|i| i.clip(&s.clip));
+            SeqShot {
+                path: clip.map(|c| PathBuf::from(&c.path)).unwrap_or_default(),
+                t_in: f64::from(s.t_in),
+                dur: f64::from(dur),
+                cx: s.cx,
+            }
+        })
+        .collect();
+    let music = (!plan.music.is_empty()).then(|| {
+        (
+            PathBuf::from(&plan.music),
+            f64::from(map.beat_time(plan.start_bar, 0)),
+        )
+    });
+    (shots, music)
+}
+
+/// The shots of `name` in the app-wide selection, 0-based.
+fn selected(selection: &[Reference], name: &str, len: usize) -> BTreeSet<usize> {
+    selection
+        .iter()
+        .filter_map(|r| match &r.target {
+            Target::Shot { plan, index } if plan == name && *index >= 1 && *index <= len => {
+                Some(index - 1)
+            }
+            Target::Shot { .. }
+            | Target::Segment { .. }
+            | Target::Range { .. }
+            | Target::Frame { .. }
+            | Target::Bars { .. }
+            | Target::Person { .. }
+            | Target::Plan { .. } => None,
+        })
+        .collect()
+}
+
+impl State {
+    /// Applies an edit to the open plan; records it for undo and autosave
+    /// when it changed something.
+    fn apply(&mut self, label: impl Into<String>, f: impl FnOnce(&mut Plan) -> bool) -> bool {
+        if self.viewing.is_some() {
+            return false;
+        }
+        let Some(plan) = self.plan.as_mut() else {
+            return false;
+        };
+        let before = plan.clone();
+        if !f(plan) || *plan == before {
+            return false;
+        }
+        let label = label.into();
+        self.undo.push(before, label.clone());
+        self.changed(label);
+        true
+    }
+
+    /// Notes a change already made to the plan (undo is the caller's).
+    fn changed(&mut self, label: String) {
+        self.rev += 1;
+        self.status = format!("edited: {label}");
+        self.dirty = Some((Instant::now(), label));
+    }
+
+    /// Ends a drag that edited the plan live, recording it once.
+    fn commit_drag(&mut self, before: Plan, label: String) {
+        if self.plan.as_ref().is_some_and(|p| *p != before) {
+            self.undo.push(before, label.clone());
+            self.changed(label);
+        }
+    }
+
+    /// Steps back.
+    fn undo(&mut self) {
+        if self.viewing.is_some() {
+            return;
+        }
+        if let Some(plan) = self.plan.as_mut()
+            && let Some(label) = self.undo.undo(plan)
+        {
+            self.changed(format!("undo {label}"));
+        }
+    }
+
+    /// Steps forward.
+    fn redo(&mut self) {
+        if self.viewing.is_some() {
+            return;
+        }
+        if let Some(plan) = self.plan.as_mut()
+            && let Some(label) = self.undo.redo(plan)
+        {
+            self.changed(format!("redo {label}"));
+        }
+    }
+
+    /// Saves the pending change as a new version.
+    fn save(&mut self, project: &Project) {
+        let (Some(name), Some(plan)) = (self.name.as_ref(), self.plan.as_ref()) else {
+            return;
+        };
+        let change = self.dirty.take().map(|(_, l)| l).unwrap_or_default();
+        match history::save(&project.work, name, plan, &change, history::now()) {
+            Ok(n) => {
+                self.status = format!("saved v{n}");
+                self.disk_stamp = mtime(&history::live_path(&project.work, name));
+                self.versions = history::list(&project.work, name);
+            }
+            Err(e) => self.status = format!("save failed: {e:#}"),
+        }
+    }
+
+    /// Opens plan `name` (saving the current one first).
+    fn open(&mut self, project: &mut Project, name: &str) {
+        if self.dirty.is_some() {
+            self.save(project);
+        }
+        let path = history::live_path(&project.work, name);
+        match Plan::load(&path) {
+            Ok(plan) => {
+                self.plan = Some(plan);
+                self.load_error = None;
+            }
+            Err(e) => {
+                self.plan = None;
+                self.load_error = Some(format!("{e:#}"));
+            }
+        }
+        self.name = Some(name.to_owned());
+        self.undo.clear();
+        self.dirty = None;
+        self.viewing = None;
+        self.alts = None;
+        self.anchor = None;
+        self.drag = None;
+        self.note_edit = None;
+        self.view.fit = true;
+        self.disk_stamp = mtime(&path);
+        self.versions = history::list(&project.work, name);
+        self.status = match self.versions.last() {
+            Some(v) => format!("v{} · {}", v.n, v.saved),
+            None => "no versions yet".to_owned(),
+        };
+        self.rev += 1;
+        let table = project
+            .settings
+            .pages
+            .entry(PAGE_KEY.to_owned())
+            .or_default();
+        if table.get("current").and_then(|v| v.as_str()) != Some(name) {
+            table.insert("current".to_owned(), toml::Value::String(name.to_owned()));
+            let _ = project.save_settings();
+        }
+    }
+
+    /// Picks up a change to the live file made elsewhere (the assistant,
+    /// the command line, a draft job), keeping the old state for undo.
+    fn reload_from_disk(&mut self, project: &Project) {
+        let Some(name) = self.name.clone() else {
+            return;
+        };
+        let path = history::live_path(&project.work, &name);
+        let stamp = mtime(&path);
+        if stamp == self.disk_stamp {
+            return;
+        }
+        self.disk_stamp = stamp;
+        let Ok(fresh) = Plan::load(&path) else {
+            return;
+        };
+        if self.plan.as_ref() == Some(&fresh) {
+            return;
+        }
+        let unix = history::now();
+        if let Some(old) = self.plan.take() {
+            if self.versions.is_empty()
+                && let Ok(text) = toml::to_string_pretty(&old)
+            {
+                let _ = history::record(&project.work, &name, &text, "original", unix);
+            }
+            self.undo.push(old, "change on disk");
+        }
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            let _ = history::record(&project.work, &name, &text, "changed on disk", unix);
+        }
+        self.plan = Some(fresh);
+        self.load_error = None;
+        self.versions = history::list(&project.work, &name);
+        self.status = "reloaded: changed on disk".to_owned();
+        self.alts = None;
+        self.rev += 1;
+    }
+}
 
 /// Draws the timeline into its panel.
 pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
-    let _ = state;
-    let Some(project) = ctx.project.as_ref() else {
+    let keys_free = ctx.keys_free(ui);
+    let hovered = ui.ui_contains_pointer();
+    let PageCtx {
+        theme: palette,
+        project,
+        jobs,
+        thumbs,
+        player,
+        selection,
+        actions,
+        ..
+    } = ctx;
+    let palette: &Palette = palette;
+    let Some(project) = project.as_mut() else {
         return;
     };
-    ui.horizontal(|ui| {
-        for path in &project.plans {
-            let name = path
-                .file_stem()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            if ui.button(format!("▶ {name}")).clicked()
-                && let (Ok(plan), Some(music), Some(index)) = (
-                    crate::plan::Plan::load(path),
-                    project.music.as_ref(),
-                    project.index.as_ref(),
-                )
-            {
-                let shots: Vec<SeqShot> = plan
-                    .shots
-                    .iter()
-                    .zip(plan.timing(music))
-                    .filter_map(|(s, (_, dur))| {
-                        let clip = index.clip(&s.clip)?;
-                        Some(SeqShot {
-                            path: clip.path.clone().into(),
-                            t_in: f64::from(s.t_in),
-                            dur: f64::from(dur),
-                            cx: s.cx,
-                        })
-                    })
-                    .collect();
-                let start = f64::from(music.beat_time(plan.start_bar, 0));
-                ctx.player
-                    .open_sequence(shots, Some((plan.music.clone().into(), start)));
-                ctx.player.play();
+    housekeeping(state, project, jobs, player);
+    ui.spacing_mut().item_spacing = egui::vec2(6.0, 4.0);
+
+    header(state, project, jobs, player, palette, ui);
+    draft_window(state, project, jobs, palette, ui.ctx());
+
+    let Some(map) = project.music.as_ref() else {
+        empty(
+            ui,
+            palette,
+            "No music map yet: run Beats on the Home screen, then draft a plan.",
+        );
+        return;
+    };
+    let shown_plan = match (&state.viewing, &state.plan) {
+        (Some(v), _) => v.plan.clone(),
+        (None, Some(p)) => p.clone(),
+        (None, None) => {
+            let why = match (&state.load_error, project.plans.is_empty()) {
+                (Some(e), _) => format!("Could not read the plan: {e}"),
+                (None, true) => {
+                    "No plans yet. Draft new… lays one out on the beat grid from the shot log."
+                        .to_owned()
+                }
+                (None, false) => "Pick a plan.".to_owned(),
+            };
+            empty(ui, palette, &why);
+            return;
+        }
+    };
+    let name = state.name.clone().unwrap_or_default();
+
+    // Re-check when the shown plan changed.
+    let key = (state.rev, state.viewing.as_ref().map(|v| v.version.n));
+    if state.checked != Some(key) {
+        state.problems = match project.index.as_ref() {
+            Some(index) => crate::plan::check(&shown_plan, index, map, &project.people),
+            None => Vec::new(),
+        };
+        state.checked = Some(key);
+    }
+    let mut issues: BTreeMap<usize, Vec<String>> = BTreeMap::new();
+    for p in state.problems.iter().filter(|p| p.shot > 0) {
+        issues
+            .entry(p.shot - 1)
+            .or_default()
+            .push(p.message.clone());
+    }
+    let (seq, music) = sequence(&shown_plan, project, map);
+    let ours = matches!(player.source(), Source::Sequence { shots, .. } if *shots == seq);
+    let origin = map.beat_time(shown_plan.start_bar, 0);
+    let s = Shown {
+        theme: palette,
+        project,
+        map,
+        timing: shown_plan.timing(map),
+        grid: edit::grid(&shown_plan, map),
+        starts: edit::starts(&shown_plan),
+        card: map.beat_time(shown_plan.card_bar, 0) - origin,
+        total: map.beat_time(shown_plan.end_bar, 0) - origin,
+        sel: selected(selection, &name, shown_plan.shots.len()),
+        issues,
+        editable: state.viewing.is_none(),
+        seq,
+        music,
+        ours,
+        rev: state.rev,
+        name,
+        plan: shown_plan,
+    };
+    let mut io = Io {
+        thumbs,
+        player,
+        selection,
+        actions,
+    };
+    let rev_before = state.rev;
+
+    if let Some(v) = &state.viewing {
+        let (n, saved, change) = (
+            v.version.n,
+            v.version.saved.clone(),
+            v.version.change.clone(),
+        );
+        strips::viewing_banner(state, &s, ui, n, &saved, &change);
+    }
+
+    // Rows, bottom up: check bar, selection bar or alternatives, tracks.
+    let full = ui.available_rect_before_wrap();
+    let check_h = 22.0;
+    let sel_h = 30.0;
+    let alts_h = if state.alts.is_some() { 92.0 } else { 0.0 };
+    let tracks_h = (full.height() - check_h - sel_h - alts_h - 6.0).max(80.0);
+    let tracks = egui::Rect::from_min_size(full.min, egui::vec2(full.width(), tracks_h));
+    let mut y = tracks.bottom() + 2.0;
+    let sel_rect =
+        egui::Rect::from_min_size(egui::pos2(full.left(), y), egui::vec2(full.width(), sel_h));
+    y += sel_h + 2.0;
+    let alts_rect =
+        egui::Rect::from_min_size(egui::pos2(full.left(), y), egui::vec2(full.width(), alts_h));
+    y += alts_h;
+    let check_rect = egui::Rect::from_min_size(
+        egui::pos2(full.left(), y + 2.0),
+        egui::vec2(full.width(), check_h),
+    );
+    ui.allocate_rect(full, egui::Sense::hover());
+
+    timeline::tracks(state, &s, &mut io, ui, tracks);
+    strips::selection_bar(state, &s, &mut io, ui, sel_rect);
+    if state.alts.is_some() {
+        strips::alternatives(state, &s, &mut io, ui, alts_rect);
+    }
+    strips::check_bar(state, &s, &mut io, ui, check_rect);
+
+    if keys_free && (hovered || !s.sel.is_empty()) {
+        keys(state, &s, &mut io, ui, hovered);
+    }
+
+    // Keep the viewer on the edited plan.
+    if state.rev != rev_before
+        && s.ours
+        && let Some(plan) = state.plan.as_ref()
+    {
+        let pos = io.player.position();
+        let (seq, music) = sequence(plan, project, map);
+        io.player.open_sequence(seq, music);
+        io.player.seek(pos);
+    }
+    if state.dirty.is_some() {
+        ui.ctx()
+            .request_repaint_after(Duration::from_secs_f32(AUTOSAVE_AFTER + 0.1));
+    }
+}
+
+/// Saves, reloads and follows jobs between frames.
+fn housekeeping(
+    state: &mut State,
+    project: &mut Project,
+    jobs: &crate::jobs::Jobs,
+    player: &mut Player,
+) {
+    if state.work.as_deref() != Some(project.work.as_path()) {
+        *state = State {
+            work: Some(project.work.clone()),
+            waves: std::mem::take(&mut state.waves),
+            ..State::default()
+        };
+    }
+    // A finished draft: record it and open it.
+    if let Some((id, name)) = state.pending_job.clone()
+        && let Some(job) = jobs.get(id)
+    {
+        match &job.status {
+            crate::jobs::Status::Running => {}
+            crate::jobs::Status::Done => {
+                state.pending_job = None;
+                if let Ok(text) = std::fs::read_to_string(history::live_path(&project.work, &name))
+                {
+                    let _ = history::record(&project.work, &name, &text, "draft", history::now());
+                }
+                project.reload_plans();
+                state.open(project, &name);
+                open_in_player(state, project, player);
+            }
+            crate::jobs::Status::Failed(e) => {
+                state.pending_job = None;
+                state.status = format!("draft failed: {e}");
             }
         }
+    }
+    // First frame on this night: the remembered plan, or the first.
+    if state.name.is_none() && !project.plans.is_empty() {
+        let stems: Vec<String> = project
+            .plans
+            .iter()
+            .filter_map(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
+            .collect();
+        let remembered = project
+            .settings
+            .pages
+            .get(PAGE_KEY)
+            .and_then(|t| t.get("current"))
+            .and_then(|v| v.as_str())
+            .filter(|n| stems.iter().any(|s| s == n))
+            .map(str::to_owned);
+        if let Some(name) = remembered.or_else(|| stems.first().cloned()) {
+            state.open(project, &name);
+            if matches!(player.source(), Source::Empty) {
+                open_in_player(state, project, player);
+            }
+        }
+    }
+    if let Some((at, _)) = &state.dirty
+        && at.elapsed().as_secs_f32() >= AUTOSAVE_AFTER
+        && state.drag.is_none()
+    {
+        state.save(project);
+    }
+    if state.dirty.is_none()
+        && state.drag.is_none()
+        && state
+            .last_disk_check
+            .is_none_or(|t| t.elapsed() >= DISK_CHECK)
+    {
+        state.last_disk_check = Some(Instant::now());
+        state.reload_from_disk(project);
+    }
+}
+
+/// Loads the open plan into the viewer (paused at its start).
+fn open_in_player(state: &State, project: &Project, player: &mut Player) {
+    if let (Some(plan), Some(map)) = (state.plan.as_ref(), project.music.as_ref()) {
+        let (seq, music) = sequence(plan, project, map);
+        player.open_sequence(seq, music);
+    }
+}
+
+/// A one-line message where the tracks would be.
+fn empty(ui: &mut egui::Ui, palette: &Palette, text: &str) {
+    ui.add_space(theme::SPACE_LG);
+    ui.vertical_centered(|ui| {
+        ui.label(egui::RichText::new(text).color(theme::rgb(palette.text_muted)));
     });
-    crate::gui::ui::widgets::muted(ui, ctx.theme, "Timeline not built yet.");
+}
+
+/// The header row: plan picker, versions, draft, aspect, undo, save state.
+fn header(
+    state: &mut State,
+    project: &mut Project,
+    jobs: &crate::jobs::Jobs,
+    player: &mut Player,
+    palette: &Palette,
+    ui: &mut egui::Ui,
+) {
+    let muted = theme::rgb(palette.text_muted);
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new("TIMELINE")
+                .size(10.5)
+                .strong()
+                .color(muted),
+        );
+        let stems: Vec<String> = project
+            .plans
+            .iter()
+            .filter_map(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
+            .collect();
+        let current = state.name.clone().unwrap_or_else(|| "no plan".to_owned());
+        let mut pick = None;
+        egui::ComboBox::from_id_salt("plan_picker")
+            .selected_text(egui::RichText::new(&current).strong())
+            .width(130.0)
+            .show_ui(ui, |ui| {
+                for stem in &stems {
+                    if ui
+                        .selectable_label(Some(stem) == state.name.as_ref(), stem)
+                        .clicked()
+                    {
+                        pick = Some(stem.clone());
+                    }
+                }
+            })
+            .response
+            .on_hover_text("The plan on the timeline (plans/<name>.toml)");
+        if let Some(name) = pick
+            && Some(&name) != state.name.as_ref()
+        {
+            state.open(project, &name);
+            open_in_player(state, project, player);
+        }
+
+        // Versions.
+        let label = match (&state.viewing, state.versions.last()) {
+            (Some(v), _) => format!("viewing v{}", v.version.n),
+            (None, Some(v)) => format!("v{}", v.n),
+            (None, None) => "v–".to_owned(),
+        };
+        ui.add_enabled_ui(!state.versions.is_empty(), |ui| {
+            ui.menu_button(label, |ui| {
+                ui.set_min_width(300.0);
+                let latest = state.versions.last().map(|v| v.n);
+                for v in state.versions.iter().rev() {
+                    let text = format!(
+                        "v{}  {}  ·  {}{}",
+                        v.n,
+                        v.saved.trim_end_matches(" UTC"),
+                        if v.change.is_empty() {
+                            "save"
+                        } else {
+                            &v.change
+                        },
+                        if Some(v.n) == latest {
+                            "  (current)"
+                        } else {
+                            ""
+                        }
+                    );
+                    if ui
+                        .selectable_label(
+                            state.viewing.as_ref().is_some_and(|w| w.version.n == v.n),
+                            text,
+                        )
+                        .on_hover_text("Show this version read-only; restore it from the banner")
+                        .clicked()
+                    {
+                        match history::load(v) {
+                            Ok(plan) => {
+                                state.viewing = if Some(v.n) == latest {
+                                    None
+                                } else {
+                                    Some(Viewing {
+                                        version: v.clone(),
+                                        plan,
+                                    })
+                                };
+                                state.alts = None;
+                            }
+                            Err(e) => state.status = format!("v{}: {e:#}", v.n),
+                        }
+                        ui.close();
+                    }
+                }
+            })
+            .response
+            .on_hover_text("Versions: every save keeps a numbered copy");
+        });
+        let busy = state.pending_job.is_some();
+        if ui
+            .add_enabled(
+                !busy,
+                egui::Button::new(if busy { "Drafting…" } else { "Draft new…" }),
+            )
+            .on_hover_text("Lay out a new plan on the beat grid from the shot log")
+            .clicked()
+        {
+            let aspect = state.plan.as_ref().map_or(Aspect::Vertical, |p| p.aspect);
+            state.draft = Some(DraftForm {
+                name: String::new(),
+                aspect,
+                seconds: 30.0,
+                end_card: end_card_for(project, aspect),
+                card_bars: 2,
+                error: None,
+            });
+        }
+        if jobs
+            .running()
+            .any(|j| matches!(j.cmd, crate::commands::Cmd::Plan { .. }))
+            && !busy
+        {
+            ui.spinner();
+        }
+        ui.separator();
+
+        // Aspect of the open plan (an edit).
+        if let Some(plan) = state.plan.clone() {
+            let mut aspect = plan.aspect;
+            let editable = state.viewing.is_none();
+            ui.add_enabled_ui(editable, |ui| {
+                egui::ComboBox::from_id_salt("plan_aspect")
+                    .selected_text(aspect_key(aspect))
+                    .width(54.0)
+                    .show_ui(ui, |ui| {
+                        for a in [Aspect::Vertical, Aspect::Feed, Aspect::Wide] {
+                            ui.selectable_value(&mut aspect, a, aspect_key(a));
+                        }
+                    })
+                    .response
+                    .on_hover_text("Output aspect; crops follow each shot's cx");
+            });
+            if aspect != plan.aspect {
+                state.apply(format!("aspect {}", aspect_key(aspect)), |p| {
+                    p.aspect = aspect;
+                    let half = aspect.crop_frac() / 2.0;
+                    for s in &mut p.shots {
+                        s.cx = s.cx.clamp(half, 1.0 - half);
+                    }
+                    true
+                });
+            }
+            if let Some(map) = project.music.as_ref() {
+                let len = map.beat_time(plan.end_bar, 0) - map.beat_time(plan.start_bar, 0);
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{} shots · {len:.1}s · {:.0} bpm · bars {}–{}",
+                        plan.shots.len(),
+                        map.bpm,
+                        plan.start_bar,
+                        plan.end_bar
+                    ))
+                    .size(11.5)
+                    .color(muted),
+                );
+            }
+        }
+
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let redo = state.undo.redo_label().map(str::to_owned);
+            let undo = state.undo.undo_label().map(str::to_owned);
+            if ui
+                .add_enabled(redo.is_some(), egui::Button::new("Redo").small())
+                .on_hover_text(format!(
+                    "Redo {} (Ctrl+Shift+Z)",
+                    redo.as_deref().unwrap_or("")
+                ))
+                .clicked()
+            {
+                state.redo();
+            }
+            if ui
+                .add_enabled(undo.is_some(), egui::Button::new("Undo").small())
+                .on_hover_text(format!("Undo {} (Ctrl+Z)", undo.as_deref().unwrap_or("")))
+                .clicked()
+            {
+                state.undo();
+            }
+            let saving = state.dirty.is_some();
+            ui.label(
+                egui::RichText::new(if saving {
+                    "unsaved"
+                } else {
+                    state.status.as_str()
+                })
+                .size(11.0)
+                .color(if saving {
+                    theme::rgb(palette.warning)
+                } else if state.status.starts_with("save failed") {
+                    theme::rgb(palette.danger)
+                } else {
+                    muted
+                }),
+            );
+        });
+    });
+}
+
+/// The end card the night's settings name for an aspect.
+fn end_card_for(project: &Project, aspect: Aspect) -> String {
+    project
+        .settings
+        .end_cards
+        .get(aspect_key(aspect))
+        .map(|p| p.display().to_string())
+        .unwrap_or_default()
+}
+
+/// Whether `name` is a usable plan file name.
+fn valid_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with('.')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// The "Draft new…" window.
+fn draft_window(
+    state: &mut State,
+    project: &mut Project,
+    jobs: &mut crate::jobs::Jobs,
+    palette: &Palette,
+    ctx: &egui::Context,
+) {
+    let Some(form) = state.draft.as_mut() else {
+        return;
+    };
+    let mut open = true;
+    let mut go = false;
+    let mut cancel = false;
+    egui::Window::new("Draft a new plan")
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .open(&mut open)
+        .show(ctx, |ui| {
+            egui::Grid::new("draft_form")
+                .num_columns(2)
+                .spacing([10.0, 8.0])
+                .show(ui, |ui| {
+                    ui.label("Name");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut form.name)
+                            .hint_text("reel-30")
+                            .desired_width(180.0),
+                    );
+                    ui.end_row();
+                    ui.label("Aspect");
+                    ui.horizontal(|ui| {
+                        let before = form.aspect;
+                        for a in [Aspect::Vertical, Aspect::Feed, Aspect::Wide] {
+                            ui.selectable_value(&mut form.aspect, a, aspect_key(a));
+                        }
+                        if form.aspect != before {
+                            form.end_card = end_card_for(project, form.aspect);
+                        }
+                    });
+                    ui.end_row();
+                    ui.label("Length");
+                    ui.horizontal(|ui| {
+                        for secs in [15.0, 30.0, 60.0] {
+                            ui.selectable_value(&mut form.seconds, secs, format!("{secs:.0}s"));
+                        }
+                        ui.add(
+                            egui::DragValue::new(&mut form.seconds)
+                                .range(8.0..=240.0)
+                                .suffix(" s"),
+                        );
+                    });
+                    ui.end_row();
+                    ui.label("End card");
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::TextEdit::singleline(&mut form.end_card)
+                                .hint_text("image path (optional)")
+                                .desired_width(180.0),
+                        );
+                        ui.add(
+                            egui::DragValue::new(&mut form.card_bars)
+                                .range(0..=8)
+                                .suffix(" bars"),
+                        );
+                    });
+                    ui.end_row();
+                });
+            let exists = project.plans.iter().any(|p| {
+                p.file_stem()
+                    .is_some_and(|s| s.to_string_lossy() == form.name)
+            });
+            if exists {
+                ui.label(
+                    egui::RichText::new(
+                        "A plan with this name exists: it is kept in its history, then replaced.",
+                    )
+                    .size(11.0)
+                    .color(theme::rgb(palette.warning)),
+                );
+            }
+            if let Some(e) = &form.error {
+                ui.label(
+                    egui::RichText::new(e)
+                        .size(11.0)
+                        .color(theme::rgb(palette.danger)),
+                );
+            }
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if ui.button("Draft").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    go = true;
+                }
+                if ui.button("Cancel").clicked() {
+                    cancel = true;
+                }
+            });
+        });
+    if go {
+        let name = form.name.trim().to_owned();
+        if !valid_name(&name) {
+            form.error = Some("Use letters, digits, - and _ (e.g. reel-30).".to_owned());
+        } else if project.music.is_none() || project.index.is_none() {
+            form.error = Some("Index the footage and map the music first.".to_owned());
+        } else {
+            let _ = history::keep_original(&project.work, &name, history::now());
+            let id = jobs.spawn(
+                format!("plan {name}"),
+                crate::commands::Cmd::Plan {
+                    name: name.clone(),
+                    work: project.work.clone(),
+                    aspect: aspect_key(form.aspect).to_owned(),
+                    seconds: form.seconds,
+                    end_card: form.end_card.trim().to_owned(),
+                    card_bars: form.card_bars,
+                },
+            );
+            state.pending_job = Some((id, name));
+            state.status = "drafting…".to_owned();
+            state.draft = None;
+            return;
+        }
+    }
+    if !open || cancel || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        state.draft = None;
+    }
+}
+
+/// Opens the alternatives strip for slot `k`.
+fn open_alternatives(state: &mut State, s: &Shown<'_>, k: usize) {
+    let Some(index) = s.project.index.as_ref() else {
+        state.status = "alternatives need the shot log (index)".to_owned();
+        return;
+    };
+    let items =
+        crate::alternatives::rank(&s.plan, k, index, s.map, &s.project.people, ALTERNATIVES);
+    state.alts = Some(Alts {
+        slot: k,
+        rev: s.rev,
+        items,
+    });
+}
+
+/// Swaps alternative `n` (0-based) of the open strip into its slot.
+fn take_alternative(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, n: usize) {
+    let Some(alts) = state.alts.as_ref() else {
+        return;
+    };
+    let (slot, Some(alt)) = (alts.slot, alts.items.get(n).cloned()) else {
+        return;
+    };
+    let beats = s.plan.shots.get(slot).map_or(1, |sh| sh.beats);
+    if state.apply(format!("swap shot {}", slot + 1), |p| {
+        edit::swap(p, slot, alt.to_shot(beats))
+    }) {
+        state.alts = None;
+        io.select(&s.name, &BTreeSet::from([slot]));
+    }
+}
+
+/// Lifts the selected shots (each one's beats go to the shot before it).
+fn lift_selected(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>) {
+    if s.sel.is_empty() {
+        return;
+    }
+    let list: Vec<String> = s.sel.iter().map(|k| (k + 1).to_string()).collect();
+    let sel: Vec<usize> = s.sel.iter().rev().copied().collect();
+    if state.apply(format!("lift {}", list.join(",")), |p| {
+        let mut any = false;
+        for k in sel {
+            any |= edit::lift(p, k);
+        }
+        any
+    }) {
+        state.alts = None;
+        io.select(&s.name, &BTreeSet::new());
+    }
+}
+
+/// Plays the plan from the start of shot `k`.
+fn play_from(s: &Shown<'_>, io: &mut Io<'_>, k: usize) {
+    let t = s.timing.get(k).map_or(0.0, |&(t, _)| t);
+    io.seek(s, t);
+    io.player.play();
+}
+
+/// The region's keys.
+fn keys(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &egui::Ui, hovered: bool) {
+    use egui::{Key, Modifiers};
+    let (undo, redo) = ui.input_mut(|i| {
+        let redo = i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z)
+            || i.consume_key(Modifiers::COMMAND, Key::Y);
+        (i.consume_key(Modifiers::COMMAND, Key::Z), redo)
+    });
+    if undo {
+        state.undo();
+    }
+    if redo {
+        state.redo();
+    }
+    let plain = |key: Key| ui.input(|i| i.key_pressed(key) && i.modifiers.is_none());
+    if plain(Key::Delete) || plain(Key::Backspace) {
+        lift_selected(state, s, io);
+    }
+    if plain(Key::A)
+        && let Some(k) = s.single().or_else(|| s.sel.first().copied())
+    {
+        open_alternatives(state, s, k);
+    }
+    if state.alts.is_some() {
+        const DIGITS: [Key; 8] = [
+            Key::Num1,
+            Key::Num2,
+            Key::Num3,
+            Key::Num4,
+            Key::Num5,
+            Key::Num6,
+            Key::Num7,
+            Key::Num8,
+        ];
+        if let Some(n) = DIGITS.iter().position(|&d| plain(d)) {
+            take_alternative(state, s, io, n);
+        }
+    }
+    if plain(Key::Escape) {
+        if state.alts.is_some() {
+            state.alts = None;
+        } else {
+            io.select(&s.name, &BTreeSet::new());
+        }
+    }
+    if hovered {
+        if plain(Key::V) {
+            state.tool = Tool::Select;
+        }
+        if plain(Key::T) {
+            state.tool = Tool::Slip;
+        }
+        if ui.input(|i| i.key_pressed(Key::Z) && i.modifiers.shift && !i.modifiers.command) {
+            state.view.fit = true;
+        }
+        // Space plays the timeline: load it so the viewer's Space plays it.
+        if plain(Key::Space) && !s.ours {
+            let t = s
+                .single()
+                .and_then(|k| s.timing.get(k))
+                .map_or(0.0, |&(t, _)| t);
+            io.seek(s, t);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_error, selected, valid_name};
+    use crate::plan::Problem;
+    use crate::refs::{Reference, Target};
+
+    #[test]
+    fn plan_names_are_file_safe() -> anyhow::Result<()> {
+        assert!(valid_name("reel-30"), "plain");
+        assert!(valid_name("wide_60"), "underscore");
+        assert!(!valid_name(""), "empty");
+        assert!(!valid_name(".history"), "hidden");
+        assert!(!valid_name("a/b"), "no paths");
+        Ok(())
+    }
+
+    #[test]
+    fn the_selection_maps_to_shots_of_this_plan() -> anyhow::Result<()> {
+        let shot = |plan: &str, index| {
+            Reference::new(Target::Shot {
+                plan: plan.into(),
+                index,
+            })
+        };
+        let sel = vec![
+            shot("reel-30", 2),
+            shot("reel-15", 1),
+            shot("reel-30", 9),
+            Reference::new(Target::Person { name: "x".into() }),
+        ];
+        let got: Vec<usize> = selected(&sel, "reel-30", 5).into_iter().collect();
+        assert_eq!(
+            got,
+            vec![1],
+            "1-based to 0-based, other plans and out of range dropped"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn structural_problems_are_errors() -> anyhow::Result<()> {
+        let p = |shot, m: &str| Problem {
+            shot,
+            message: m.into(),
+        };
+        assert!(is_error(&p(0, "shots fill 30 beats")), "whole-plan");
+        assert!(
+            is_error(&p(3, "A 1.00-9.00 runs outside the clip (5.00s)")),
+            "range"
+        );
+        assert!(
+            !is_error(&p(3, "`x` again, 2 shots after shot 1 (need 9)")),
+            "repeat"
+        );
+        Ok(())
+    }
 }

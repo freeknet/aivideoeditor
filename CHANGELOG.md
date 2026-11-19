@@ -99,3 +99,10 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Drafted crops are rounded inward so a two-decimal `cx` never leaves the frame,
   and windows never run past the end of the file.
+- GUI timeline: plans on the beat grid (ruler in seconds and bars, V1 shots with
+  thumbnails, A1 music waveform, drop flag, playhead synced to the viewer), edits
+  with the music as the clock (reorder keeps slot lengths, roll edit points on
+  beats, Alt-drag slip, lift, crop-centre framing, notes), undo / redo, live
+  `check` with a problem list and red edges, autosaved versions in
+  `plans/.history/<name>/` with view and restore, "Draft new…", context menu with
+  chat references, and ranked swap alternatives per slot (`A`, `1`–`8`).
