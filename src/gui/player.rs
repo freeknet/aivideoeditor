@@ -36,6 +36,35 @@ pub(crate) enum Source {
         /// Horizontal crop centre for narrow aspects.
         cx: f32,
     },
+    /// A cut: shots back to back, optionally over a music track.
+    Sequence {
+        /// The shots, in order.
+        shots: Vec<SeqShot>,
+        /// The music file and the second of it the cut starts at.
+        music: Option<(PathBuf, f64)>,
+    },
+    /// An audio file range (the Music tab).
+    Audio {
+        /// The file.
+        path: PathBuf,
+        /// Range start, seconds.
+        t0: f64,
+        /// Range end, seconds.
+        t1: f64,
+    },
+}
+
+/// One shot of a [`Source::Sequence`].
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SeqShot {
+    /// Source file.
+    pub(crate) path: PathBuf,
+    /// In-point in the source, seconds.
+    pub(crate) t_in: f64,
+    /// Length on the timeline, seconds.
+    pub(crate) dur: f64,
+    /// Horizontal crop centre.
+    pub(crate) cx: f32,
 }
 
 /// The viewer.
@@ -75,6 +104,43 @@ impl Player {
             self.source = next;
             self.pos = 0.0;
         }
+    }
+
+    /// Loads a cut (shots back to back over `music`) at its start.
+    pub(crate) fn open_sequence(&mut self, shots: Vec<SeqShot>, music: Option<(PathBuf, f64)>) {
+        let next = Source::Sequence { shots, music };
+        if self.source != next {
+            self.source = next;
+            self.pos = 0.0;
+        }
+    }
+
+    /// Loads an audio range (no picture).
+    pub(crate) fn open_audio(&mut self, path: &Path, t0: f64, t1: f64) {
+        let next = Source::Audio {
+            path: path.to_path_buf(),
+            t0,
+            t1: t1.max(t0 + 0.04),
+        };
+        if self.source != next {
+            self.source = next;
+            self.pos = 0.0;
+        }
+    }
+
+    /// For a sequence: the shot under the playhead and the time within it.
+    pub(crate) fn sequence_shot(&self) -> Option<(usize, f64)> {
+        let Source::Sequence { shots, .. } = &self.source else {
+            return None;
+        };
+        let mut start = 0.0;
+        for (i, shot) in shots.iter().enumerate() {
+            if self.pos < start + shot.dur || i + 1 == shots.len() {
+                return Some((i, (self.pos - start).max(0.0)));
+            }
+            start += shot.dur;
+        }
+        None
     }
 
     /// What is loaded.
@@ -122,7 +188,8 @@ impl Player {
     pub(crate) fn duration(&self) -> f64 {
         match &self.source {
             Source::Empty => 0.0,
-            Source::Clip { t0, t1, .. } => t1 - t0,
+            Source::Clip { t0, t1, .. } | Source::Audio { t0, t1, .. } => t1 - t0,
+            Source::Sequence { shots, .. } => shots.iter().map(|s| s.dur).sum(),
         }
     }
 
@@ -176,6 +243,19 @@ impl Player {
                 let t = t0 + (self.pos * 12.0).floor() / 12.0;
                 let path = path.clone();
                 thumbs.paint(ui, rect, &path, t, *cx, background);
+            }
+            Source::Sequence { shots, .. } => {
+                if let Some((i, within)) = self.sequence_shot()
+                    && let Some(shot) = shots.get(i)
+                {
+                    let t = shot.t_in + (within * 12.0).floor() / 12.0;
+                    let (path, cx) = (shot.path.clone(), shot.cx);
+                    thumbs.paint(ui, rect, &path, t, cx, background);
+                }
+            }
+            Source::Audio { .. } => {
+                ui.painter()
+                    .rect_filled(rect, egui::CornerRadius::same(4), background);
             }
         }
         if response.clicked() {
@@ -253,6 +333,23 @@ impl Player {
 #[cfg(test)]
 mod tests {
     use super::Player;
+
+    #[test]
+    fn a_sequence_finds_the_shot_under_the_playhead() {
+        let shot = |dur| super::SeqShot {
+            path: "a.mov".into(),
+            t_in: 0.0,
+            dur,
+            cx: 0.5,
+        };
+        let mut p = Player::default();
+        p.open_sequence(vec![shot(1.0), shot(2.0), shot(1.0)], None);
+        assert!((p.duration() - 4.0).abs() < 1e-9, "sum of shots");
+        p.seek(1.5);
+        assert_eq!(p.sequence_shot().map(|(i, _)| i), Some(1), "second shot");
+        p.open_audio(std::path::Path::new("m.wav"), 10.0, 20.0);
+        assert!((p.duration() - 10.0).abs() < 1e-9, "audio range");
+    }
 
     #[test]
     fn seeking_is_clamped_to_the_range() {

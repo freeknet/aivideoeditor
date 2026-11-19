@@ -65,14 +65,26 @@ pub fn commands(app: &App) -> Vec<Command<Action>> {
         "Ctrl+,",
         Action::OpenSettings,
     ));
+    commands.push(Command::new("Open a night", "Ctrl+O", Action::PickProject));
     commands.push(Command::new(
-        if app.sidebar_collapsed {
-            "Expand sidebar"
-        } else {
-            "Collapse sidebar"
-        },
-        "Ctrl+B",
-        Action::ToggleSidebar,
+        "Show or hide the chat",
+        "Ctrl+J",
+        Action::ToggleChat,
+    ));
+    commands.push(Command::new(
+        "Show or hide the inspector",
+        "Ctrl+I",
+        Action::ToggleInspector,
+    ));
+    commands.push(Command::new(
+        "Show or hide export",
+        "Ctrl+E",
+        Action::ToggleExport,
+    ));
+    commands.push(Command::new(
+        "Reload the night from disk",
+        "",
+        Action::ReloadProject,
     ));
     commands.push(Command::new(
         if app.reduce_motion {

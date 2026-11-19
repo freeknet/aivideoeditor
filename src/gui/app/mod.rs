@@ -104,6 +104,33 @@ impl Page {
     }
 }
 
+/// The browser's tabs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum BrowserTab {
+    /// The shot log: segments to find, judge and pick.
+    #[default]
+    Shots,
+    /// Performers.
+    People,
+    /// The track and its beat grid.
+    Music,
+}
+
+impl BrowserTab {
+    /// Every tab, in order.
+    pub const ALL: [Self; 3] = [Self::Shots, Self::People, Self::Music];
+
+    /// The tab's label.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Shots => "Shots",
+            Self::People => "People",
+            Self::Music => "Music",
+        }
+    }
+}
+
 /// Everything a user can do, from any input.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
@@ -133,6 +160,12 @@ pub enum Action {
     AddRef(crate::refs::Reference),
     /// Drop every staged reference.
     ClearRefs,
+    /// Show or hide the chat panel.
+    ToggleChat,
+    /// Show or hide the inspector.
+    ToggleInspector,
+    /// Show or hide the export panel.
+    ToggleExport,
     /// Bring the window to the front.
     Focus,
     /// Close the window and quit.
@@ -171,6 +204,22 @@ pub struct App {
     pub(crate) notice: Option<String>,
     /// References staged for the assistant, in the order they were added.
     pub(crate) refs: Vec<crate::refs::Reference>,
+    /// What is selected anywhere (browser, timeline, inspector).
+    pub(crate) selection: Vec<crate::refs::Reference>,
+    /// The top bar's search text (the Shots tab filters by it).
+    pub(crate) search: String,
+    /// Whether the Home screen replaces the workspace.
+    pub(crate) home: bool,
+    /// Whether the export panel is docked.
+    pub(crate) export_open: bool,
+    /// Whether the chat panel is shown.
+    pub(crate) chat_open: bool,
+    /// Whether the inspector is shown.
+    pub(crate) inspector_open: bool,
+    /// The browser's tab.
+    pub(crate) browser_tab: BrowserTab,
+    /// Whether the "reference as…" chooser is open.
+    pub(crate) ref_popup: bool,
 }
 
 impl App {
@@ -207,6 +256,14 @@ impl App {
             pages: crate::gui::pages::States::default(),
             notice: None,
             refs: Vec::new(),
+            selection: Vec::new(),
+            search: String::new(),
+            home: false,
+            export_open: false,
+            chat_open: true,
+            inspector_open: true,
+            browser_tab: BrowserTab::Shots,
+            ref_popup: false,
         };
         app.jobs.set_context(ctx);
         let reopen = open.or_else(|| {
@@ -249,7 +306,20 @@ impl App {
     /// Carries out one action.
     pub fn apply(&mut self, ctx: &egui::Context, action: Action) {
         match action {
-            Action::Go(page) => self.page = page,
+            Action::Go(page) => {
+                self.page = page;
+                self.home = page == Page::Night;
+                match page {
+                    Page::Review => self.browser_tab = BrowserTab::Shots,
+                    Page::People => self.browser_tab = BrowserTab::People,
+                    Page::Music => self.browser_tab = BrowserTab::Music,
+                    Page::Deliver => self.export_open = true,
+                    Page::Night | Page::Plan => {}
+                }
+            }
+            Action::ToggleChat => self.chat_open = !self.chat_open,
+            Action::ToggleInspector => self.inspector_open = !self.inspector_open,
+            Action::ToggleExport => self.export_open = !self.export_open,
             Action::OpenSettings => self.settings_open = true,
             Action::CloseSettings => self.settings_open = false,
             Action::OpenCommands => self.commands.open(),

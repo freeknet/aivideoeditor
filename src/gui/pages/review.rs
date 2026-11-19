@@ -18,10 +18,25 @@ pub(crate) struct State {}
 /// Draws the page into the central area.
 pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
     let _ = state;
-    super::placeholder(
-        ctx,
+    let query = ctx.search.to_lowercase();
+    let matching = ctx
+        .project
+        .as_ref()
+        .and_then(|p| p.index.as_ref())
+        .map_or(0, |i| {
+            i.segments
+                .iter()
+                .filter(|s| {
+                    query.is_empty()
+                        || s.caption
+                            .as_ref()
+                            .is_some_and(|c| c.summary.to_lowercase().contains(&query))
+                })
+                .count()
+        });
+    crate::gui::ui::widgets::muted(
         ui,
-        "Review",
-        "Review: the shot log as a culling grid with search, facets, pick/reject and an inspector.",
+        ctx.theme,
+        &format!("{matching} segments match. Shot browser not built yet."),
     );
 }

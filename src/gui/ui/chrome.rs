@@ -18,54 +18,9 @@
 //! default line lands as a pale hairline floating in the gap, which reads
 //! as a resize handle on a panel that cannot be resized.
 
-use super::theme::{self, SPACE_LG, SPACE_MD, SPACE_SM};
-use super::{paint_glyph, widgets};
-use crate::gui::app::{Action, App, Page};
+use super::theme::{self, SPACE_LG};
+use crate::gui::app::App;
 use egui::{Align, Layout, Ui};
-
-/// Draws the header: the mark and name on the left, app-wide controls on
-/// the right.
-pub fn header(app: &App, ui: &mut Ui, actions: &mut Vec<Action>) {
-    let theme = &app.theme;
-    egui::Panel::top("header")
-        .exact_size(theme::HEADER_HEIGHT)
-        .resizable(false)
-        .show_separator_line(false)
-        .frame(
-            egui::Frame::new()
-                .fill(theme::rgb(theme.app))
-                .inner_margin(theme::margin_xy(SPACE_LG, 0.0)),
-        )
-        .show(ui, |ui| {
-            ui.horizontal_centered(|ui| {
-                crate::gui::icons::paint_brand(ui, 26.0);
-                ui.add_space(SPACE_SM);
-                ui.label(
-                    egui::RichText::new(crate::NAME)
-                        .font(theme::font(theme::TITLE_SIZE))
-                        .color(theme::rgb(theme.text))
-                        .strong(),
-                );
-                ui.label(
-                    egui::RichText::new(crate::TAGLINE)
-                        .color(theme::rgb(theme.text_faint))
-                        .small(),
-                );
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let settings = widgets::icon_button(ui, theme, "Settings (Ctrl+,)");
-                    paint_glyph(ui, &settings, super::glyph::SETTINGS);
-                    if settings.response.clicked() {
-                        actions.push(Action::OpenSettings);
-                    }
-                    let commands = widgets::icon_button(ui, theme, "Commands (Ctrl+K)");
-                    paint_glyph(ui, &commands, super::glyph::COMMAND);
-                    if commands.response.clicked() {
-                        actions.push(Action::OpenCommands);
-                    }
-                });
-            });
-        });
-}
 
 /// Draws the status bar.
 pub fn status_bar(app: &App, ui: &mut Ui) {
@@ -112,53 +67,6 @@ pub fn status_bar(app: &App, ui: &mut Ui) {
                         .color(theme::rgb(theme.text_faint)),
                     );
                 });
-            });
-        });
-}
-
-/// Draws the sidebar: the collapse toggle, the pages, and settings at the
-/// foot. Its width settles between the two sizes rather than snapping.
-pub fn sidebar(app: &App, ui: &mut Ui, actions: &mut Vec<Action>) {
-    let theme = &app.theme;
-    let target = if app.sidebar_collapsed {
-        theme::SIDEBAR_MINI_WIDTH
-    } else {
-        theme::SIDEBAR_WIDTH
-    };
-    let width = widgets::level(ui.ctx(), egui::Id::unique("sidebar-width"), target);
-    // Labels go before the width reaches the icon-only size, so none is ever
-    // drawn clipped mid-word.
-    let compact = width < theme::SIDEBAR_WIDTH * 0.8;
-    egui::Panel::left("sidebar")
-        .exact_size(width)
-        .resizable(false)
-        .show_separator_line(false)
-        .frame(
-            egui::Frame::new()
-                .fill(theme::rgb(theme.panel))
-                .inner_margin(theme::margin(SPACE_MD)),
-        )
-        .show(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = SPACE_SM / 2.0;
-            let toggle = widgets::nav_item(ui, theme, "Collapse sidebar", false, compact);
-            paint_glyph(ui, &toggle, super::glyph::MENU);
-            if toggle.response.clicked() {
-                actions.push(Action::ToggleSidebar);
-            }
-            ui.add_space(SPACE_MD);
-            for page in Page::ALL {
-                let item = widgets::nav_item(ui, theme, page.label(), app.page == page, compact);
-                paint_glyph(ui, &item, page.glyph());
-                if item.response.clicked() {
-                    actions.push(Action::Go(page));
-                }
-            }
-            ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
-                let settings = widgets::nav_item(ui, theme, "Settings", app.settings_open, compact);
-                paint_glyph(ui, &settings, super::glyph::SETTINGS);
-                if settings.response.clicked() {
-                    actions.push(Action::OpenSettings);
-                }
             });
         });
 }

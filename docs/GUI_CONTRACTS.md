@@ -19,14 +19,34 @@ Paid tools are transcript-first or cloud/credit-based and none sees fire or
 light as the subject or enforces rules. Our edge: a measured, captioned shot
 log; rule-checked plans with a reason per shot; local and free.
 
-## Layout
+## Layout (Selects-style single workspace)
 
 ```
-header  : brand · night name · Open (Ctrl+O) · command palette · settings
-sidebar : Night · Review · People · Music · Plan · Deliver   (Ctrl+1…6)
-page    : the page draws everything in the central area (its own panels/scroll)
-status  : running jobs · the open night · last error
+┌ top bar: home · night name · [ search shots, captions, people… ] · chat · inspector · export · ⌘K · ⚙ ┐
+│ chat      │ browser    │            viewer            │ inspector                                   │
+│ (history, │ Shots      │  (player, aspect + safe      │ (everything about the selection)            │
+│  ref chips│ People     │   areas, transport)          │                                             │
+│  composer)│ Music      │                              │  [export panel docks here when open]        │
+│           ├────────────┴──────────────────────────────┴─────────────────────────────────────────────┤
+│           │ timeline: ruler · V1 shots on the beat grid · A1 music waveform · drops · check bar     │
+└───────────┴──────────────────────────────────────────────────────────────────────────────────────────┘
+status bar: running jobs · night · last error
 ```
+
+Home screen (`pages::night`) replaces the workspace when no night is open or Home is pressed.
+Look: neutral studio greys (signature theme), small type, flat panels with 1 px borders,
+thumbnails carry the colour. Reference: Selects (tryselects.com) — study its density.
+
+| Region | Module | Shortcut |
+|---|---|---|
+| Home | `gui::pages::night` | home button, Ctrl+1 |
+| Browser · Shots / People / Music | `gui::pages::{review,people,music}` | Ctrl+2 / 3 / 4 |
+| Viewer | `gui::pages::viewer` (+ `gui::player`) | — |
+| Inspector | `gui::pages::inspector` | Ctrl+I |
+| Timeline | `gui::pages::plan` | Ctrl+5 |
+| Export | `gui::pages::deliver` | Ctrl+E, Ctrl+6 |
+| Chat | `gui::assistant` | Ctrl+J |
+| Search | top bar → `ctx.search` | Ctrl+F |
 
 ## Code map
 
@@ -34,7 +54,9 @@ status  : running jobs · the open night · last error
 |---|---|---|
 | Shell, app state, actions | `src/gui/app/mod.rs`, `src/gui/ui/*.rs`, `src/gui/run.rs` | integration only |
 | Page contract | `src/gui/pages/mod.rs` (`PageCtx`, `States`, helpers) | integration only |
-| Pages | `src/gui/pages/<page>.rs` + optional `src/gui/pages/<page>/*.rs` | one owner per page |
+| Regions | `src/gui/pages/<region>.rs` + optional `src/gui/pages/<region>/*.rs` | one owner per region |
+| Workspace layout | `src/gui/ui/workspace.rs` | integration only |
+| Reserved engine modules | `src/search.rs`, `src/recipe.rs`, `src/alternatives.rs` (declared in lib.rs, empty) | see owners in the brief |
 | Assistant panel | `src/gui/assistant.rs` (+ `src/gui/assistant/*.rs`) | assistant owner |
 | Viewer | `src/gui/player.rs` (+ `src/gui/player/*.rs`) | player owner |
 | Thumbnails | `src/gui/thumbs.rs` | integration only |
@@ -75,15 +97,17 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui);
 | `project: &mut Option<Project>` | the night: `work`, `settings`, `index` (shot log), `music`, `people`, `plans`; `reload_*()` after you write a file |
 | `jobs` | `spawn(label, Cmd)` runs an engine step (`crate::commands::Cmd`) in the background; `running()`, `get(id)`; the app reloads the project when one finishes |
 | `thumbs` | `paint(ui, rect, path, t, cx, placeholder)` cover-fits a frame (cropped around `cx`); `get(..)` for the raw texture |
-| `player` | the shared viewer: `open_clip(path, t0, t1, cx)`, `play/pause/toggle/seek/position/duration`, `show(ui, thumbs, size, aspect, bg)`, `transport(ui)`, `handle_keys(ui)` (Space, J/K/L, ←/→) |
+| `player` | the shared viewer: `open_clip(path, t0, t1, cx)`, `open_sequence(Vec<SeqShot>, music)`, `open_audio(path, t0, t1)`, `sequence_shot()`, `play/pause/toggle/seek/position/duration`, `show(ui, thumbs, size, aspect, bg)`, `transport(ui)`, `handle_keys(ui)` (Space, J/K/L, ←/→) |
 | `config` | saved preferences |
 | `refs` | references staged for the assistant (read; add with `Action::AddRef`) |
+| `selection` | the app-wide selection as `Vec<Reference>`: **replace it** when the user selects in your region; the inspector shows it; `R`/`Shift-R` stage it for chat (handled by the workspace) |
+| `search` | the top bar search text (Shots filters by it; others may too) |
 | `actions` | push `Action`s; applied after the frame |
 
 ### Actions (`src/gui/app/mod.rs`)
 
 `Go(Page)`, `PickProject`, `OpenProject(path)`, `ReloadProject`, `CloseProject`,
-`AddRef(Reference)`, `ClearRefs`, plus the shell's own (settings, theme, sidebar, quit).
+`AddRef(Reference)`, `ClearRefs`, `ToggleChat`, `ToggleInspector`, `ToggleExport`, plus the shell's own (settings, theme, sidebar, quit).
 
 ## References (`src/refs.rs`) — the "reference it in the conversation" feature
 

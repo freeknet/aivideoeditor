@@ -36,6 +36,7 @@
 //!
 //! See `docs/ARCHITECTURE.md` for the module map.
 
+mod alternatives;
 mod analyze;
 mod beats;
 pub mod brand;
@@ -57,8 +58,10 @@ mod otio;
 mod people;
 mod plan;
 mod project;
+mod recipe;
 pub mod refs;
 mod render;
+mod search;
 pub mod theme;
 
 #[cfg(windows)]

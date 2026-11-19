@@ -32,6 +32,7 @@ pub mod motion;
 pub mod settings;
 pub mod theme;
 pub mod widgets;
+pub mod workspace;
 
 use crate::gui::app::{Action, App, Page};
 use egui::{Key, Ui};
@@ -112,53 +113,7 @@ pub fn draw(app: &mut App, ui: &mut Ui) -> Vec<Action> {
         shortcuts(ui, &mut actions);
     }
 
-    chrome::header(app, ui, &mut actions);
-    chrome::status_bar(app, ui);
-    chrome::sidebar(app, ui, &mut actions);
-
-    egui::CentralPanel::default()
-        .frame(egui::Frame::new().fill(theme::rgb(app.theme.app)))
-        .show(ui, |ui| {
-            enter_page(ui, app.page);
-            let page = app.page;
-            let crate::gui::app::App {
-                theme,
-                project,
-                jobs,
-                thumbs,
-                player,
-                pages,
-                config,
-                refs,
-                ..
-            } = app;
-            let mut ctx = crate::gui::pages::PageCtx {
-                theme,
-                project,
-                jobs,
-                thumbs,
-                player,
-                config,
-                refs,
-                actions: &mut actions,
-                blocked,
-            };
-            match page {
-                Page::Night => crate::gui::pages::night::draw(&mut ctx, &mut pages.night, ui),
-                Page::Review => crate::gui::pages::review::draw(&mut ctx, &mut pages.review, ui),
-                Page::People => crate::gui::pages::people::draw(&mut ctx, &mut pages.people, ui),
-                Page::Music => crate::gui::pages::music::draw(&mut ctx, &mut pages.music, ui),
-                Page::Plan => {
-                    crate::gui::pages::plan::draw(
-                        &mut ctx,
-                        &mut pages.plan,
-                        &mut pages.assistant,
-                        ui,
-                    );
-                }
-                Page::Deliver => crate::gui::pages::deliver::draw(&mut ctx, &mut pages.deliver, ui),
-            }
-        });
+    workspace::draw(app, ui, &mut actions, blocked);
 
     settings::draw(app, ui.ctx(), &mut actions);
     command_palette::draw(app, ui.ctx(), &mut actions);
@@ -176,11 +131,17 @@ fn shortcuts(ui: &Ui, actions: &mut Vec<Action>) {
         if command && input.key_pressed(Key::Comma) {
             actions.push(Action::OpenSettings);
         }
+        if command && input.key_pressed(Key::E) {
+            actions.push(Action::ToggleExport);
+        }
+        if command && input.key_pressed(Key::I) {
+            actions.push(Action::ToggleInspector);
+        }
+        if command && input.key_pressed(Key::J) {
+            actions.push(Action::ToggleChat);
+        }
         if command && input.key_pressed(Key::O) {
             actions.push(Action::PickProject);
-        }
-        if command && input.key_pressed(Key::B) {
-            actions.push(Action::ToggleSidebar);
         }
         let numbers = [
             Key::Num1,
@@ -202,28 +163,20 @@ fn shortcuts(ui: &Ui, actions: &mut Vec<Action>) {
 /// drift apart without the test below noticing.
 pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+,", "Open settings"),
-    ("Ctrl+B", "Collapse or expand the sidebar"),
     ("Ctrl+1…6", "Switch page"),
     ("Ctrl+O", "Open a night"),
+    ("Ctrl+F", "Search shots"),
+    ("Ctrl+J", "Show or hide the chat"),
+    ("Ctrl+I", "Show or hide the inspector"),
+    ("Ctrl+E", "Show or hide export"),
+    ("R", "Reference the selection in chat"),
+    (
+        "Shift+R",
+        "Reference the selection as keep / avoid / replace / more like / feature",
+    ),
     ("Ctrl+K", "Open the command palette"),
     ("Esc", "Close a dialog"),
 ];
-
-/// Fades and lifts a page into place as it arrives, so a page change reads
-/// as navigation rather than as a flicker. Left alone once finished: a
-/// permanently non-opaque `Ui` costs a layer every frame for nothing.
-fn enter_page(ui: &mut Ui, page: Page) {
-    /// How far the content rises as it arrives.
-    const RISE: f32 = 8.0;
-    let ctx = ui.ctx().clone();
-    // Keyed on the page, so arriving at another restarts the animation.
-    let progress = widgets::arrival(&ctx, egui::Id::unique("page-enter"), egui::Id::unique(page));
-    if progress >= 1.0 {
-        return;
-    }
-    ui.set_opacity(progress);
-    ui.add_space(RISE * (1.0 - progress));
-}
 
 /// The about page: the mark, the version and the shortcuts.
 pub fn about(app: &App, ui: &mut Ui) {

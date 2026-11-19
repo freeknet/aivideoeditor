@@ -6,8 +6,10 @@
 // Dependencies: egui; crate::{project, jobs, config, theme}, crate::gui
 // ============================================================================
 
-//! The pages, one per pipeline stage: Night → Review → People → Music →
-//! Plan → Deliver.
+//! The workspace's regions (see `gui::ui::workspace`): `night` is the Home
+//! screen, `review` / `people` / `music` are the browser's tabs, `viewer`
+//! the centre, `inspector` the right pane, `plan` the timeline at the foot,
+//! `deliver` the export panel.
 //!
 //! Every page is a module with a `State` (kept across frames and page
 //! switches) and `draw(ctx, state, ui)`. A page reaches everything shared
@@ -17,11 +19,13 @@
 //! the files the project reads (see `docs/GUI_CONTRACTS.md`).
 
 pub(crate) mod deliver;
+pub(crate) mod inspector;
 pub(crate) mod music;
 pub(crate) mod night;
 pub(crate) mod people;
 pub(crate) mod plan;
 pub(crate) mod review;
+pub(crate) mod viewer;
 
 use crate::gui::app::Action;
 use crate::gui::player::Player;
@@ -48,6 +52,11 @@ pub(crate) struct PageCtx<'a> {
     /// References staged for the assistant (read-only here; add with
     /// `Action::AddRef`, consume in the assistant).
     pub(crate) refs: &'a mut Vec<crate::refs::Reference>,
+    /// What is selected app-wide, as references. Pages replace it when the
+    /// user selects something; the inspector shows it; `R` stages it for chat.
+    pub(crate) selection: &'a mut Vec<crate::refs::Reference>,
+    /// The top bar's search text.
+    pub(crate) search: &'a mut String,
     /// App-wide actions to apply after the frame.
     pub(crate) actions: &'a mut Vec<Action>,
     /// Whether a modal is open (pages must not read shortcuts then).
@@ -79,6 +88,10 @@ pub(crate) struct States {
     pub(crate) deliver: deliver::State,
     /// The assistant panel.
     pub(crate) assistant: crate::gui::assistant::State,
+    /// The inspector.
+    pub(crate) inspector: inspector::State,
+    /// The viewer.
+    pub(crate) viewer: viewer::State,
 }
 
 /// A page heading and the line under it.
