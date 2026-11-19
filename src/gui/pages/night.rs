@@ -1,270 +1,194 @@
 // ============================================================================
 // Module:       gui::pages::night
-// Description:  Night: open or create a night, run the pipeline steps, see what
-//               each produced.
+// Description:  Home: recent nights, new night from last week, the pipeline
+//               as a step bar with live job progress, and the night's settings
+//               and recipe.
 //
-// Dependencies: egui; crate::{commands, jobs, project}, crate::gui::pages
+// Dependencies: egui, rfd; crate::{commands, jobs, project, recipe},
+//               crate::gui::pages
 // ============================================================================
 
-//! The Night page: the project home.
+//! The Home screen: the project manager.
 //!
-//! One card per pipeline step (index → caption → beats → people → plan),
-//! each with what it has produced so far and a button that runs it as a
-//! background job — the same command `ave <step>` runs in a terminal. Below
-//! them, the job log, and a strip of the night's clips to skim.
+//! - **Left, recent nights** (`recent`): every night opened lately plus its
+//!   siblings on disk, each with the first clip's frame, its date and how
+//!   far it got (indexed, captioned, planned, delivered). "New night…"
+//!   sets a night up from last week's (`recipe::new_night`); "Open…" opens
+//!   any folder.
+//! - **Main, the open night**: the pipeline as a step bar (`pipeline`):
+//!   Index → Caption → Music → People → Plans → Export, each with what it
+//!   produced, when, and a Run button. Every run goes through one serial
+//!   queue of `ctx.jobs` jobs, so "Run everything" and a single step can
+//!   never race each other. Below it, the night's settings and recipe
+//!   (`settings`), and a strip of the night's clips to skim.
 //!
-//! See `docs/research/02-ui-and-workflow.md` §9.3 for where this is going
-//! (new night from last week, recipes, recent nights with thumbnails).
+//! See `docs/research/02-ui-and-workflow.md` §6 and §9.3.
+
+pub(crate) mod pipeline;
+pub(crate) mod recent;
+pub(crate) mod settings;
 
 use std::path::PathBuf;
 
 use super::PageCtx;
-use crate::commands::Cmd;
-use crate::gui::app::Action;
+use crate::gui::app::{Action, Page};
 use crate::gui::ui::{theme, widgets};
 
 /// The page's own state.
 #[derive(Debug, Default)]
 pub(crate) struct State {
-    /// The job whose log is shown.
-    shown_job: Option<u64>,
+    /// The recent-nights column.
+    recent: recent::State,
+    /// The step bar and its job queue.
+    pipeline: pipeline::State,
+    /// The settings and recipe editor.
+    settings: settings::State,
     /// The clip being previewed in the strip, by index.
     preview: Option<usize>,
+    /// What the last "New night…" carried over, shown once.
+    notice: Option<String>,
 }
 
-/// One pipeline step as a card.
-struct Step {
-    title: &'static str,
-    done: Option<String>,
-    run: Option<(String, Cmd)>,
-    hint: &'static str,
-}
-
-/// The steps, with what each has produced and the job that (re)runs it.
-fn steps(ctx: &PageCtx<'_>) -> Vec<Step> {
-    let Some(p) = ctx.project.as_ref() else {
-        return Vec::new();
-    };
-    let work = p.work.clone();
-    let index_done = p.index.as_ref().map(|i| {
-        let flagged = i.segments.iter().filter(|s| !s.flags.is_empty()).count();
-        format!(
-            "{} clips, {} segments, {flagged} flagged",
-            i.clips.len(),
-            i.segments.len()
-        )
-    });
-    let captions = p
-        .index
-        .as_ref()
-        .map(|i| i.segments.iter().filter(|s| s.caption.is_some()).count());
-    let footage = p.settings.footage.clone();
-    let track = p.settings.track.clone();
-    let people_n = p.people.names.len();
-    vec![
-        Step {
-            title: "Index footage",
-            done: index_done,
-            run: footage.map(|f| {
-                (
-                    "index".to_owned(),
-                    Cmd::Index {
-                        footage: f,
-                        work: work.clone(),
-                        jobs: 4,
-                        force: false,
-                    },
-                )
-            }),
-            hint: "Set the footage folder in ave.toml or open the footage folder itself.",
-        },
-        Step {
-            title: "Caption with the vision model",
-            done: captions
-                .filter(|n| *n > 0)
-                .map(|n| format!("{n} segments captioned")),
-            run: p.index.as_ref().map(|_| {
-                (
-                    "caption".to_owned(),
-                    Cmd::Caption {
-                        work: work.clone(),
-                        min_q: 0.15,
-                        redo: false,
-                        parallel: 3,
-                    },
-                )
-            }),
-            hint: "Index first.",
-        },
-        Step {
-            title: "Map the music",
-            done: p.music.as_ref().map(|m| {
-                format!(
-                    "{:.1} BPM, {} bars, {} drop candidates",
-                    m.bpm,
-                    m.bars.len(),
-                    m.drops.len()
-                )
-            }),
-            run: track.map(|t| {
-                (
-                    "beats".to_owned(),
-                    Cmd::Beats {
-                        track: t,
-                        work: work.clone(),
-                    },
-                )
-            }),
-            hint: "Set the track in ave.toml.",
-        },
-        Step {
-            title: "Draft who's who",
-            done: (people_n > 0).then(|| format!("{people_n} clips named")),
-            run: p.index.as_ref().map(|_| {
-                (
-                    "people".to_owned(),
-                    Cmd::People {
-                        work: work.clone(),
-                        force: true,
-                    },
-                )
-            }),
-            hint: "Caption first.",
-        },
-        Step {
-            title: "Plans",
-            done: (!p.plans.is_empty()).then(|| format!("{} plans", p.plans.len())),
-            run: None,
-            hint: "Draft and edit plans on the Plan page.",
-        },
-    ]
+/// Work the page does every frame, shown or not: starting the next queued
+/// pipeline job when the one before it finishes.
+pub(crate) fn tick(jobs: &mut crate::jobs::Jobs, state: &mut State) {
+    state.pipeline.tick(jobs);
 }
 
 /// Draws the page into the central area.
 pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
-    egui::ScrollArea::vertical()
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
+    let line = egui::Stroke::new(1.0, theme::rgb(ctx.theme.border));
+    egui::Panel::left("home-recent")
+        .resizable(true)
+        .default_size(300.0)
+        .size_range(240.0..=420.0)
+        .frame(
             egui::Frame::new()
-                .inner_margin(theme::margin(theme::SPACE_XL))
+                .fill(theme::rgb(ctx.theme.panel))
+                .stroke(line)
+                .inner_margin(theme::margin(theme::SPACE_MD)),
+        )
+        .show(ui, |ui| {
+            if let Some(notice) = recent::draw(ctx, &mut state.recent, ui) {
+                state.notice = Some(notice);
+            }
+        });
+    egui::CentralPanel::default()
+        .frame(egui::Frame::new().fill(theme::rgb(ctx.theme.app)))
+        .show(ui, |ui| {
+            egui::ScrollArea::vertical()
+                .id_salt("home-main")
+                .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    if ctx.project.is_none() {
-                        super::no_project(ctx, ui);
-                        recent(ctx, ui);
-                        return;
-                    }
-                    let (name, work) = ctx
-                        .project
-                        .as_ref()
-                        .map(|p| (p.name(), p.work.display().to_string()))
-                        .unwrap_or_default();
-                    super::heading(ctx, ui, &name, &work);
-                    if let Some(p) = ctx.project.as_ref() {
-                        for w in &p.warnings {
-                            ui.colored_label(theme::rgb(ctx.theme.warning), w);
-                        }
-                    }
-                    pipeline(ctx, state, ui);
-                    ui.add_space(theme::SPACE_LG);
-                    log(ctx, state, ui);
-                    ui.add_space(theme::SPACE_LG);
-                    clips(ctx, state, ui);
+                    egui::Frame::new()
+                        .inner_margin(theme::margin_xy(theme::SPACE_XL, theme::SPACE_LG))
+                        .show(ui, |ui| main(ctx, state, ui));
                 });
         });
 }
 
-/// The pipeline cards.
-fn pipeline(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
-    let steps = steps(ctx);
-    let busy: Vec<String> = ctx.jobs.running().map(|j| j.label.clone()).collect();
-    let theme = ctx.theme;
-    let mut start: Option<(String, Cmd)> = None;
-    widgets::card_grid(ui, 240.0, steps.len(), |ui, i| {
-        let Some(step) = steps.get(i) else { return };
-        let id = egui::Id::unique("night-step").with(i);
-        widgets::card(ui, theme, id, step.done.is_some(), |ui| {
-            widgets::title(ui, theme, step.title);
-            match &step.done {
-                Some(done) => {
-                    ui.colored_label(theme::rgb(theme.success), done);
-                }
-                None => {
-                    widgets::muted(ui, theme, "Not run yet.");
-                }
+/// The open night, or a welcome when there is none.
+fn main(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
+    if ctx.project.is_none() {
+        welcome(ctx, state, ui);
+        return;
+    }
+    header(ctx, state, ui);
+    state.settings.sync(ctx);
+    pipeline::draw(ctx, &mut state.pipeline, &state.settings, ui);
+    ui.add_space(theme::SPACE_XL);
+    settings::draw(ctx, &mut state.settings, ui);
+    ui.add_space(theme::SPACE_XL);
+    clips(ctx, state, ui);
+}
+
+/// What Home shows with no night open.
+fn welcome(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
+    ui.add_space(theme::SPACE_XL);
+    super::heading(
+        ctx,
+        ui,
+        "No night open",
+        "Start this week's night from last week's — same deliverables, end cards and \
+         naming — or open one from the list.",
+    );
+    ui.horizontal(|ui| {
+        if widgets::button(ui, ctx.theme, "New night…", widgets::Emphasis::Primary).clicked()
+            && let Some(notice) = recent::new_night(ctx, &state.recent)
+        {
+            state.notice = Some(notice);
+        }
+        if widgets::button(ui, ctx.theme, "Open…", widgets::Emphasis::Secondary).clicked() {
+            ctx.actions.push(Action::PickProject);
+        }
+    });
+    ui.add_space(theme::SPACE_LG);
+    widgets::muted(
+        ui,
+        ctx.theme,
+        "A night is a folder of footage. ave keeps its work (shot log, music map, people, \
+         plans, renders) in an _ave folder beside it, and delivers to the night's videos folder.",
+    );
+}
+
+/// The night's name, where it lives, and the way into the workspace.
+fn header(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
+    let Some((name, work)) = ctx.project.as_ref().map(|p| (p.name(), p.work.clone())) else {
+        return;
+    };
+    ui.horizontal(|ui| {
+        ui.vertical(|ui| {
+            ui.label(
+                egui::RichText::new(&name)
+                    .font(theme::font(theme::HEADING_SIZE + 4.0))
+                    .color(theme::rgb(ctx.theme.text))
+                    .strong(),
+            );
+            widgets::muted(ui, ctx.theme, &work.display().to_string());
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if widgets::button(ui, ctx.theme, "Open editor", widgets::Emphasis::Primary)
+                .on_hover_text("The workspace: shots, viewer, timeline (Ctrl+2)")
+                .clicked()
+            {
+                ctx.actions.push(Action::Go(Page::Review));
             }
-            ui.add_space(theme::SPACE_SM);
-            match &step.run {
-                Some((label, cmd)) => {
-                    let running = busy.contains(label);
-                    let text = if running {
-                        "Running…"
-                    } else if step.done.is_some() {
-                        "Run again"
-                    } else {
-                        "Run"
-                    };
-                    let emphasis = if step.done.is_some() {
-                        widgets::Emphasis::Secondary
-                    } else {
-                        widgets::Emphasis::Primary
-                    };
-                    if ui
-                        .add_enabled_ui(!running, |ui| widgets::button(ui, theme, text, emphasis))
-                        .inner
-                        .clicked()
-                    {
-                        start = Some((label.clone(), cmd.clone()));
-                    }
-                }
-                None => {
-                    widgets::muted(ui, theme, step.hint);
-                }
+            if widgets::button(ui, ctx.theme, "Export…", widgets::Emphasis::Secondary).clicked() {
+                ctx.actions.push(Action::Go(Page::Deliver));
+            }
+            if widgets::button(ui, ctx.theme, "Reveal", widgets::Emphasis::Secondary)
+                .on_hover_text("Show the work folder in Explorer")
+                .clicked()
+            {
+                super::deliver::files::open_folder(&work);
             }
         });
     });
-    if let Some((label, cmd)) = start {
-        state.shown_job = Some(ctx.jobs.spawn(label, cmd));
-    }
-}
-
-/// The log of the selected (or latest) job.
-fn log(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
-    let Some(id) = state
-        .shown_job
-        .or_else(|| ctx.jobs.list.last().map(|j| j.id))
-    else {
-        return;
-    };
-    let Some(job) = ctx.jobs.get(id) else { return };
-    widgets::title(ui, ctx.theme, &format!("Job: {}", job.label));
-    let status = match &job.status {
-        crate::jobs::Status::Running => {
-            format!("running for {:.0}s", job.started.elapsed().as_secs_f32())
+    if let Some(notice) = state.notice.clone() {
+        ui.add_space(theme::SPACE_SM);
+        let mut dismiss = false;
+        egui::Frame::new()
+            .fill(theme::rgb(ctx.theme.accent_soft))
+            .corner_radius(egui::CornerRadius::same(theme::RADIUS))
+            .inner_margin(theme::margin(theme::SPACE_SM))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(&notice).color(theme::rgb(ctx.theme.text)));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        dismiss = ui.small_button("✕").clicked();
+                    });
+                });
+            });
+        if dismiss {
+            state.notice = None;
         }
-        crate::jobs::Status::Done => format!("done in {:.1}s", job.took.unwrap_or(0.0)),
-        crate::jobs::Status::Failed(e) => format!("failed: {e}"),
-    };
-    widgets::muted(ui, ctx.theme, &status);
-    let retry = matches!(job.status, crate::jobs::Status::Failed(_))
-        .then(|| (job.label.clone(), job.cmd.clone()));
-    if let Some((label, cmd)) = retry
-        && widgets::button(ui, ctx.theme, "Retry", widgets::Emphasis::Secondary).clicked()
-    {
-        state.shown_job = Some(ctx.jobs.spawn(label, cmd));
-        return;
     }
-    let Some(job) = ctx.jobs.get(state.shown_job.unwrap_or(id)) else {
-        return;
-    };
-    egui::Frame::new()
-        .fill(theme::rgb(ctx.theme.panel))
-        .corner_radius(egui::CornerRadius::same(theme::RADIUS))
-        .inner_margin(theme::margin(theme::SPACE_SM))
-        .show(ui, |ui| {
-            for line in job.lines.iter().rev().take(12).rev() {
-                ui.label(egui::RichText::new(line).monospace().small());
-            }
-        });
+    if let Some(p) = ctx.project.as_ref() {
+        for w in &p.warnings {
+            ui.colored_label(theme::rgb(ctx.theme.warning), w);
+        }
+    }
+    ui.add_space(theme::SPACE_LG);
 }
 
 /// A strip of the night's clips: click one to skim it in the viewer.
@@ -277,7 +201,8 @@ fn clips(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
         .iter()
         .map(|c| (c.id.clone(), PathBuf::from(&c.path), c.probe.duration))
         .collect();
-    widgets::title(ui, ctx.theme, "Clips");
+    widgets::title(ui, ctx.theme, &format!("Clips · {}", clips.len()));
+    ui.add_space(theme::SPACE_XS);
     let placeholder = theme::rgb(ctx.theme.raised);
     egui::ScrollArea::horizontal()
         .id_salt("night-clips")
@@ -286,8 +211,10 @@ fn clips(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
                 for (i, (id, path, duration)) in clips.iter().enumerate() {
                     let (rect, response) =
                         ui.allocate_exact_size(egui::vec2(128.0, 72.0), egui::Sense::click());
-                    ctx.thumbs
-                        .paint(ui, rect, path, duration * 0.5, 0.5, placeholder);
+                    if ui.is_rect_visible(rect) {
+                        ctx.thumbs
+                            .paint(ui, rect, path, duration * 0.5, 0.5, placeholder);
+                    }
                     if state.preview == Some(i) {
                         ui.painter().rect_stroke(
                             rect,
@@ -323,17 +250,44 @@ fn clips(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
     }
 }
 
-/// Recently opened nights.
-fn recent(ctx: &mut PageCtx<'_>, ui: &mut egui::Ui) {
-    let recent = ctx.config.recent_projects.clone().unwrap_or_default();
-    if recent.is_empty() {
-        return;
-    }
-    ui.add_space(theme::SPACE_LG);
-    widgets::title(ui, ctx.theme, "Recent nights");
-    for path in recent {
-        if ui.link(&path).clicked() {
-            ctx.actions.push(Action::OpenProject(PathBuf::from(&path)));
+#[cfg(test)]
+mod tests {
+    use crate::gui::app::{Action, App, Page};
+
+    /// Runs `frames` headless frames at a desktop size.
+    fn run(ctx: &egui::Context, app: &mut App, frames: usize) {
+        for _ in 0..frames {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1500.0, 900.0),
+                )),
+                ..Default::default()
+            };
+            ctx.run_pass(input, |ctx| app.ui(ctx))
+                .drop_without_applying_deltas();
         }
+    }
+
+    #[test]
+    fn home_and_export_draw_an_open_night_without_writing_to_it() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let work = dir.path().join("2026-11-11").join("_ave");
+        std::fs::create_dir_all(work.join("plans"))?;
+        std::fs::write(work.join("ave.toml"), "footage = \"nowhere\"\n")?;
+        std::fs::write(work.join("plans").join("reel-30.toml"), "not a plan")?;
+        let ctx = egui::Context::default();
+        let mut app = App::new(&ctx, crate::config::Config::default(), Some(work.clone()));
+        app.apply(&ctx, Action::Go(Page::Night));
+        run(&ctx, &mut app, 4);
+        assert!(app.project.is_some(), "the night opened");
+        app.apply(&ctx, Action::Go(Page::Deliver));
+        run(&ctx, &mut app, 4);
+        assert!(app.export_open, "export docked");
+        assert!(
+            !work.join(crate::recipe::FILE).exists(),
+            "opening and drawing a night never writes its recipe"
+        );
+        Ok(())
     }
 }

@@ -27,3 +27,13 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   index under configurable rules, and a checker for hand-edited plans.
 - `ave render` / `ave otio`: one-graph ffmpeg render with a 720p preview, and
   OpenTimelineIO export.
+- Weekly recipes (`recipe.toml`): the night's deliverables (id, aspect, length, end
+  card, file name template with `{night} {id} {aspect} {version} {date}`, output
+  folder, encoder), parsed per row, carried from night to night.
+- GUI Home: recent nights with first-clip frames and progress, "New night…" from last
+  week (recipe, end cards, track), the pipeline as a step bar on one serial job queue
+  with "Run everything" (runs only what is missing), live progress, settings rows and
+  a recipe editor.
+- GUI Export: deliverables × plan versions with check status, file names before
+  rendering, a serial render + OTIO queue that copies each video to its delivery
+  name, "render anyway" for failing plans, reveal / open folder / copy path.
