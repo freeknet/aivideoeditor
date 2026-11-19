@@ -405,6 +405,20 @@ fn open_chat(work: &Path, plan: &str) -> Chat {
     }
 }
 
+/// Holds or releases the timeline lock (`plans/.lock-<plan>`) for the
+/// conversation's plan: the timeline shows read-only while a turn may edit it.
+fn set_lock(state: &State, on: bool) {
+    let Some(chat) = state.chat.as_ref() else {
+        return;
+    };
+    let path = chat.work.join("plans").join(format!(".lock-{}", chat.plan));
+    if on {
+        let _ = std::fs::write(&path, "assistant turn");
+    } else {
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
 /// Drains the turn's events into the conversation.
 fn poll(ctx: &mut PageCtx<'_>, state: &mut State, egui_ctx: &egui::Context) {
     let Some(turn) = state.turn.as_mut() else {
@@ -415,6 +429,7 @@ fn poll(ctx: &mut PageCtx<'_>, state: &mut State, egui_ctx: &egui::Context) {
         // Stop: the process goes; the next message resumes the session.
         state.session = None;
         state.turn = None;
+        set_lock(state, false);
         if let Some(chat) = state.chat.as_mut() {
             state.error = chat.push(LogLine::Notice {
                 text: "Stopped.".to_owned(),
@@ -529,6 +544,7 @@ fn poll(ctx: &mut PageCtx<'_>, state: &mut State, egui_ctx: &egui::Context) {
     if done {
         let claude = state.turn.as_ref().is_some_and(|t| t.claude);
         state.turn = None;
+        set_lock(state, false);
         if claude {
             claude_turn_over(state);
         }
@@ -1698,6 +1714,7 @@ fn submit(
                 tools: Vec::new(),
                 claude,
             });
+            set_lock(state, true);
             state.input.clear();
             state.dismissed = None;
             if !ctx.refs.is_empty() {
