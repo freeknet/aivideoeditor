@@ -29,8 +29,14 @@ use crate::refs::{Modifier, Reference, Target};
 const TOOLS_W: f32 = 26.0;
 /// Width of the track headers.
 const HEADS_W: f32 = 56.0;
-/// Height of the ruler.
-const RULER_H: f32 = 30.0;
+/// Height of the ruler (bars, drops, seconds, then the comment pins).
+const RULER_H: f32 = 40.0;
+/// Where the seconds row of the ruler ends, from its top.
+const SECONDS_BOTTOM: f32 = 30.0;
+/// Height of the storyboard lane when shown.
+const STORY_H: f32 = 64.0;
+/// Pointer distance that grabs a comment pin.
+const PIN_GRAB: f32 = 5.0;
 /// Height of the scrollbar row.
 const SCROLL_H: f32 = 16.0;
 /// Width of the zoom controls at the bottom right.
@@ -53,16 +59,21 @@ enum Hit {
 
 /// The horizontal mapping.
 #[derive(Clone, Copy, Debug)]
-struct Map {
+pub(super) struct Map {
+    /// Screen x of the lanes' left edge.
     left: f32,
+    /// Seconds at the left edge.
     scroll: f32,
+    /// Pixels per second.
     pps: f32,
 }
 
 impl Map {
-    fn x(self, t: f32) -> f32 {
+    /// Screen x of `t` seconds.
+    pub(super) fn x(self, t: f32) -> f32 {
         self.left + (t - self.scroll) * self.pps
     }
+    /// Seconds at screen x.
     fn t(self, x: f32) -> f32 {
         self.scroll + (x - self.left) / self.pps
     }
@@ -80,7 +91,7 @@ fn subject_color(subject: &str) -> Color32 {
 }
 
 /// `m:ss` or `m:ss.s`.
-fn timecode(t: f32, fine: bool) -> String {
+pub(super) fn timecode(t: f32, fine: bool) -> String {
     let t = t.max(0.0);
     let m = (t / 60.0).floor();
     let s = t - m * 60.0;
@@ -137,14 +148,25 @@ pub(super) fn tracks(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut
 
     // Geometry.
     let lanes_left = rect.left() + TOOLS_W + HEADS_W;
-    let body = rect.height() - RULER_H - SCROLL_H;
+    let story_h = if state.storyboard {
+        // A third of the lanes at most, so V1 and A1 stay readable.
+        let h = STORY_H.min((rect.height() - RULER_H - SCROLL_H) * 0.34);
+        if h >= 30.0 { h } else { 0.0 }
+    } else {
+        0.0
+    };
+    let body = rect.height() - RULER_H - SCROLL_H - story_h;
     let v1_h = (body * 0.62).clamp(30.0, 110.0);
     let a1_h = (body - v1_h - 1.0).max(16.0);
     let ruler = Rect::from_min_max(
         pos2(lanes_left, rect.top()),
         pos2(rect.right(), rect.top() + RULER_H),
     );
-    let v1 = Rect::from_min_size(pos2(lanes_left, ruler.bottom()), vec2(ruler.width(), v1_h));
+    let story = Rect::from_min_size(
+        pos2(lanes_left, ruler.bottom()),
+        vec2(ruler.width(), story_h),
+    );
+    let v1 = Rect::from_min_size(pos2(lanes_left, story.bottom()), vec2(ruler.width(), v1_h));
     let a1 = Rect::from_min_size(
         pos2(lanes_left, v1.bottom() + 1.0),
         vec2(ruler.width(), a1_h),
@@ -223,6 +245,10 @@ pub(super) fn tracks(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut
     let past_end = Rect::from_min_max(pos2(m.x(s.total).max(lanes.left()), v1.top()), a1.max);
     if past_end.width() > 0.0 {
         painter.rect_filled(past_end, CornerRadius::ZERO, Color32::from_black_alpha(70));
+    }
+
+    if story.height() > 20.0 {
+        super::storyboard::lane(state, s, io, ui, story, m);
     }
 
     // Grid behind the lanes.
@@ -681,6 +707,14 @@ pub(super) fn tracks(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut
             super::play_from(s, io, k);
             ui.close();
         }
+        if ui
+            .add_enabled(s.editable, egui::Button::new("Comment on this shot"))
+            .clicked()
+        {
+            let at = s.timing.get(k).map_or(0.0, |&(a, _)| a);
+            super::comments::add_at(state, at);
+            ui.close();
+        }
         if let Some(sh) = s.plan.shots.get(k)
             && ui.button("Show source clip in viewer").clicked()
         {
@@ -845,13 +879,41 @@ pub(super) fn tracks(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut
 
     // Ruler.
     let ruler_resp = ui.interact(ruler, id.with("ruler"), Sense::click_and_drag());
-    for r in [&ruler_resp, &a1_resp] {
-        if (r.clicked() || r.dragged())
-            && let Some(p) = r.interact_pointer_pos()
-        {
-            io.seek(s, m.t(p.x).clamp(0.0, s.card));
+    let show_resolved = state.show_resolved;
+    let pin_at = |p: Pos2| -> Option<usize> {
+        if p.y < ruler.top() + SECONDS_BOTTOM {
+            return None;
+        }
+        s.plan
+            .comments
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| show_resolved || !c.resolved)
+            .map(|(i, c)| (i, (m.x(c.time) - p.x).abs()))
+            .filter(|&(_, d)| d <= PIN_GRAB)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(i, _)| i)
+    };
+    let pin_clicked = ruler_resp
+        .clicked()
+        .then(|| ruler_resp.interact_pointer_pos().and_then(pin_at))
+        .flatten();
+    if let Some(i) = pin_clicked
+        && let Some(c) = s.plan.comments.get(i)
+    {
+        io.seek(s, c.time.clamp(0.0, s.total));
+        state.comment_sel = Some(i);
+        state.show_comments = true;
+    } else {
+        for r in [&ruler_resp, &a1_resp] {
+            if (r.clicked() || r.dragged())
+                && let Some(p) = r.interact_pointer_pos()
+            {
+                io.seek(s, m.t(p.x).clamp(0.0, s.card));
+            }
         }
     }
+    let hover_pin = ruler_resp.hover_pos().and_then(pin_at);
     let rp = painter.with_clip_rect(ruler);
     rp.hline(
         ruler.left()..=ruler.right(),
@@ -904,6 +966,12 @@ pub(super) fn tracks(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut
             }
         }
     }
+    let seconds_bottom = ruler.top() + SECONDS_BOTTOM;
+    rp.hline(
+        ruler.left()..=ruler.right(),
+        seconds_bottom + 0.5,
+        Stroke::new(1.0, theme::translucent(t.border, 120)),
+    );
     let sec_step = [0.25_f32, 0.5, 1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0]
         .into_iter()
         .find(|st| st * m.pps >= 54.0)
@@ -918,11 +986,11 @@ pub(super) fn tracks(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut
         let x = m.x(ts);
         rp.vline(
             x,
-            ruler.bottom() - 5.0..=ruler.bottom(),
+            seconds_bottom - 5.0..=seconds_bottom,
             Stroke::new(1.0, theme::rgb(t.text_faint)),
         );
         rp.text(
-            pos2(x + 2.0, ruler.bottom() - 2.0),
+            pos2(x + 2.0, seconds_bottom - 2.0),
             Align2::LEFT_BOTTOM,
             timecode(ts, sec_step < 1.0),
             FontId::monospace(9.0),
@@ -985,6 +1053,73 @@ pub(super) fn tracks(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut
         "DROP",
     );
     flag(m.x(s.card), theme::rgb(t.text_muted), true, "CARD");
+
+    // Comment pins, under the seconds.
+    let pin_y = ruler.top() + SECONDS_BOTTOM + 1.0;
+    for (i, c) in s.plan.comments.iter().enumerate() {
+        if c.resolved && !state.show_resolved {
+            continue;
+        }
+        let x = m.x(c.time);
+        if x < ruler.left() - 6.0 || x > ruler.right() + 6.0 {
+            continue;
+        }
+        let base = super::comments::color(&c.color);
+        let ink = if c.resolved {
+            base.gamma_multiply(0.35)
+        } else {
+            base
+        };
+        let head = Rect::from_min_size(pos2(x - 4.0, pin_y), vec2(8.0, 5.0));
+        rp.rect_filled(head, CornerRadius::same(1), ink);
+        rp.add(egui::Shape::convex_polygon(
+            vec![
+                pos2(x - 4.0, head.bottom()),
+                pos2(x + 4.0, head.bottom()),
+                pos2(x, head.bottom() + 3.5),
+            ],
+            ink,
+            Stroke::NONE,
+        ));
+        if state.comment_sel == Some(i) || hover_pin == Some(i) {
+            rp.rect_stroke(
+                head.expand(1.5),
+                CornerRadius::same(2),
+                Stroke::new(1.0, theme::rgb(t.text)),
+                egui::StrokeKind::Outside,
+            );
+        }
+        lane_paint.vline(
+            x,
+            v1.top()..=a1.bottom(),
+            Stroke::new(
+                1.0,
+                Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), 60),
+            ),
+        );
+    }
+    if let Some(i) = hover_pin
+        && let Some(c) = s.plan.comments.get(i)
+    {
+        let shot = super::comments::shot_at(&s.timing, c.time)
+            .map_or_else(|| "end card".to_owned(), |k| format!("shot {}", k + 1));
+        let note = if c.note.is_empty() {
+            "(no note)".to_owned()
+        } else {
+            c.note.clone()
+        };
+        let head = format!(
+            "{} · {shot} · {}{}",
+            timecode(c.time, true),
+            c.author,
+            if c.resolved { " · resolved" } else { "" }
+        );
+        ruler_resp.clone().on_hover_ui_at_pointer(|ui| {
+            ui.set_max_width(280.0);
+            ui.label(egui::RichText::new(head).strong());
+            ui.label(note);
+        });
+    }
 
     // Playhead.
     if let Some(ph) = playhead {
@@ -1163,7 +1298,11 @@ pub(super) fn tracks(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut
         FontId::monospace(10.0),
         theme::rgb(t.text_muted),
     );
-    for (lane, name) in [(v1, "V1"), (a1, "A1")] {
+    let mut heads_rows = vec![(v1, "V1"), (a1, "A1")];
+    if story.height() > 20.0 {
+        heads_rows.insert(0, (story, "Board"));
+    }
+    for (lane, name) in heads_rows {
         let row = Rect::from_min_max(
             pos2(heads.left(), lane.top()),
             pos2(heads.right(), lane.bottom()),

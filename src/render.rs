@@ -430,6 +430,7 @@ mod tests {
             rules: Rules::default(),
             finish,
             shots: vec![shot("A"), shot("B")],
+            comments: Vec::new(),
         }
     }
 

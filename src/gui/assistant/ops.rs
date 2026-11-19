@@ -445,6 +445,7 @@ pub(crate) mod tests {
                 })
                 .collect(),
             finish: Default::default(),
+            comments: Vec::new(),
         }
     }
 

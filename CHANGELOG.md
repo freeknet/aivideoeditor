@@ -24,6 +24,14 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   carries references, selection, playhead and matching skills (`agent/skills/`:
   beat-sync-reel, suggest-moments, fix-check, weekly-deliverables); `ave://` links in
   replies render as chips that select and show the shot, segment, range or bars.
+- Timeline works like Selects: plans as tabs above the tracks (unsaved dot, failed-check
+  count, close / reopen, rename, duplicate as new plan, `+` drafts one; a plan written by
+  the assistant or the CLI appears as a tab), review comments as `[[comment]]` in the plan
+  (`F` at the playhead, coloured pins in the ruler, a list to seek / edit / resolve /
+  delete, "Send to chat" hands every open comment with its `@shot` reference to the
+  assistant asking for a plan to approve), a read-only banner while
+  `plans/.lock-<name>` is held by a chat edit, and a storyboard lane of shot cards with
+  their notes grouped by song section.
 - Music tab: whole-track overview and FCP-style zoomed beat grid (sections, drops,
   song ranges, playhead), grid fixes (drag the downbeat, `,`/`.` beat, Shift 10 ms
   offset, tempo, `D` drop, rename sections, re-analyse), per-deliverable song ranges,

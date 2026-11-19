@@ -236,6 +236,7 @@ mod tests {
             rules: Rules::default(),
             shots: vec![shot("A", 4), shot("B", 2), shot("C", 2), shot("D", 4)],
             finish: Default::default(),
+            comments: Vec::new(),
         }
     }
 

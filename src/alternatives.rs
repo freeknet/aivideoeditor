@@ -399,6 +399,7 @@ mod tests {
                 shot("B", 45.0, "fire · fire"),
             ],
             finish: Default::default(),
+            comments: Vec::new(),
         }
     }
 

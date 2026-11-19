@@ -23,12 +23,23 @@
 //! the version menu. `A` on a shot ranks replacements that fit its slot
 //! ([`crate::alternatives`]); `1`–`8` swaps one in.
 //!
+//! Plans sit in tabs above the tracks ([`tabs`]), one per plan file, so a
+//! plan the assistant writes shows up as a tab to compare against. Review
+//! comments (`F`) are pinned to moments of the cut and handed to the chat
+//! as one batch ([`comments`]). While the assistant commits an edit it
+//! holds `plans/.lock-<name>` and the timeline goes read-only. A
+//! storyboard lane ([`storyboard`]) shows the plan as cards with their
+//! notes, grouped by song section.
+//!
 //! Layout and the rest of the region contract: `docs/GUI_CONTRACTS.md`;
 //! the spec this follows: `docs/research/02-ui-and-workflow.md` §3, §9.7.
 
+mod comments;
 mod edit;
 mod history;
+mod storyboard;
 mod strips;
+mod tabs;
 mod timeline;
 mod waveform;
 
@@ -56,6 +67,10 @@ const DISK_CHECK: Duration = Duration::from_secs(1);
 const PAGE_KEY: &str = "plan";
 /// Alternatives shown in the strip.
 const ALTERNATIVES: usize = 8;
+/// A lock file older than this is a crashed writer's and is ignored.
+const LOCK_STALE: Duration = Duration::from_secs(300);
+/// Width of the comments list beside the tracks.
+const COMMENTS_W: f32 = 300.0;
 
 /// The pointer tool.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -223,6 +238,28 @@ pub(crate) struct State {
     solo_music: bool,
     /// The note being typed for a shot.
     note_edit: Option<(usize, String)>,
+    /// The storyboard lane above V1.
+    storyboard: bool,
+    /// The comments list beside the tracks (Comment mode).
+    show_comments: bool,
+    /// Resolved comments shown in the list and the ruler.
+    show_resolved: bool,
+    /// The comment last clicked.
+    comment_sel: Option<usize>,
+    /// The comment whose note is being typed, and the text so far.
+    comment_edit: Option<(usize, String)>,
+    /// A comment whose text box takes focus on the next frame.
+    comment_focus: Option<usize>,
+    /// What is known about each plan file, for the tabs.
+    tab_info: BTreeMap<String, tabs::Info>,
+    /// Whether the plan files have been scanned once.
+    tabs_scanned: bool,
+    /// When the plan list and the lock were last checked.
+    last_tabs_check: Option<Instant>,
+    /// The rename / duplicate form, when open.
+    tab_form: Option<tabs::Form>,
+    /// The assistant holds the open plan's lock: read-only.
+    locked: bool,
 }
 
 /// Everything about the shown plan a frame needs, computed once.
@@ -363,6 +400,18 @@ fn mtime(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
+/// The lock the assistant holds on plan `name` while it commits an edit:
+/// `plans/.lock-<name>`. Its presence makes the timeline read-only.
+pub(crate) fn lock_path(work: &Path, name: &str) -> PathBuf {
+    work.join("plans").join(format!(".lock-{name}"))
+}
+
+/// Whether the lock at `path` is held: the file exists and is younger than
+/// [`LOCK_STALE`] at `now` (an older one is a crashed writer's).
+fn lock_active(path: &Path, now: SystemTime) -> bool {
+    mtime(path).is_some_and(|m| now.duration_since(m).map_or(true, |age| age < LOCK_STALE))
+}
+
 /// Whether a problem is structural (an error) rather than a content rule
 /// the plan bends (a warning). `ave check` fails on both.
 fn is_error(p: &Problem) -> bool {
@@ -429,7 +478,7 @@ impl State {
     /// Applies an edit to the open plan; records it for undo and autosave
     /// when it changed something.
     fn apply(&mut self, label: impl Into<String>, f: impl FnOnce(&mut Plan) -> bool) -> bool {
-        if self.viewing.is_some() {
+        if self.viewing.is_some() || self.locked {
             return false;
         }
         let Some(plan) = self.plan.as_mut() else {
@@ -462,7 +511,7 @@ impl State {
 
     /// Steps back.
     fn undo(&mut self) {
-        if self.viewing.is_some() {
+        if self.viewing.is_some() || self.locked {
             return;
         }
         if let Some(plan) = self.plan.as_mut()
@@ -474,7 +523,7 @@ impl State {
 
     /// Steps forward.
     fn redo(&mut self) {
-        if self.viewing.is_some() {
+        if self.viewing.is_some() || self.locked {
             return;
         }
         if let Some(plan) = self.plan.as_mut()
@@ -524,6 +573,10 @@ impl State {
         self.anchor = None;
         self.drag = None;
         self.note_edit = None;
+        self.comment_edit = None;
+        self.comment_sel = None;
+        self.comment_focus = None;
+        self.locked = lock_active(&lock_path(&project.work, name), SystemTime::now());
         self.view.fit = true;
         self.disk_stamp = mtime(&path);
         self.versions = history::list(&project.work, name);
@@ -603,8 +656,13 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
     housekeeping(state, project, jobs, player);
     ui.spacing_mut().item_spacing = egui::vec2(6.0, 4.0);
 
-    header(state, project, jobs, player, palette, ui);
+    tabs::strip(state, project, player, palette, actions, ui);
+    header(state, project, jobs, palette, ui);
     draft_window(state, project, jobs, palette, ui.ctx());
+    tabs::form_window(state, project, player, palette, ui.ctx());
+    if state.locked {
+        lock_banner(palette, ui);
+    }
 
     let Some(map) = project.music.as_ref() else {
         empty(
@@ -662,7 +720,7 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
         total: map.beat_time(shown_plan.end_bar, 0) - origin,
         sel: selected(selection, &name, shown_plan.shots.len()),
         issues,
-        editable: state.viewing.is_none(),
+        editable: state.viewing.is_none() && !state.locked,
         seq,
         music,
         ours,
@@ -687,8 +745,22 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
         strips::viewing_banner(state, &s, ui, n, &saved, &change);
     }
 
-    // Rows, bottom up: check bar, selection bar or alternatives, tracks.
-    let full = ui.available_rect_before_wrap();
+    // Rows, bottom up: check bar, selection bar or alternatives, tracks;
+    // the comments list, when open, takes the right-hand side.
+    let whole = ui.available_rect_before_wrap();
+    let side_w = if state.show_comments {
+        COMMENTS_W.min(whole.width() * 0.4)
+    } else {
+        0.0
+    };
+    let full = egui::Rect::from_min_max(
+        whole.min,
+        egui::pos2(
+            whole.right() - side_w - if side_w > 0.0 { 4.0 } else { 0.0 },
+            whole.bottom(),
+        ),
+    );
+    let side = egui::Rect::from_min_max(egui::pos2(whole.right() - side_w, whole.top()), whole.max);
     let check_h = 22.0;
     let sel_h = 30.0;
     let alts_h = if state.alts.is_some() { 92.0 } else { 0.0 };
@@ -705,16 +777,19 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
         egui::pos2(full.left(), y + 2.0),
         egui::vec2(full.width(), check_h),
     );
-    ui.allocate_rect(full, egui::Sense::hover());
+    ui.allocate_rect(whole, egui::Sense::hover());
 
     timeline::tracks(state, &s, &mut io, ui, tracks);
+    if side_w > 0.0 {
+        comments::panel(state, &s, &mut io, ui, side);
+    }
     strips::selection_bar(state, &s, &mut io, ui, sel_rect);
     if state.alts.is_some() {
         strips::alternatives(state, &s, &mut io, ui, alts_rect);
     }
     strips::check_bar(state, &s, &mut io, ui, check_rect);
 
-    if keys_free && (hovered || !s.sel.is_empty()) {
+    if keys_free && (hovered || state.show_comments || !s.sel.is_empty()) {
         keys(state, &s, &mut io, ui, hovered);
     }
 
@@ -745,8 +820,34 @@ fn housekeeping(
         *state = State {
             work: Some(project.work.clone()),
             waves: std::mem::take(&mut state.waves),
+            storyboard: page_flag(project, "storyboard"),
+            show_comments: page_flag(project, "comments"),
             ..State::default()
         };
+    }
+    // The plan list (a plan written elsewhere becomes a tab) and the lock.
+    if state
+        .last_tabs_check
+        .is_none_or(|t| t.elapsed() >= DISK_CHECK)
+    {
+        state.last_tabs_check = Some(Instant::now());
+        tabs::refresh(state, project);
+        let locked = state
+            .name
+            .as_deref()
+            .is_some_and(|n| lock_active(&lock_path(&project.work, n), SystemTime::now()));
+        if locked != state.locked {
+            state.locked = locked;
+            state.drag = None;
+            state.comment_edit = None;
+            state.status = if locked {
+                "chat is editing this plan".to_owned()
+            } else {
+                "chat finished editing".to_owned()
+            };
+            // Pick up what the assistant wrote as soon as it lets go.
+            state.last_disk_check = None;
+        }
     }
     // A finished draft: record it and open it.
     if let Some((id, name)) = state.pending_job.clone()
@@ -795,6 +896,7 @@ fn housekeeping(
     if let Some((at, _)) = &state.dirty
         && at.elapsed().as_secs_f32() >= AUTOSAVE_AFTER
         && state.drag.is_none()
+        && !state.locked
     {
         state.save(project);
     }
@@ -830,47 +932,11 @@ fn header(
     state: &mut State,
     project: &mut Project,
     jobs: &crate::jobs::Jobs,
-    player: &mut Player,
     palette: &Palette,
     ui: &mut egui::Ui,
 ) {
     let muted = theme::rgb(palette.text_muted);
     ui.horizontal(|ui| {
-        ui.label(
-            egui::RichText::new("TIMELINE")
-                .size(10.5)
-                .strong()
-                .color(muted),
-        );
-        let stems: Vec<String> = project
-            .plans
-            .iter()
-            .filter_map(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
-            .collect();
-        let current = state.name.clone().unwrap_or_else(|| "no plan".to_owned());
-        let mut pick = None;
-        egui::ComboBox::from_id_salt("plan_picker")
-            .selected_text(egui::RichText::new(&current).strong())
-            .width(130.0)
-            .show_ui(ui, |ui| {
-                for stem in &stems {
-                    if ui
-                        .selectable_label(Some(stem) == state.name.as_ref(), stem)
-                        .clicked()
-                    {
-                        pick = Some(stem.clone());
-                    }
-                }
-            })
-            .response
-            .on_hover_text("The plan on the timeline (plans/<name>.toml)");
-        if let Some(name) = pick
-            && Some(&name) != state.name.as_ref()
-        {
-            state.open(project, &name);
-            open_in_player(state, project, player);
-        }
-
         // Versions.
         let label = match (&state.viewing, state.versions.last()) {
             (Some(v), _) => format!("viewing v{}", v.version.n),
@@ -926,29 +992,10 @@ fn header(
             .response
             .on_hover_text("Versions: every save keeps a numbered copy");
         });
-        let busy = state.pending_job.is_some();
-        if ui
-            .add_enabled(
-                !busy,
-                egui::Button::new(if busy { "Drafting…" } else { "Draft new…" }),
-            )
-            .on_hover_text("Lay out a new plan on the beat grid from the shot log")
-            .clicked()
-        {
-            let aspect = state.plan.as_ref().map_or(Aspect::Vertical, |p| p.aspect);
-            state.draft = Some(DraftForm {
-                name: String::new(),
-                aspect,
-                seconds: 30.0,
-                end_card: end_card_for(project, aspect),
-                card_bars: 2,
-                error: None,
-            });
-        }
         if jobs
             .running()
             .any(|j| matches!(j.cmd, crate::commands::Cmd::Plan { .. }))
-            && !busy
+            && state.pending_job.is_none()
         {
             ui.spinner();
         }
@@ -957,7 +1004,7 @@ fn header(
         // Aspect of the open plan (an edit).
         if let Some(plan) = state.plan.clone() {
             let mut aspect = plan.aspect;
-            let editable = state.viewing.is_none();
+            let editable = state.viewing.is_none() && !state.locked;
             ui.add_enabled_ui(editable, |ui| {
                 egui::ComboBox::from_id_salt("plan_aspect")
                     .selected_text(aspect_key(aspect))
@@ -1016,6 +1063,34 @@ fn header(
             {
                 state.undo();
             }
+            ui.separator();
+            let open = state
+                .plan
+                .as_ref()
+                .map_or(0, |p| p.comments.iter().filter(|c| !c.resolved).count());
+            let label = if open > 0 {
+                format!("Comments {open}")
+            } else {
+                "Comments".to_owned()
+            };
+            if ui
+                .selectable_label(state.show_comments, label)
+                .on_hover_text(
+                    "Comment mode: the list of review comments; F adds one at the playhead",
+                )
+                .clicked()
+            {
+                state.show_comments = !state.show_comments;
+                set_page_flag(project, "comments", state.show_comments);
+            }
+            if ui
+                .selectable_label(state.storyboard, "Storyboard")
+                .on_hover_text("Shot cards with their notes above V1, grouped by song section")
+                .clicked()
+            {
+                state.storyboard = !state.storyboard;
+                set_page_flag(project, "storyboard", state.storyboard);
+            }
             let saving = state.dirty.is_some();
             ui.label(
                 egui::RichText::new(if saving {
@@ -1033,6 +1108,65 @@ fn header(
                 }),
             );
         });
+    });
+}
+
+/// A boolean page option from the night's settings.
+fn page_flag(project: &Project, key: &str) -> bool {
+    project
+        .settings
+        .pages
+        .get(PAGE_KEY)
+        .and_then(|t| t.get(key))
+        .and_then(toml::Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// Stores a boolean page option.
+fn set_page_flag(project: &mut Project, key: &str, on: bool) {
+    project
+        .settings
+        .pages
+        .entry(PAGE_KEY.to_owned())
+        .or_default()
+        .insert(key.to_owned(), toml::Value::Boolean(on));
+    let _ = project.save_settings();
+}
+
+/// The banner over the tracks while the assistant holds the plan's lock.
+fn lock_banner(palette: &Palette, ui: &mut egui::Ui) {
+    egui::Frame::new()
+        .fill(theme::translucent(palette.accent, 36))
+        .stroke(egui::Stroke::new(
+            1.0,
+            theme::translucent(palette.accent, 140),
+        ))
+        .corner_radius(egui::CornerRadius::same(4))
+        .inner_margin(egui::Margin::symmetric(8, 3))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(
+                    egui::RichText::new(
+                        "Chat is editing this plan. The timeline is read-only until it finishes.",
+                    )
+                    .size(11.5)
+                    .color(theme::rgb(palette.text)),
+                );
+            });
+        });
+}
+
+/// Opens the "Draft new…" form, shaped like the open plan.
+fn open_draft_form(state: &mut State, project: &Project) {
+    let aspect = state.plan.as_ref().map_or(Aspect::Vertical, |p| p.aspect);
+    state.draft = Some(DraftForm {
+        name: String::new(),
+        aspect,
+        seconds: 30.0,
+        end_card: end_card_for(project, aspect),
+        card_bars: 2,
+        error: None,
     });
 }
 
@@ -1257,6 +1391,10 @@ fn keys(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &egui::Ui, hovere
         state.redo();
     }
     let plain = |key: Key| ui.input(|i| i.key_pressed(key) && i.modifiers.is_none());
+    // F: a comment at the playhead (over the timeline or in Comment mode).
+    if (hovered || state.show_comments) && plain(Key::F) {
+        comments::add_at_playhead(state, s, io);
+    }
     if plain(Key::Delete) || plain(Key::Backspace) {
         lift_selected(state, s, io);
     }
@@ -1310,7 +1448,28 @@ fn keys(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &egui::Ui, hovere
 
 #[cfg(test)]
 mod tests {
-    use super::{is_error, selected, valid_name};
+    use super::{LOCK_STALE, is_error, lock_active, lock_path, selected, valid_name};
+
+    #[test]
+    fn the_assistant_lock_is_a_fresh_file() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = lock_path(dir.path(), "reel-30");
+        assert!(
+            path.ends_with("plans/.lock-reel-30"),
+            "beside the plan, hidden from the plan list: {}",
+            path.display()
+        );
+        let now = std::time::SystemTime::now();
+        assert!(!lock_active(&path, now), "no file, no lock");
+        std::fs::create_dir_all(dir.path().join("plans"))?;
+        std::fs::write(&path, "")?;
+        assert!(lock_active(&path, now), "a fresh file locks");
+        assert!(
+            !lock_active(&path, now + LOCK_STALE + std::time::Duration::from_secs(1)),
+            "a stale one (crashed writer) does not"
+        );
+        Ok(())
+    }
     use crate::plan::Problem;
     use crate::refs::{Reference, Target};
 
