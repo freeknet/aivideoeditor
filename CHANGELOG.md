@@ -13,6 +13,13 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ### Added
 
 - Project scaffolded with create-rust-app.
+- Viewer: real decoded playback (an ffmpeg decoder thread per shot into a frame ring,
+  next shot pre-rolled so cuts land on time) with sound through cpal as the master
+  clock (a cut plays its music from the plan's offset; clips their own sound; silent
+  fallback with no device); 16:9 / 9:16 / 4:5 framing around `cx` with a full-frame
+  mode, safe-area and TikTok/Reels zone guides, an info overlay (Ctrl+Shift+I), a
+  timecode transport with I/O range, loop and volume, J/K/L shuttle, frame steps, and
+  Alt+R to reference the marked range or frame in chat.
 - `ave index`: per-clip analysis over ffmpeg (exposure, focus, fire / LED / white
   emitters, motion-compensated moving light, camera pan and zoom by block matching,
   colour cuts), segmentation by camera behaviour, shoot-relative scores and flags,

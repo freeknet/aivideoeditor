@@ -134,7 +134,8 @@ fn shortcuts(ui: &Ui, actions: &mut Vec<Action>) {
         if command && input.key_pressed(Key::E) {
             actions.push(Action::ToggleExport);
         }
-        if command && input.key_pressed(Key::I) {
+        // Ctrl+Shift+I is the viewer's info overlay.
+        if command && !input.modifiers.shift && input.key_pressed(Key::I) {
             actions.push(Action::ToggleInspector);
         }
         if command && input.key_pressed(Key::J) {
