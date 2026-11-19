@@ -13,6 +13,17 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ### Added
 
 - Project scaffolded with create-rust-app.
+- Assistant chat panel: a conversation per plan (`<work>/chat/<plan>.jsonl`) with
+  Claude (Messages API, streamed, adaptive thinking, prompt caching; key from
+  `ANTHROPIC_API_KEY` or the panel settings) or a local llama.cpp server as the offline
+  fallback. Reference chips and an `@` autocomplete with intent prefixes, scope chips
+  (whole plan / selected shots / before / from the drop) enforced on every edit, tools
+  over the shot log, and edits only as proposal cards: each operation before → after
+  with thumbnails and its reason, the predicted `check`, apply all or some, preview in
+  the viewer, discard. Applying writes `plans/.history/<plan>/v<N>.toml`; History lists
+  applied proposals and versions to play or restore. Clarifying questions come back as
+  answer buttons; an optional per-night setting applies proposals that keep the check
+  clean.
 - `ave index`: per-clip analysis over ffmpeg (exposure, focus, fire / LED / white
   emitters, motion-compensated moving light, camera pan and zoom by block matching,
   colour cuts), segmentation by camera behaviour, shoot-relative scores and flags,
