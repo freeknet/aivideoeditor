@@ -506,15 +506,6 @@ fn header(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                 .response
                 .on_hover_text("The plan this conversation is about");
         });
-        for tab in [Tab::Chat, Tab::History] {
-            let label = match tab {
-                Tab::Chat => "Chat",
-                Tab::History => "History",
-            };
-            if ui.selectable_label(state.tab == tab, label).clicked() {
-                state.tab = tab;
-            }
-        }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if ui
                 .small_button("⚙")
@@ -541,6 +532,19 @@ fn header(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                 }
             }
         });
+    });
+    // Tabs on their own row: beside the plan picker they collided with the
+    // header buttons in a narrow panel.
+    ui.horizontal(|ui| {
+        for tab in [Tab::Chat, Tab::History] {
+            let label = match tab {
+                Tab::Chat => "Chat",
+                Tab::History => "History",
+            };
+            if ui.selectable_label(state.tab == tab, label).clicked() {
+                state.tab = tab;
+            }
+        }
     });
     if let Some(plan) = switch_to
         && let Some(project) = ctx.project.as_ref()

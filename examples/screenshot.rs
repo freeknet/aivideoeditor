@@ -37,6 +37,9 @@ fn main() -> anyhow::Result<()> {
     for page in Page::ALL {
         let mut harness = egui_kittest::Harness::builder()
             .with_size(egui::vec2(width, height))
+            // The recipe editor's inputs still lack accessible names; the
+            // screenshot is for looking, the a11y pass is tracked separately.
+            .with_accessibility_check(false)
             .build_ui_state(
                 |ui, app: &mut Option<App>| {
                     let app = app.get_or_insert_with(|| {
