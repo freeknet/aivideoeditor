@@ -3,7 +3,7 @@
 // Description:  `ave mcp`: the engine as Model Context Protocol tools over
 //               stdio, so an agent (Claude Code) can work inside a night.
 //
-// Dependencies: serde_json, image (JPEG contact sheets); crate::{project,
+// Dependencies: serde_json, toml, image (JPEG contact sheets); crate::{project,
 //               search, plan, draft, alternatives, refs, media}
 // ============================================================================
 
@@ -37,6 +37,22 @@ use crate::project::Project;
 
 /// The protocol revision this server speaks.
 const PROTOCOL: &str = "2025-06-18";
+
+/// The `[pages]` table in `ave.toml` that holds the assistant's options.
+pub(crate) const PAGE_KEY: &str = "assistant";
+
+/// The per-night option that lets the agent save edits itself.
+pub(crate) const ALLOW_COMMIT: &str = "allow_commit";
+
+/// Who is calling a tool: the agent, whose saves the person must allow, or
+/// the person (Apply on a card), who may always save.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Caller {
+    /// The model.
+    Agent,
+    /// The person, through the panel.
+    Person,
+}
 
 /// Serves MCP on stdin/stdout until stdin closes.
 pub(crate) fn serve(work: &Path) -> Result<()> {
@@ -84,7 +100,7 @@ fn handle(work: &Path, msg: &Value) -> Option<Value> {
         "tools/call" => {
             let name = msg["params"]["name"].as_str().unwrap_or_default();
             let args = msg["params"]["arguments"].clone();
-            Ok(match call(work, name, &args) {
+            Ok(match call(work, name, &args, Caller::Agent) {
                 Ok(content) => json!({"content": content, "isError": false}),
                 Err(e) => {
                     json!({"content": [{"type": "text", "text": format!("{e:#}")}], "isError": true})
@@ -107,10 +123,29 @@ decision depends on the picture. Plans are storyboards on the music's beat grid:
 check; plan_edit applies ops to a working copy and returns the diff and check without saving until commit:true; \
 alternatives ranks replacements for a slot. Rules: no repeated shots or performers, best moments only, the drop on \
 the hero fire shot, no slow motion or digital zoom. You own the editorial decisions; say why for each shot in its \
-note. Every commit is a new version (plan_versions, plan_revert).";
+note. A commit needs the base_version plan_get returned and is refused unless the person allowed the assistant to \
+apply edits; otherwise stage and let them apply. Every commit is a new version (plan_versions, plan_revert).";
+
+/// The tool definitions in the Messages API's shape (`input_schema`), for
+/// the in-process loop: the same tools Claude Code sees over MCP.
+pub(crate) fn api_tools() -> Value {
+    Value::Array(
+        tools()
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .map(|t| {
+                        json!({"name": t["name"], "description": t["description"],
+                            "input_schema": t["inputSchema"]})
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+    )
+}
 
 /// The tool definitions.
-fn tools() -> Value {
+pub(crate) fn tools() -> Value {
     let ops_schema = json!({
         "type": "array",
         "description": "Edits, applied in order; slots are 1-based and each op sees the plan as earlier ops left it.",
@@ -134,11 +169,13 @@ fn tools() -> Value {
             "width": {"type": "integer", "default": 320}}}},
         {"name": "music_map", "description": "The track: bpm, bars with energy (low end, rms), sections, drop candidates (strongest first), song ranges.",
          "inputSchema": {"type": "object", "properties": {}}},
-        {"name": "plan_get", "description": "A plan: bars, aspect, every shot with its time on the cut, beats, clip, in-point, crop, who and note, plus the rule-check problems.",
+        {"name": "plan_get", "description": "A plan: bars, aspect, every shot with its time on the cut, beats, clip, in-point, crop, who and note, plus the rule-check problems and its version (for base_version).",
          "inputSchema": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}}}},
-        {"name": "plan_edit", "description": "Apply edit ops to a plan's working copy. Returns the diff and the rule check (new problems, problems fixed). Saves a new version only with commit:true.",
+        {"name": "plan_edit", "description": "Apply edit ops to a plan's working copy. Returns the diff, the rule check (new problems, problems fixed) and the base_version. Without commit the edit is staged: the person sees it as a card and applies it. commit:true saves a new version, only when the person allowed the assistant to apply edits and only if base_version still matches the plan file.",
          "inputSchema": {"type": "object", "required": ["name", "ops", "reason"], "properties": {
-            "name": {"type": "string"}, "ops": ops_schema, "reason": {"type": "string"}, "commit": {"type": "boolean", "default": false}}}},
+            "name": {"type": "string"}, "ops": ops_schema, "reason": {"type": "string", "description": "One sentence: what changes and why (the card's title)."},
+            "commit": {"type": "boolean", "default": false},
+            "base_version": {"type": "string", "description": "The version plan_get or the staged plan_edit returned; required with commit."}}}},
         {"name": "plan_draft", "description": "Draft a plan from the shot log and the music (hook, breakdown, build, hero on the drop, phrase pacing, finale). Returns it with its check; saves only with commit:true.",
          "inputSchema": {"type": "object", "required": ["name"], "properties": {
             "name": {"type": "string"}, "aspect": {"type": "string", "enum": ["9x16", "4x5", "16x9"], "default": "9x16"},
@@ -159,8 +196,8 @@ fn text(s: impl Into<String>) -> Vec<Value> {
     vec![json!({"type": "text", "text": s.into()})]
 }
 
-/// Runs one tool.
-fn call(work: &Path, name: &str, args: &Value) -> Result<Vec<Value>> {
+/// Runs one tool for `caller`; the content blocks of its result.
+pub(crate) fn call(work: &Path, name: &str, args: &Value, caller: Caller) -> Result<Vec<Value>> {
     let project = Project::open(work)?;
     match name {
         "night_overview" => Ok(text(overview(&project))),
@@ -169,8 +206,8 @@ fn call(work: &Path, name: &str, args: &Value) -> Result<Vec<Value>> {
         "look" => look(&project, args),
         "music_map" => music(&project),
         "plan_get" => plan_get(&project, args),
-        "plan_edit" => plan_edit(&project, args),
-        "plan_draft" => plan_draft(&project, args),
+        "plan_edit" => plan_edit(&project, args, caller),
+        "plan_draft" => plan_draft(&project, args, caller),
         "alternatives" => alternatives(&project, args),
         "plan_versions" => {
             let name = str_arg(args, "name")?;
@@ -187,6 +224,7 @@ fn call(work: &Path, name: &str, args: &Value) -> Result<Vec<Value>> {
         "plan_revert" => {
             let name = str_arg(args, "name")?;
             let n = args["version"].as_u64().context("version is required")? as usize;
+            gate(&project, caller, "the revert")?;
             let v = store::versions(&project.work, name)
                 .into_iter()
                 .find(|v| v.n == n)
@@ -424,17 +462,92 @@ fn describe_plan(p: &Project, plan: &Plan) -> String {
 /// `plan_get`.
 fn plan_get(p: &Project, args: &Value) -> Result<Vec<Value>> {
     let name = str_arg(args, "name")?;
-    let plan = Plan::load(&plan_path(p, name))?;
-    Ok(text(describe_plan(p, &plan)))
+    let path = plan_path(p, name);
+    let plan = Plan::load(&path)?;
+    let mut s = describe_plan(p, &plan);
+    s.push_str(&format!(
+        "version: {} (pass as base_version to plan_edit)\n",
+        plan_version(&path)?
+    ));
+    Ok(text(s))
+}
+
+/// A plan file's version: a hash of its bytes, so any change to the file
+/// (by the person, the timeline or another agent) gives a new one.
+pub(crate) fn plan_version(path: &Path) -> Result<String> {
+    let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    Ok(version_of(&bytes))
+}
+
+/// FNV-1a, 64 bits, as hex.
+fn version_of(bytes: &[u8]) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in bytes {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{h:016x}")
+}
+
+/// Whether the person lets the agent save edits in this night
+/// (`[pages.assistant] allow_commit` in `ave.toml`, the panel's "Let the
+/// assistant apply edits").
+pub(crate) fn commits_allowed(p: &Project) -> bool {
+    p.settings
+        .pages
+        .get(PAGE_KEY)
+        .and_then(|t| t.get(ALLOW_COMMIT))
+        .and_then(toml::Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// Refuses a save the person has not allowed.
+fn gate(p: &Project, caller: Caller, what: &str) -> Result<()> {
+    match caller {
+        Caller::Person => Ok(()),
+        Caller::Agent if commits_allowed(p) => Ok(()),
+        Caller::Agent => anyhow::bail!(
+            "COMMIT_REFUSED: {what} was not saved. The person has not turned on \"Let the \
+             assistant apply edits\" for this night, so stage the edit (plan_edit without commit) \
+             and let them apply it from the card."
+        ),
+    }
+}
+
+/// What a `plan_edit` did.
+struct Edited {
+    /// The report for the agent.
+    text: String,
+    /// The version saved, when it committed.
+    saved: Option<usize>,
 }
 
 /// `plan_edit`: working copy, diff and check; saves only with commit.
-fn plan_edit(p: &Project, args: &Value) -> Result<Vec<Value>> {
+fn plan_edit(p: &Project, args: &Value, caller: Caller) -> Result<Vec<Value>> {
+    Ok(text(edit(p, args, caller)?.text))
+}
+
+/// Applies a `plan_edit` call.
+fn edit(p: &Project, args: &Value, caller: Caller) -> Result<Edited> {
     let name = str_arg(args, "name")?;
     let reason = args["reason"].as_str().unwrap_or("edit");
+    let commit = args["commit"].as_bool().unwrap_or(false);
     let edit_ops: Vec<ops::EditOp> =
         serde_json::from_value(args["ops"].clone()).context("`ops` does not match the schema")?;
-    let base = Plan::load(&plan_path(p, name))?;
+    let path = plan_path(p, name);
+    let version = plan_version(&path)?;
+    if commit {
+        gate(p, caller, "the edit")?;
+        let based = args["base_version"].as_str().context(
+            "a commit needs base_version: the version plan_get or the staged plan_edit returned",
+        )?;
+        anyhow::ensure!(
+            based == version,
+            "STALE: {name} changed since you read it (it is now version {version}, you based the \
+             edit on {based}); call plan_get, re-stage the edit and commit again"
+        );
+    }
+    let base = Plan::load(&path)?;
     let night = ops::Night {
         index: p.index.as_ref(),
         people: &p.people,
@@ -473,21 +586,44 @@ fn plan_edit(p: &Project, args: &Value) -> Result<Vec<Value>> {
     for pr in &new {
         s.push_str(&format!("  new: shot {}: {}\n", pr.shot, pr.message));
     }
-    if args["commit"].as_bool().unwrap_or(false) {
-        if store::versions(&p.work, name).is_empty() {
-            store::save_version(&p.work, name, &base, "original")?;
-        }
+    let mut saved = None;
+    if commit {
         let v = store::save_version(&p.work, name, &edited, reason)?;
-        edited.save(&plan_path(p, name))?;
-        s.push_str(&format!("committed as v{v}\n"));
+        saved = Some(v);
+        s.push_str(&format!(
+            "committed as v{v}; version now {}\n",
+            plan_version(&path)?
+        ));
     } else {
-        s.push_str("not saved (working copy); call again with commit:true to save\n");
+        s.push_str(&format!(
+            "staged, not saved: the person sees it as a card to apply. base_version: {version}\n"
+        ));
     }
-    Ok(text(s))
+    Ok(Edited { text: s, saved })
+}
+
+/// Commits ops the person applied from a card: the same path as the agent's
+/// `plan_edit` with `commit`, with the same stale-version check. Returns the
+/// version saved.
+pub(crate) fn commit_edit(
+    work: &Path,
+    name: &str,
+    edit_ops: &[ops::EditOp],
+    reason: &str,
+    base_version: &str,
+) -> Result<usize> {
+    let project = Project::open(work)?;
+    let args = json!({
+        "name": name, "ops": edit_ops, "reason": reason, "commit": true,
+        "base_version": base_version,
+    });
+    edit(&project, &args, Caller::Person)?
+        .saved
+        .context("the edit was not saved")
 }
 
 /// `plan_draft`.
-fn plan_draft(p: &Project, args: &Value) -> Result<Vec<Value>> {
+fn plan_draft(p: &Project, args: &Value, caller: Caller) -> Result<Vec<Value>> {
     let index = p.index.as_ref().context("the night is not indexed yet")?;
     let music = p.music.as_ref().context("the music is not mapped yet")?;
     let name = str_arg(args, "name")?;
@@ -519,6 +655,10 @@ fn plan_draft(p: &Project, args: &Value) -> Result<Vec<Value>> {
     let mut s = describe_plan(p, &plan);
     if args["commit"].as_bool().unwrap_or(false) {
         let path = plan_path(p, name);
+        // A new plan overwrites nothing; redrafting one that exists does.
+        if path.exists() {
+            gate(p, caller, "the redraft")?;
+        }
         if path.exists()
             && let Ok(old) = Plan::load(&path)
             && store::versions(&p.work, name).is_empty()
@@ -626,7 +766,7 @@ fn look(p: &Project, args: &Value) -> Result<Vec<Value>> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::{handle, tools};
     use serde_json::json;
 
@@ -657,6 +797,113 @@ mod tests {
             n,
             tools().as_array().map_or(0, Vec::len),
             "every tool listed"
+        );
+        Ok(())
+    }
+
+    /// A night folder holding plan `t` with `n` shots.
+    pub(crate) fn night(n: usize) -> anyhow::Result<tempfile::TempDir> {
+        let dir = tempfile::tempdir()?;
+        std::fs::create_dir_all(dir.path().join("plans"))?;
+        crate::gui::assistant::ops::tests::plan(n).save(&dir.path().join("plans/t.toml"))?;
+        Ok(dir)
+    }
+
+    fn first_text(content: &[serde_json::Value]) -> String {
+        content
+            .first()
+            .and_then(|c| c["text"].as_str())
+            .unwrap_or_default()
+            .to_owned()
+    }
+
+    #[test]
+    fn commits_need_permission_and_a_fresh_base() -> anyhow::Result<()> {
+        use super::{Caller, call};
+        let dir = night(3)?;
+        let work = dir.path();
+        let ops = json!([{"op": "set_note", "index": 2, "note": "better"}]);
+        let staged = call(
+            work,
+            "plan_edit",
+            &json!({"name": "t", "ops": ops, "reason": "note"}),
+            Caller::Agent,
+        )?;
+        let staged = first_text(&staged);
+        let base = staged
+            .split("base_version: ")
+            .nth(1)
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_owned();
+        assert_eq!(base.len(), 16, "staged edits report the version: {staged}");
+        let got = first_text(&call(
+            work,
+            "plan_get",
+            &json!({"name": "t"}),
+            Caller::Agent,
+        )?);
+        assert!(
+            got.contains(&base),
+            "plan_get reports the same version: {got}"
+        );
+
+        let commit = json!({"name": "t", "ops": ops, "reason": "note", "commit": true, "base_version": base});
+        let refused = call(work, "plan_edit", &commit, Caller::Agent);
+        assert!(
+            refused
+                .as_ref()
+                .is_err_and(|e| e.to_string().contains("COMMIT_REFUSED")),
+            "the agent may not commit by default: {refused:?}"
+        );
+        let stale = json!({"name": "t", "ops": ops, "reason": "note", "commit": true, "base_version": "0000000000000000"});
+        let refused = call(work, "plan_edit", &stale, Caller::Person);
+        assert!(
+            refused
+                .as_ref()
+                .is_err_and(|e| e.to_string().contains("STALE")),
+            "a stale base is refused: {refused:?}"
+        );
+
+        std::fs::write(
+            work.join("ave.toml"),
+            "[pages.assistant]\nallow_commit = true\n",
+        )?;
+        let done = first_text(&call(work, "plan_edit", &commit, Caller::Agent)?);
+        assert!(
+            done.contains("committed as v2"),
+            "allowed commit saves: {done}"
+        );
+        let again = call(work, "plan_edit", &commit, Caller::Agent);
+        assert!(
+            again.is_err(),
+            "the same base cannot commit twice: the plan moved"
+        );
+        let ops_typed: Vec<crate::gui::assistant::ops::EditOp> =
+            serde_json::from_value(json!([{"op": "set_note", "index": 1, "note": "x"}]))?;
+        let base = super::plan_version(&work.join("plans/t.toml"))?;
+        let v = super::commit_edit(work, "t", &ops_typed, "from a card", &base)?;
+        assert_eq!(v, 3, "the card's Apply takes the same path");
+        Ok(())
+    }
+
+    #[test]
+    fn api_tools_mirror_the_mcp_tools() -> anyhow::Result<()> {
+        let api = super::api_tools();
+        let names = |v: &serde_json::Value| -> Vec<String> {
+            v.as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|t| t["name"].as_str().map(str::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        assert_eq!(names(&api), names(&tools()), "same tools, same order");
+        assert!(
+            api.as_array()
+                .is_some_and(|a| a.iter().all(|t| t["input_schema"]["type"] == "object")),
+            "Messages API shape"
         );
         Ok(())
     }

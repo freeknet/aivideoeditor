@@ -175,6 +175,10 @@ pub(crate) struct Proposal {
     pub(crate) ops: Vec<EditOp>,
     /// The plan the ops apply to, as it was when proposed.
     pub(crate) base: Plan,
+    /// The plan file's version when proposed (`crate::mcp::plan_version`);
+    /// Apply refuses if the file moved since. Empty for old proposals.
+    #[serde(default)]
+    pub(crate) base_version: String,
     /// When.
     pub(crate) ts: u64,
 }
@@ -215,6 +219,17 @@ pub(crate) enum LogLine {
         /// Input tokens read from the prompt cache.
         #[serde(default)]
         cached_tokens: u64,
+        /// What the turn cost, when the runtime reports it (Claude Code).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cost_usd: Option<f64>,
+    },
+    /// An image a tool returned (a `look` contact sheet), saved beside the
+    /// log and shown under the call.
+    Image {
+        /// The call it came from.
+        tool_use_id: String,
+        /// The file, relative to the chat folder.
+        file: String,
     },
     /// Something went wrong (shown, not sent).
     Notice {
@@ -262,7 +277,8 @@ pub(crate) fn messages(log: &[LogLine]) -> Vec<Msg> {
             LogLine::Proposal { .. }
             | LogLine::Status { .. }
             | LogLine::Turn { .. }
-            | LogLine::Notice { .. } => None,
+            | LogLine::Notice { .. }
+            | LogLine::Image { .. } => None,
         })
         .collect()
 }
@@ -277,7 +293,8 @@ pub(crate) fn status_of(log: &[LogLine], id: &str) -> Status {
             | LogLine::Proposal { .. }
             | LogLine::Status { .. }
             | LogLine::Turn { .. }
-            | LogLine::Notice { .. } => None,
+            | LogLine::Notice { .. }
+            | LogLine::Image { .. } => None,
         })
         .unwrap_or(Status::Pending)
 }

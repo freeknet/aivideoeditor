@@ -1,78 +1,73 @@
 // ============================================================================
 // Module:       gui::assistant::tools
-// Description:  The tools the model may call (search the shot log, read a
-//               segment or the plan, propose an edit, ask the person), their
-//               JSON schemas, and running them against a snapshot of the night.
+// Description:  The tools the in-process loop offers: the `ave mcp` tool set
+//               (run in-process through `crate::mcp`) plus `ask_user`, with
+//               staged plan edits turned into proposal cards.
 //
-// Dependencies: serde_json; super::{context, ops, model}; crate::{plan, index}
+// Dependencies: serde_json; super::{ops, model, provider}; crate::{mcp, plan}
 // ============================================================================
 
 //! Tools.
 //!
-//! The tools run on the worker thread against an [`Env`]: a snapshot of the
-//! night taken when the message was sent, so the person can keep working
-//! while the model thinks. None of them changes anything on disk:
-//! `propose_edit` validates the operations on a copy of the plan, predicts
-//! the rule check and hands the proposal to the panel as a diff card.
+//! The Claude API and local providers see exactly the tools Claude Code sees
+//! over MCP ([`crate::mcp::api_tools`]), run by the same code
+//! ([`crate::mcp::call`]), plus `ask_user`, which only an in-process loop can
+//! serve. A `plan_edit` without `commit` comes back as a proposal card; one
+//! with `commit` is refused unless the person allowed the assistant to apply
+//! edits, and then shows up as an applied, revertible card.
+//!
+//! Calls run on the worker thread against an [`Env`] taken when the message
+//! was sent; the open plan's scope is enforced here before the edit reaches
+//! the engine.
 
-use std::fmt::Write as _;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use super::context::{self, ShotLog};
 use super::model::{Proposal, now};
 use super::ops::{self, EditOp, Night, Scope};
-use crate::beats::MusicMap;
 use crate::index::Index;
+use crate::mcp::{self, Caller};
 use crate::people::People;
 use crate::plan::Plan;
 
 /// The night as the tools see it.
 #[derive(Clone, Debug)]
 pub(crate) struct Env {
-    /// The plan being edited.
+    /// The night's work folder.
+    pub(crate) work: PathBuf,
+    /// The plan the conversation is about, as sent.
     pub(crate) plan: Plan,
-    /// The shot log.
-    pub(crate) log: ShotLog,
-    /// The full index, for the rule check.
+    /// The full index, for checking edits against the scope.
     pub(crate) index: Option<Arc<Index>>,
-    /// The music map.
-    pub(crate) music: Option<MusicMap>,
     /// The people map.
     pub(crate) people: People,
-    /// What the request may touch.
+    /// What the request may touch in that plan.
     pub(crate) scope: Scope,
-}
-
-impl Env {
-    /// The rule check of `plan` in this night.
-    fn check(&self, plan: &Plan) -> Option<Vec<crate::plan::Problem>> {
-        ops::check(
-            plan,
-            self.index.as_deref(),
-            self.music.as_ref(),
-            &self.people,
-        )
-    }
 }
 
 /// What a tool call produced.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Outcome {
-    /// A result to send back.
+    /// A result to send back, with any images it carried (MIME type and
+    /// base64 data) for the panel.
     Answer {
         /// The text.
         content: String,
         /// Whether the call failed.
         is_error: bool,
+        /// Images for the panel.
+        images: Vec<(String, String)>,
     },
-    /// A proposal for the panel, and the result to send back.
+    /// A staged or committed edit for the panel, and the result to send back.
     Proposal {
         /// The text.
         content: String,
         /// The proposal.
         proposal: Box<Proposal>,
+        /// The version saved, when the agent committed it.
+        committed: Option<usize>,
     },
     /// A question for the person; the turn ends until they answer.
     Ask {
@@ -86,93 +81,17 @@ pub(crate) enum Outcome {
 /// The name of the clarifying-question tool.
 pub(crate) const ASK: &str = "ask_user";
 
-/// The name of the proposal tool.
-pub(crate) const PROPOSE: &str = "propose_edit";
+/// The name of the plan-editing tool.
+pub(crate) const EDIT: &str = "plan_edit";
+
+/// The prefix Claude Code puts before our MCP tools' names.
+pub(crate) const MCP_PREFIX: &str = "mcp__ave__";
 
 /// The tool definitions, in the Messages API's shape.
 pub(crate) fn definitions() -> Value {
-    json!([
-        {
-            "name": "search_shots",
-            "description": "Search the night's shot log. Returns matching segments, best first, \
-                one line each with measured numbers, flags, caption, who, and whether the plan \
-                already uses it. Words match captions, subjects, people and ids. Facets: \
-                fire>0.05, led>0.02, q>0.7, len>2 (seconds), subject:fire, moment:performing, \
-                who:<name>, clip:<prefix>, -<flag> to exclude a flag, clean to exclude every \
-                bad flag, transition/idle moments, blocked views and blur/focus issues.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Words and facets, e.g. 'fire fans close clean q>0.7'."},
-                    "limit": {"type": "integer", "description": "Most results to return (default 12, max 40)."}
-                },
-                "required": ["query"],
-                "additionalProperties": false
-            },
-            "eager_input_streaming": true
-        },
-        {
-            "name": "get_segment",
-            "description": "One shot-log segment by id (e.g. MVI_7925/3) with its neighbours in \
-                the same clip.",
-            "input_schema": {
-                "type": "object",
-                "properties": {"id": {"type": "string"}},
-                "required": ["id"],
-                "additionalProperties": false
-            },
-            "eager_input_streaming": true
-        },
-        {
-            "name": "get_plan",
-            "description": "The current plan (one line per shot with its note), the music \
-                window and the rule check.",
-            "input_schema": {"type": "object", "properties": {}, "additionalProperties": false},
-            "eager_input_streaming": true
-        },
-        {
-            "name": PROPOSE,
-            "description": "Propose an edit to the plan. Nothing is applied: the person sees a \
-                diff card with your reasons and the predicted check, and accepts or discards \
-                it. Ops run in order; each index is a 1-based shot number in the plan as the \
-                earlier ops left it, so put remove_shot and move_shot last. Ops: replace_shot \
-                {index, clip, in, cx?, reason} puts other footage in a slot of the same \
-                length (reason becomes the note; cx defaults to the segment's action centre); \
-                set_in {index, in}; set_beats {index, beats} (balance with another set_beats: \
-                the beat total is fixed); move_shot {from, to} (slot lengths stay); \
-                remove_shot {index} (its beats go to the shot before); set_cx {index, cx}; \
-                set_note {index, note}. Returns the predicted check or why the ops were refused.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "summary": {"type": "string", "description": "One sentence: what changes and why."},
-                    "ops": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "op": {"type": "string", "enum": ["replace_shot", "set_in", "set_beats", "move_shot", "remove_shot", "set_cx", "set_note"]},
-                                "index": {"type": "integer"},
-                                "clip": {"type": "string"},
-                                "in": {"type": "number"},
-                                "cx": {"type": "number"},
-                                "reason": {"type": "string"},
-                                "beats": {"type": "integer"},
-                                "from": {"type": "integer"},
-                                "to": {"type": "integer"},
-                                "note": {"type": "string"}
-                            },
-                            "required": ["op"],
-                            "additionalProperties": false
-                        }
-                    }
-                },
-                "required": ["summary", "ops"],
-                "additionalProperties": false
-            },
-            "eager_input_streaming": true
-        },
-        {
+    let mut tools = mcp::api_tools();
+    if let Some(a) = tools.as_array_mut() {
+        a.push(json!({
             "name": ASK,
             "description": "Ask the person one clarifying question when the request is \
                 ambiguous, with two or three short, concrete options shown as buttons. Ends \
@@ -185,23 +104,84 @@ pub(crate) fn definitions() -> Value {
                 },
                 "required": ["question", "options"],
                 "additionalProperties": false
-            },
-            "eager_input_streaming": true
-        }
-    ])
+            }
+        }));
+    }
+    tools
 }
 
-/// A short description of a call for the panel: `search_shots fire close`.
-pub(crate) fn describe(name: &str, input: &Value) -> String {
+/// A short description of a call for the panel ("Searching shots: fire").
+/// `live` is the present tense, for a call still running.
+pub(crate) fn describe(name: &str, input: &Value, live: bool) -> String {
+    let name = name.strip_prefix(MCP_PREFIX).unwrap_or(name);
     let s = |k: &str| input.get(k).and_then(Value::as_str).unwrap_or_default();
-    match name {
-        "search_shots" => format!("Searched the shot log: {}", s("query")),
-        "get_segment" => format!("Read segment {}", s("id")),
-        "get_plan" => "Read the plan".to_owned(),
-        PROPOSE => format!("Proposed: {}", s("summary")),
-        ASK => format!("Asked: {}", s("question")),
-        other => format!("Called {other}"),
+    let (now, past, what) = match name {
+        "night_overview" => ("Reading the night", "Read the night", String::new()),
+        "search_shots" => ("Searching shots", "Searched shots", s("query").to_owned()),
+        "segment_details" => (
+            "Reading segments",
+            "Read segments",
+            input["ids"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default(),
+        ),
+        "look" => (
+            "Making a contact sheet",
+            "Made a contact sheet",
+            String::new(),
+        ),
+        "music_map" => ("Reading the music", "Read the music", String::new()),
+        "plan_get" => ("Reading the plan", "Read the plan", s("name").to_owned()),
+        EDIT if input["commit"].as_bool().unwrap_or(false) => {
+            ("Saving an edit", "Saved an edit", s("reason").to_owned())
+        }
+        EDIT => ("Staging an edit", "Staged an edit", s("reason").to_owned()),
+        "plan_draft" => ("Drafting a plan", "Drafted a plan", s("name").to_owned()),
+        "alternatives" => (
+            "Ranking alternatives",
+            "Ranked alternatives",
+            format!("{} #{}", s("plan"), input["index"]),
+        ),
+        "plan_versions" => ("Listing versions", "Listed versions", s("name").to_owned()),
+        "plan_revert" => (
+            "Reverting",
+            "Reverted",
+            format!("{} to v{}", s("name"), input["version"]),
+        ),
+        "people_map" => (
+            "Reading the people map",
+            "Read the people map",
+            String::new(),
+        ),
+        "Read" => ("Reading", "Read", file_name(s("file_path"))),
+        "Glob" | "Grep" => (
+            "Looking up files",
+            "Looked up files",
+            s("pattern").to_owned(),
+        ),
+        ASK => ("Asking", "Asked", s("question").to_owned()),
+        other => {
+            return format!("{} {other}", if live { "Calling" } else { "Called" });
+        }
+    };
+    let verb = if live { now } else { past };
+    if what.is_empty() {
+        verb.to_owned()
+    } else {
+        format!("{verb}: {what}")
     }
+}
+
+/// The last two parts of a path (`fix-check/SKILL.md`).
+fn file_name(path: &str) -> String {
+    let parts: Vec<&str> = path.split(['/', '\\']).filter(|p| !p.is_empty()).collect();
+    parts[parts.len().saturating_sub(2)..].join("/")
 }
 
 /// Runs one call.
@@ -216,147 +196,135 @@ pub(crate) fn run(env: &Env, id: &str, name: &str, input: &Value) -> Outcome {
                 .collect::<String>()
         ));
     }
-    let s = |k: &str| input.get(k).and_then(Value::as_str).unwrap_or_default();
     match name {
-        "search_shots" => {
-            let limit = input
-                .get("limit")
-                .and_then(Value::as_u64)
-                .map_or(12, |n| n.clamp(1, 40) as usize);
-            let hits = env.log.search(s("query"), limit, Some(&env.plan));
-            if hits.is_empty() {
-                return answer(format!(
-                    "no segments match `{}` (of {}); try fewer words or looser facets",
-                    s("query"),
-                    env.log.rows.len()
-                ));
+        ASK => ask(input),
+        EDIT => edit(env, id, input),
+        other => match mcp::call(&env.work, other, input, Caller::Agent) {
+            Ok(content) => {
+                let (text, images) = split_content(&content);
+                Outcome::Answer {
+                    content: text,
+                    is_error: false,
+                    images,
+                }
             }
-            let mut out = String::new();
-            for r in hits {
-                let used = context::used_in(&env.plan, r)
-                    .map(|k| format!(" · IN PLAN as shot {k}"))
-                    .unwrap_or_default();
-                let _ = writeln!(out, "{}{used}", r.line());
-            }
-            answer(out)
-        }
-        "get_segment" => {
-            let id = s("id");
-            let Some(row) = env.log.get(id) else {
-                return error(format!("no segment {id}; ids look like MVI_7925/3"));
-            };
-            let mut out = format!("{}\nsame clip:\n", row.line());
-            for r in env
-                .log
-                .rows
-                .iter()
-                .filter(|r| r.clip == row.clip && r.id != row.id)
-            {
-                let _ = writeln!(out, "- {}", r.line());
-            }
-            answer(out)
-        }
-        "get_plan" => {
-            let mut out = context::plan_text(&env.plan, env.music.as_ref());
-            if let Some(m) = &env.music {
-                let _ = writeln!(out, "{}", context::music_text(&env.plan, m));
-            }
-            let problems = env.check(&env.plan);
-            let _ = write!(out, "{}", context::problems_text(problems.as_deref()));
-            answer(out)
-        }
-        PROPOSE => propose(env, id, input),
-        ASK => {
-            let question = s("question").trim().to_owned();
-            let options: Vec<String> = input
-                .get("options")
-                .and_then(Value::as_array)
-                .map(|a| {
-                    a.iter()
-                        .filter_map(Value::as_str)
-                        .map(str::trim)
-                        .filter(|o| !o.is_empty())
-                        .take(3)
-                        .map(str::to_owned)
-                        .collect()
-                })
-                .unwrap_or_default();
-            if question.is_empty() {
-                return error("ask_user needs a question".to_owned());
-            }
-            Outcome::Ask { question, options }
-        }
-        other => error(format!("there is no tool called {other}")),
+            Err(e) => error(format!("{e:#}")),
+        },
     }
 }
 
-/// `propose_edit`.
-fn propose(env: &Env, id: &str, input: &Value) -> Outcome {
-    let summary = input
-        .get("summary")
+/// Text and images of an MCP result's content blocks.
+pub(crate) fn split_content(content: &[Value]) -> (String, Vec<(String, String)>) {
+    let mut text = Vec::new();
+    let mut images = Vec::new();
+    for c in content {
+        match c["type"].as_str() {
+            Some("text") => text.push(c["text"].as_str().unwrap_or_default().to_owned()),
+            Some("image") => {
+                let mime = c["mimeType"]
+                    .as_str()
+                    .or_else(|| c["source"]["media_type"].as_str())
+                    .unwrap_or("image/jpeg");
+                let data = c["data"]
+                    .as_str()
+                    .or_else(|| c["source"]["data"].as_str())
+                    .unwrap_or_default();
+                if !data.is_empty() {
+                    images.push((mime.to_owned(), data.to_owned()));
+                    text.push("(a contact sheet, shown to the person)".to_owned());
+                }
+            }
+            Some(_) | None => {}
+        }
+    }
+    (text.join("\n"), images)
+}
+
+/// `ask_user`.
+fn ask(input: &Value) -> Outcome {
+    let question = input
+        .get("question")
         .and_then(Value::as_str)
         .unwrap_or_default()
         .trim()
+        .to_owned();
+    let options: Vec<String> = input
+        .get("options")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|o| !o.is_empty())
+                .take(3)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    if question.is_empty() {
+        return error("ask_user needs a question".to_owned());
+    }
+    Outcome::Ask { question, options }
+}
+
+/// `plan_edit`: scope-checked, then run by the engine; a staged edit becomes
+/// a card, a committed one an applied card.
+fn edit(env: &Env, id: &str, input: &Value) -> Outcome {
+    let plan_name = input
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
         .to_owned();
     let ops: Vec<EditOp> = match input
         .get("ops")
         .cloned()
         .map(serde_json::from_value::<Vec<EditOp>>)
     {
-        Some(Ok(ops)) => ops,
+        Some(Ok(ops)) if !ops.is_empty() => ops,
+        Some(Ok(_)) => return error("an edit needs at least one op".to_owned()),
         Some(Err(e)) => return error(format!("the ops do not match the schema: {e}")),
-        None => return error("propose_edit needs ops".to_owned()),
+        None => return error("plan_edit needs ops".to_owned()),
     };
-    if ops.is_empty() {
-        return error("a proposal needs at least one op".to_owned());
-    }
-    let night = Night {
-        index: env.index.as_deref(),
-        people: &env.people,
+    let path = env.work.join("plans").join(format!("{plan_name}.toml"));
+    let (base, base_version) = match (Plan::load(&path), mcp::plan_version(&path)) {
+        (Ok(p), Ok(v)) => (p, v),
+        (Err(e), _) | (_, Err(e)) => return error(format!("cannot read plan {plan_name}: {e:#}")),
     };
-    let after = match ops::apply(&env.plan, &ops, &env.scope, night) {
-        Ok((after, _)) => after,
-        Err(e) => return error(format!("refused, nothing was shown to the person: {e}")),
-    };
-    let verdict = match (env.check(&env.plan), env.check(&after)) {
-        (Some(before), Some(now)) => {
-            let (new, fixed) = ops::compare(&before, &now);
-            let mut v = if now.is_empty() {
-                "predicted check: passes".to_owned()
-            } else {
-                format!(
-                    "predicted check: {} problems ({} new, {fixed} fixed)",
-                    now.len(),
-                    new.len()
-                )
-            };
-            for p in &new {
-                let _ = write!(v, "\n- NEW shot {}: {}", p.shot, p.message);
-            }
-            v
+    if plan_name == env.plan.name {
+        let night = Night {
+            index: env.index.as_deref(),
+            people: &env.people,
+        };
+        if let Err(e) = ops::apply(&base, &ops, &env.scope, night) {
+            return error(format!("refused, nothing was staged: {e}"));
         }
-        (None, _) | (_, None) => "predicted check: unavailable".to_owned(),
+    }
+    let content = match mcp::call(&env.work, EDIT, input, Caller::Agent) {
+        Ok(c) => split_content(&c).0,
+        Err(e) => return error(format!("{e:#}")),
     };
+    let committed = content
+        .split("committed as v")
+        .nth(1)
+        .and_then(|rest| rest.split(|c: char| !c.is_ascii_digit()).next())
+        .and_then(|n| n.parse().ok());
     Outcome::Proposal {
-        content: format!(
-            "Shown to the person as a diff card; not applied until they accept.\n{verdict}"
-        ),
+        content,
+        committed,
         proposal: Box::new(Proposal {
             id: id.to_owned(),
-            plan: env.plan.name.clone(),
-            summary,
+            plan: plan_name,
+            summary: input
+                .get("reason")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .to_owned(),
             ops,
-            base: env.plan.clone(),
+            base,
+            base_version,
             ts: now(),
         }),
-    }
-}
-
-/// A successful answer.
-fn answer(content: String) -> Outcome {
-    Outcome::Answer {
-        content,
-        is_error: false,
     }
 }
 
@@ -365,6 +333,7 @@ fn error(content: String) -> Outcome {
     Outcome::Answer {
         content,
         is_error: true,
+        images: Vec::new(),
     }
 }
 
@@ -375,34 +344,36 @@ pub(crate) mod tests {
     use super::{Env, Outcome};
     use crate::gui::assistant::ops::Scope;
 
-    pub(crate) fn env() -> Env {
-        Env {
+    /// A night on disk with plan `t` (3 shots) and the env for it; keep the
+    /// folder alive as long as the env.
+    pub(crate) fn env() -> anyhow::Result<(tempfile::TempDir, Env)> {
+        let dir = crate::mcp::tests::night(3)?;
+        let env = Env {
+            work: dir.path().to_path_buf(),
             plan: crate::gui::assistant::ops::tests::plan(3),
-            log: crate::gui::assistant::context::tests::log(),
             index: None,
-            music: None,
             people: crate::people::People::default(),
             scope: Scope::Whole,
-        }
+        };
+        Ok((dir, env))
     }
 
     #[test]
-    fn every_definition_has_a_schema() -> anyhow::Result<()> {
+    fn the_tool_set_is_the_mcp_set_plus_ask() -> anyhow::Result<()> {
         let defs = super::definitions();
         let names: Vec<&str> = defs
             .as_array()
             .map(|a| a.iter().filter_map(|d| d["name"].as_str()).collect())
             .unwrap_or_default();
+        let mcp = crate::mcp::tools();
         assert_eq!(
-            names,
-            [
-                "search_shots",
-                "get_segment",
-                "get_plan",
-                "propose_edit",
-                "ask_user"
-            ],
-            "the tool set"
+            names.len(),
+            mcp.as_array().map_or(0, Vec::len) + 1,
+            "every MCP tool plus ask_user"
+        );
+        assert!(
+            names.contains(&"plan_edit") && names.contains(&"ask_user"),
+            "{names:?}"
         );
         assert!(
             defs.as_array()
@@ -413,42 +384,60 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn search_and_segment_answer_with_shot_log_lines() -> anyhow::Result<()> {
-        let env = env();
-        let out = super::run(&env, "1", "search_shots", &json!({"query": "fire -dark"}));
-        assert!(
-            matches!(&out, Outcome::Answer { content, is_error: false } if content.contains("A/1") && !content.contains("B/1")),
-            "search: {out:?}"
+    fn staged_edits_become_cards_and_scope_is_enforced() -> anyhow::Result<()> {
+        let (_dir, mut env) = env()?;
+        let good = json!({"name": "t", "reason": "note 2", "ops": [
+            {"op": "set_note", "index": 2, "note": "LED hoop q 0.95"}
+        ]});
+        let out = super::run(&env, "p1", "plan_edit", &good);
+        let Outcome::Proposal {
+            proposal,
+            content,
+            committed,
+        } = out
+        else {
+            anyhow::bail!("expected a proposal: {out:?}");
+        };
+        assert_eq!(proposal.id, "p1", "id is the call id");
+        assert_eq!(
+            proposal.base_version.len(),
+            16,
+            "the base version rides along"
         );
-        let out = super::run(&env, "2", "get_segment", &json!({"id": "nope"}));
+        assert_eq!(committed, None, "staged, not saved");
+        assert!(content.contains("staged"), "says so: {content}");
+
+        env.scope = Scope::Shots(std::iter::once(1).collect());
+        let out = super::run(&env, "p2", "plan_edit", &good);
         assert!(
-            matches!(out, Outcome::Answer { is_error: true, .. }),
-            "unknown segment is an error"
+            matches!(&out, Outcome::Answer { is_error: true, content, .. } if content.contains("refused")),
+            "out of scope: {out:?}"
+        );
+
+        let commit = json!({"name": "t", "reason": "x", "commit": true, "base_version": "0",
+            "ops": [{"op": "set_note", "index": 1, "note": "n"}]});
+        env.scope = Scope::Whole;
+        let out = super::run(&env, "p3", "plan_edit", &commit);
+        assert!(
+            matches!(&out, Outcome::Answer { is_error: true, content, .. } if content.contains("COMMIT_REFUSED")),
+            "commits refused by default: {out:?}"
         );
         Ok(())
     }
 
     #[test]
-    fn proposals_validate_and_questions_end_the_turn() -> anyhow::Result<()> {
-        let env = env();
-        let good = json!({"summary": "swap 2", "ops": [
-            {"op": "replace_shot", "index": 2, "clip": "C", "in": 1.0, "reason": "LED hoop q 0.95"}
-        ]});
-        let out = super::run(&env, "p1", "propose_edit", &good);
-        let Outcome::Proposal { proposal, content } = out else {
-            anyhow::bail!("expected a proposal: {out:?}");
-        };
-        assert_eq!(proposal.id, "p1", "id is the call id");
-        assert_eq!(proposal.ops.len(), 1, "one op");
-        assert!(content.contains("not applied"), "says so: {content}");
-
-        let bad = json!({"summary": "x", "ops": [{"op": "set_note", "index": 7, "note": "n"}]});
-        let out = super::run(&env, "p2", "propose_edit", &bad);
+    fn other_tools_run_in_the_engine_and_questions_end_the_turn() -> anyhow::Result<()> {
+        let (_dir, env) = env()?;
+        let out = super::run(&env, "1", "plan_get", &json!({"name": "t"}));
         assert!(
-            matches!(&out, Outcome::Answer { is_error: true, content } if content.contains("no shot 7")),
-            "refused: {out:?}"
+            matches!(&out, Outcome::Answer { content, is_error: false, .. } if content.contains("version:")),
+            "plan_get: {out:?}"
         );
-
+        let out = super::run(&env, "2", "search_shots", &json!({"query": "fire"}));
+        assert!(
+            matches!(out, Outcome::Answer { is_error: true, .. }),
+            "unindexed night is an error"
+        );
         let ask =
             json!({"question": "Punchier how?", "options": ["shorter shots", "more fire", ""]});
         let out = super::run(&env, "q", "ask_user", &ask);
@@ -457,10 +446,30 @@ pub(crate) mod tests {
             "empty options dropped: {out:?}"
         );
         assert_eq!(
-            super::describe("search_shots", &json!({"query": "fire"})),
-            "Searched the shot log: fire",
-            "described"
+            super::describe("mcp__ave__search_shots", &json!({"query": "fire"}), true),
+            "Searching shots: fire",
+            "described live"
         );
+        assert_eq!(
+            super::describe(
+                "Read",
+                &json!({"file_path": "C:\\x\\skills\\fix-check\\SKILL.md"}),
+                false
+            ),
+            "Read: fix-check/SKILL.md",
+            "skill reads"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn images_split_from_text() -> anyhow::Result<()> {
+        let (text, images) = super::split_content(&[
+            json!({"type": "image", "mimeType": "image/jpeg", "data": "AAAA"}),
+            json!({"type": "text", "text": "1 A @1.00"}),
+        ]);
+        assert_eq!(images.len(), 1, "one image");
+        assert!(text.contains("1 A @1.00"), "text kept: {text}");
         Ok(())
     }
 }
