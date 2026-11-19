@@ -230,10 +230,9 @@ impl App {
         config: crate::config::Config,
         open: Option<std::path::PathBuf>,
     ) -> Self {
-        if let Some(family) = config.font.as_deref() {
-            // A missing family is not an error: the bundled faces stay.
-            let _ = crate::gui::font::install(ctx, family);
-        }
+        // A missing family is not an error: the bundled faces stay. The
+        // symbol fallback is installed either way.
+        let _ = crate::gui::font::setup(ctx, config.font.as_deref());
         let catalog = crate::theme::Catalog::load();
         let theme = catalog.get(config.theme.as_deref());
         let mut app = Self {

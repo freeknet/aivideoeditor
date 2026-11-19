@@ -33,24 +33,66 @@ use std::path::{Path, PathBuf};
 /// The name the loaded face is registered under.
 const KEY: &str = "configured-ui-face";
 
-/// Installs `family` as the proportional face, if it can be found.
+/// Files tried, in order, for symbols the bundled faces lack (✕ ▶ ⏸ ✔ ★ …):
+/// Segoe UI Symbol on Windows, Noto / DejaVu on Linux, Apple Symbols on macOS.
+const SYMBOL_FALLBACKS: [&str; 4] = [
+    "seguisym.ttf",
+    "NotoSansSymbols2-Regular.ttf",
+    "DejaVuSans.ttf",
+    "Apple Symbols.ttf",
+];
+
+/// The name the symbol fallback is registered under.
+const SYMBOLS: &str = "symbol-fallback";
+
+/// Installs the fonts: the bundled faces, `family` (when given and found)
+/// in front of them, and a system symbol face behind them, so a symbol in a
+/// label draws instead of showing an empty box.
 ///
-/// Returns the file it loaded; `None` leaves the context untouched.
-pub fn install(ctx: &egui::Context, family: &str) -> Option<PathBuf> {
-    let path = locate(family)?;
-    let bytes = std::fs::read(&path).ok()?;
+/// Returns the file `family` was loaded from, if it was.
+pub fn setup(ctx: &egui::Context, family: Option<&str>) -> Option<PathBuf> {
     let mut fonts = egui::FontDefinitions::default();
-    fonts.font_data.insert(
-        KEY.to_owned(),
-        std::sync::Arc::new(egui::FontData::from_owned(bytes)),
-    );
-    fonts
-        .families
-        .entry(egui::FontFamily::Proportional)
-        .or_default()
-        .insert(0, KEY.to_owned());
+    let face = family.and_then(locate);
+    if let Some(path) = &face
+        && let Ok(bytes) = std::fs::read(path)
+    {
+        fonts.font_data.insert(
+            KEY.to_owned(),
+            std::sync::Arc::new(egui::FontData::from_owned(bytes)),
+        );
+        fonts
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .insert(0, KEY.to_owned());
+    }
+    let symbols = directories()
+        .into_iter()
+        .flat_map(|dir| SYMBOL_FALLBACKS.iter().map(move |f| dir.join(f)))
+        .find_map(|p| std::fs::read(p).ok());
+    if let Some(bytes) = symbols {
+        fonts.font_data.insert(
+            SYMBOLS.to_owned(),
+            std::sync::Arc::new(egui::FontData::from_owned(bytes)),
+        );
+        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+            fonts
+                .families
+                .entry(family)
+                .or_default()
+                .push(SYMBOLS.to_owned());
+        }
+    }
     ctx.set_fonts(fonts);
-    Some(path)
+    face
+}
+
+/// Installs `family` as the proportional face, if it can be found (the
+/// symbol fallback comes with it; see [`setup`]).
+///
+/// Returns the file it loaded; `None` leaves the bundled face in front.
+pub fn install(ctx: &egui::Context, family: &str) -> Option<PathBuf> {
+    setup(ctx, Some(family))
 }
 
 /// The directories fonts are installed into, the per-user one first: it is
