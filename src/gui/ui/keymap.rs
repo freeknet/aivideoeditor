@@ -578,6 +578,18 @@ pub const COMMANDS: &[Command] = &[
         with(Modifiers::SHIFT, Key::Z),
     ),
     region("deselect", "Deselect", Scope::Timeline, key(Key::Escape)),
+    region(
+        "plan-compare",
+        "Compare with the previous version (or the next plan)",
+        Scope::Timeline,
+        with(Modifiers::SHIFT, Key::C),
+    ),
+    region(
+        "plan-compare-side",
+        "Play A or B in the compare",
+        Scope::Timeline,
+        key(Key::B),
+    ),
     // ---- the browser -----------------------------------------------------
     region("pick", "Pick", Scope::Browser, key(Key::P)),
     region("reject", "Reject", Scope::Browser, key(Key::X)),

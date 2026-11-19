@@ -801,13 +801,14 @@ pub(super) fn tracks(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut
     // A1: the waveform.
     let a1_resp = ui.interact(a1, id.with("a1"), Sense::click_and_drag());
     let a1_paint = painter.with_clip_rect(a1);
-    let music_origin = s.music.as_ref().map_or(0.0, |(_, o)| *o as f32);
+    let music_origin = s.cut.music.as_ref().map_or(0.0, |(_, o)| *o as f32);
     let wave_color = if state.mute_music {
         theme::translucent(t.text_faint, 120)
     } else {
         theme::translucent(t.success, 150)
     };
     match s
+        .cut
         .music
         .as_ref()
         .map(|(path, _)| state.waves.get(ui.ctx(), path))

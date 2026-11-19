@@ -460,6 +460,7 @@ pub(super) fn strip(
         {
             super::open_draft_form(state, project);
         }
+        super::compare::menu(state, project, ui);
         if let Some((_, name)) = &state.pending_job {
             ui.spinner();
             ui.label(
