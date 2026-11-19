@@ -12,6 +12,14 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Shots browser review modes, switched from the header or by key: **Tape** (`T`) plays
+  every result back to back in the viewer with the playing card lit and the selection
+  following the playhead, `P`/`X`/`U` marking it and skipping on, and Fast Review
+  (`Shift+L`) playing long shots faster; **Compare** (`C`) puts the select and a
+  candidate two-up with their shot-log numbers and captions side by side (arrows move
+  the candidate, Up promotes it); **Survey** (`G`) tiles the selection, `X` drops the
+  focused shot until one remains and `]` / `[` load the next / previous group. The keys
+  are rows in the command table, so the shortcut sheet lists them and presets apply.
 - Chat panel runs on Claude Code (the default when `claude` is on PATH): one headless
   `claude -p` stream-json session per conversation with `ave mcp` as its only tool
   server (no shell, no file edits, no user settings or MCP servers), resumed across

@@ -370,6 +370,16 @@ fn card(
         Stroke::new(w, theme::rgb(c)),
         StrokeKind::Inside,
     );
+    // The tape is playing this one: a ring outside the card and a play mark.
+    if paint.playing == Some(s.id.as_str()) {
+        painter.rect_stroke(
+            rect.expand(2.0),
+            CornerRadius::same(3),
+            Stroke::new(2.0, theme::rgb(theme.success)),
+            StrokeKind::Inside,
+        );
+        super::play_mark(&painter, thumb.center(), 10.0, theme::rgb(theme.success));
+    }
     let response = response.on_hover_ui(|ui| super::tooltip(ui, paint, item));
     Card {
         response,
