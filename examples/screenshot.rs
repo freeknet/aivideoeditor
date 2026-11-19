@@ -3,7 +3,7 @@
 // Description:  Renders every page, view mode and overlay of the app headlessly
 //               to PNG files, for the README and for reviewing a visual change.
 //
-// Dependencies: egui_kittest (headless harness + wgpu renderer), anyhow;
+// Dependencies: egui, egui_kittest (headless harness + wgpu renderer), anyhow;
 //               aivideoeditor::gui::app
 // ============================================================================
 
@@ -26,6 +26,10 @@ use egui_kittest::kittest::Queryable;
 /// The shot that opens the timeline's compare view.
 const COMPARE: &str = "plan-compare";
 
+/// One picture: its name, the actions that set it up, then the keys
+/// pressed once the app is up.
+type Shot = (String, Vec<Action>, Vec<(egui::Modifiers, egui::Key)>);
+
 fn main() -> anyhow::Result<()> {
     let out = std::env::args().nth(1).map_or_else(
         || {
@@ -44,14 +48,15 @@ fn main() -> anyhow::Result<()> {
         aivideoeditor::gui::DEFAULT_SIZE
     };
     // Every page, then the workspace's view modes and overlays.
-    let mut shots: Vec<(String, Vec<Action>)> = Page::ALL
+    let mut shots: Vec<Shot> = Page::ALL
         .into_iter()
-        .map(|page| (page.key().to_owned(), vec![Action::Go(page)]))
+        .map(|page| (page.key().to_owned(), vec![Action::Go(page)], Vec::new()))
         .collect();
     for mode in [ViewMode::Vertical, ViewMode::Comment, ViewMode::Preview] {
         shots.push((
             format!("view-{}", mode.key()),
             vec![Action::Go(Page::Review), Action::SetViewMode(mode)],
+            Vec::new(),
         ));
     }
     for (name, overlay) in [
@@ -59,12 +64,34 @@ fn main() -> anyhow::Result<()> {
         ("search", Action::FocusSearch),
         ("settings", Action::OpenSettings),
     ] {
-        shots.push((name.to_owned(), vec![Action::Go(Page::Review), overlay]));
+        shots.push((
+            name.to_owned(),
+            vec![Action::Go(Page::Review), overlay],
+            Vec::new(),
+        ));
     }
     if night.is_some() {
-        shots.push((COMPARE.to_owned(), vec![Action::Go(Page::Plan)]));
+        shots.push((COMPARE.to_owned(), vec![Action::Go(Page::Plan)], Vec::new()));
     }
-    for (name, actions) in shots {
+    // The Shots browser's review modes, entered by their keys the way a
+    // user would (they need a night: without one the tab is empty).
+    let none = egui::Modifiers::NONE;
+    let first = (none, egui::Key::ArrowRight);
+    for (name, keys) in [
+        (
+            "review-tape",
+            vec![
+                first,
+                (none, egui::Key::T),
+                (egui::Modifiers::SHIFT, egui::Key::L),
+            ],
+        ),
+        ("review-compare", vec![first, (none, egui::Key::C)]),
+        ("review-survey", vec![first, (none, egui::Key::G)]),
+    ] {
+        shots.push((name.to_owned(), vec![Action::Go(Page::Review)], keys));
+    }
+    for (name, actions, keys) in shots {
         let mut harness = egui_kittest::Harness::builder()
             .with_size(egui::vec2(width, height))
             // Every input must be reachable by name; `run_steps` does not
@@ -87,6 +114,11 @@ fn main() -> anyhow::Result<()> {
                 },
                 None,
             );
+        harness.run_steps(5);
+        for (modifiers, key) in keys {
+            harness.key_press_modifiers(modifiers, key);
+            harness.run_steps(3);
+        }
         // Long enough for the page's arrival animation to finish, and, with
         // a night open, for thumbnails decoded on worker threads to land.
         let rounds = if night.is_some() { 40 } else { 1 };

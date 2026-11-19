@@ -619,6 +619,66 @@ pub const COMMANDS: &[Command] = &[
         Scope::Browser,
         Keys::Text("Arrows"),
     ),
+    region(
+        "review-tape",
+        "Tape: play every result back to back",
+        Scope::Browser,
+        key(Key::T),
+    ),
+    region(
+        "review-fast",
+        "Fast review: long shots play faster on the tape",
+        Scope::Browser,
+        with(Modifiers::SHIFT, Key::L),
+    ),
+    region(
+        "review-compare",
+        "Compare the select with a candidate",
+        Scope::Browser,
+        key(Key::C),
+    ),
+    region(
+        "review-compare-candidate",
+        "Compare: previous / next candidate",
+        Scope::Browser,
+        Keys::Text("Left / Right"),
+    ),
+    region(
+        "review-compare-promote",
+        "Compare: make the candidate the select",
+        Scope::Browser,
+        key(Key::ArrowUp),
+    ),
+    region(
+        "review-survey",
+        "Survey the selection side by side",
+        Scope::Browser,
+        key(Key::G),
+    ),
+    region(
+        "review-survey-remove",
+        "Survey: drop the focused shot",
+        Scope::Browser,
+        key(Key::X),
+    ),
+    region(
+        "review-next-group",
+        "Survey: next group",
+        Scope::Browser,
+        key(Key::CloseBracket),
+    ),
+    region(
+        "review-prev-group",
+        "Survey: previous group",
+        Scope::Browser,
+        key(Key::OpenBracket),
+    ),
+    region(
+        "review-exit",
+        "Leave tape, compare or survey",
+        Scope::Browser,
+        key(Key::Escape),
+    ),
     // ---- the browser: People ---------------------------------------------
     region(
         "people-yes",

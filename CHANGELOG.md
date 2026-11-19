@@ -19,6 +19,14 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   plan or a saved version on one beat grid, highlights the shots that differ, lists
   them as added / removed / replaced / moved / changed with both shots' notes, plays
   A or B in the viewer (`B`), and "Adopt B" saves B as a new version of the open plan.
+- Shots browser review modes, switched from the header or by key: **Tape** (`T`) plays
+  every result back to back in the viewer with the playing card lit and the selection
+  following the playhead, `P`/`X`/`U` marking it and skipping on, and Fast Review
+  (`Shift+L`) playing long shots faster; **Compare** (`C`) puts the select and a
+  candidate two-up with their shot-log numbers and captions side by side (arrows move
+  the candidate, Up promotes it); **Survey** (`G`) tiles the selection, `X` drops the
+  focused shot until one remains and `]` / `[` load the next / previous group. The keys
+  are rows in the command table, so the shortcut sheet lists them and presets apply.
 - People, Music, Viewer (transport and player) and Export read their keys from the
   command table under the chosen preset (ave / Premiere Pro / Final Cut Pro), and the
   shortcut sheet lists them: Premiere clears marks with Ctrl+Shift+X, plays In to Out

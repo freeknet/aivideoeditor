@@ -26,17 +26,33 @@
 //! | Ctrl-A | select every result |
 //! | right-click | the same as a menu, plus "Reference in chat ▸ …" |
 //!
+//! ## Review modes
+//!
+//! The header's Tape / Compare / Survey switch (or its keys, which follow
+//! the keyboard preset through [`keymap::chord`]) changes how the results
+//! are reviewed; `Esc` or the same key again comes back to the grid.
+//!
+//! | Mode | Key | What it is |
+//! |---|---|---|
+//! | Tape | T | every result back to back in the viewer; the playing card is lit and the selection follows the playhead; Shift+L Fast Review ([`tape`]) |
+//! | Compare | C | the select and a candidate two-up with their numbers ([`compare`]) |
+//! | Survey | G | the selection tiled; X drops one, `]` / `[` next / previous group ([`survey`]) |
+//!
 //! Marks are saved to `<work>/review.toml` (see [`crate::search::marks`]).
 //! View options persist in `ave.toml` under `[pages.review]`.
 
+mod compare;
 mod grid;
 mod list;
+mod survey;
+mod tape;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use super::PageCtx;
 use crate::gui::app::Action;
+use crate::gui::ui::keymap::{self, Preset};
 use crate::gui::ui::theme::{self, SPACE_SM, SPACE_XS};
 use crate::index::Index;
 use crate::refs::{Modifier, Reference, Target};
@@ -101,6 +117,45 @@ enum View {
     Grid,
     /// Dense rows.
     List,
+}
+
+/// How the results are being reviewed.
+#[derive(Clone, Debug, PartialEq, Default)]
+enum Mode {
+    /// Browsing the grid or the list.
+    #[default]
+    Browse,
+    /// The results play back to back in the viewer.
+    Tape(tape::Tape),
+    /// The select against a candidate.
+    Compare(compare::Compare),
+    /// The selection tiled n-up.
+    Survey(survey::Survey),
+}
+
+/// Which review mode, without its data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Kind {
+    /// The grid or the list.
+    Browse,
+    /// Tape mode.
+    Tape,
+    /// Compare mode.
+    Compare,
+    /// Survey mode.
+    Survey,
+}
+
+impl Mode {
+    /// The mode's kind.
+    fn kind(&self) -> Kind {
+        match self {
+            Self::Browse => Kind::Browse,
+            Self::Tape(_) => Kind::Tape,
+            Self::Compare(_) => Kind::Compare,
+            Self::Survey(_) => Kind::Survey,
+        }
+    }
 }
 
 /// The tab's view options.
@@ -261,6 +316,15 @@ pub(crate) struct State {
     error: Option<String>,
     /// View options changed and are not saved yet.
     opts_dirty: bool,
+    /// Tape, compare, survey or plain browsing.
+    mode: Mode,
+    /// Fast Review is wanted on the next tape too.
+    fast_review: bool,
+    /// The results grouped by clip, in result order (segment ids): what
+    /// Survey's next / previous group steps through.
+    groups: Vec<Vec<String>>,
+    /// The keyboard preset in force.
+    preset: Preset,
 }
 
 /// Something the user asked for this frame, applied after drawing.
@@ -292,6 +356,24 @@ pub(super) enum Do {
     All,
     /// Replace the query.
     Search(String),
+    /// Enter this review mode, or leave it when it is the current one.
+    Mode(Kind),
+    /// Turn Fast Review on or off.
+    FastReview,
+    /// Compare: move the candidate by this many results.
+    Candidate(isize),
+    /// Compare: the candidate becomes the select.
+    Promote,
+    /// Show this segment in the viewer, selection unchanged.
+    Preview(String),
+    /// Survey: focus tile `n`.
+    SurveyFocus(usize),
+    /// Survey: move the focus by this many tiles.
+    SurveyMove(isize),
+    /// Survey: drop this tile (the focused one when `None`).
+    SurveyRemove(Option<usize>),
+    /// Survey: the next (`1`) or previous (`-1`) group.
+    Group(isize),
 }
 
 /// Everything the grid and the list draw from.
@@ -310,6 +392,8 @@ pub(super) struct Paint<'a> {
     pub(super) cursor: Option<&'a str>,
     /// Hover scrubbing on.
     pub(super) scrub: bool,
+    /// The segment id under the tape's playhead.
+    pub(super) playing: Option<&'a str>,
 }
 
 /// Draws the tab.
@@ -321,6 +405,8 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
     let keys_free = ctx.keys_free(ui) && !state.inactive;
     track_focus(state, ui);
     sync_project(ctx, state);
+    state.preset = ctx.keymap;
+    follow_tape(ctx, state);
     let mut dos: Vec<Do> = Vec::new();
     // The marks leave the state while the night borrows them.
     let marks = std::mem::take(&mut state.marks);
@@ -374,10 +460,15 @@ fn body(
             index.segments.len(),
             dos,
         );
+        mode_bar(ui, ctx.theme, state, dos);
         let selected: HashSet<String> = selected_ids(ctx.selection).into_iter().collect();
         if keys_free {
             keys(ui, state, dos);
         }
+        let playing = match &state.mode {
+            Mode::Tape(t) => t.playing(),
+            Mode::Browse | Mode::Compare(_) | Mode::Survey(_) => None,
+        };
         let paint = Paint {
             theme: ctx.theme,
             night: &night,
@@ -386,8 +477,17 @@ fn body(
             selected: &selected,
             cursor: state.cursor.as_deref(),
             scrub: state.opts.scrub,
+            playing,
         };
-        if state.items.is_empty() {
+        let mut survey_cols = None;
+        match &state.mode {
+            Mode::Compare(c) => compare::draw(ui, &paint, ctx.thumbs, c, dos),
+            Mode::Survey(s) => survey_cols = Some(survey::draw(ui, &paint, ctx.thumbs, s, dos)),
+            Mode::Browse | Mode::Tape(_) => {}
+        }
+        if matches!(state.mode, Mode::Compare(_) | Mode::Survey(_)) {
+            // The two-up and the tiles replace the results.
+        } else if state.items.is_empty() {
             empty(ui, ctx.theme, &query, state.matched, dos);
         } else {
             let reveal_row = state.reveal.then(|| cursor_pos(state)).flatten();
@@ -421,6 +521,7 @@ fn body(
                 opts_changed = true;
             }
             if let Some(pos) = out.hover_scrub
+                && state.mode == Mode::Browse
                 && let Some(item) = state.items.get(pos.0)
                 && let Some(s) = index.segments.get(item.seg)
                 && state.cursor.as_deref() == Some(s.id.as_str())
@@ -429,6 +530,9 @@ fn body(
                 ctx.player.pause();
                 ctx.player.seek(f64::from(pos.1 - s.seg.start));
             }
+        }
+        if let (Some(cols), Mode::Survey(s)) = (survey_cols, &mut state.mode) {
+            s.columns = cols;
         }
     }
     Some(opts_changed)
@@ -508,6 +612,7 @@ fn refresh(state: &mut State, night: &Night<'_>, search_text: &str) {
         .filter(|h| h.score >= state.opts.cutoff)
         .collect();
     sort_hits(&mut hits, index, state.opts.sort);
+    state.groups = clip_groups(&hits, index);
     state.items = if state.opts.group {
         stack(hits, index, &state.expanded)
     } else {
@@ -540,6 +645,24 @@ fn sort_hits(hits: &mut [search::Hit], index: &Index, sort: Sort) {
         Sort::Motion => hits.sort_by(by(|s| s.seg.moving)),
         Sort::Time => hits.sort_by_key(|h| h.seg),
     }
+}
+
+/// The hits' segment ids grouped by clip, groups in the order their first
+/// hit comes: Survey's groups.
+fn clip_groups(hits: &[search::Hit], index: &Index) -> Vec<Vec<String>> {
+    let mut order: Vec<&str> = Vec::new();
+    let mut groups: HashMap<&str, Vec<String>> = HashMap::new();
+    for s in hits.iter().filter_map(|h| index.segments.get(h.seg)) {
+        let members = groups.entry(s.clip.as_str()).or_insert_with(|| {
+            order.push(s.clip.as_str());
+            Vec::new()
+        });
+        members.push(s.id.clone());
+    }
+    order
+        .into_iter()
+        .filter_map(|clip| groups.remove(clip))
+        .collect()
 }
 
 /// Groups hits by clip: each clip's first (best by the current order)
@@ -732,6 +855,16 @@ fn header(
             }
             ui.checkbox(&mut state.opts.scrub, "Hover scrub");
         });
+        let kind = state.mode.kind();
+        for (k, label, id) in MODES {
+            if ui
+                .selectable_label(kind == k, small(label))
+                .on_hover_text(hint(id, state.preset))
+                .clicked()
+            {
+                dos.push(Do::Mode(k));
+            }
+        }
     });
     if !query.is_empty() {
         chips(ui, theme, query, dos);
@@ -741,6 +874,84 @@ fn header(
     }
     ui.add_space(SPACE_XS);
     state.opts != before
+}
+
+/// The review modes the header offers: (mode, label, command id).
+const MODES: [(Kind, &str, &str); 3] = [
+    (Kind::Tape, "Tape", "review-tape"),
+    (Kind::Compare, "Compare", "review-compare"),
+    (Kind::Survey, "Survey", "review-survey"),
+];
+
+/// A command's label and its keys under `preset`, for a tooltip.
+fn hint(id: &str, preset: Preset) -> String {
+    keymap::command(id).map_or_else(String::new, |c| {
+        let keys = c.hint(preset);
+        if keys.is_empty() {
+            c.label.to_owned()
+        } else {
+            format!("{}  ({keys})", c.label)
+        }
+    })
+}
+
+/// Just the keys of a command under `preset`.
+fn keys_of(id: &str, preset: Preset) -> String {
+    keymap::command(id).map_or_else(String::new, |c| c.hint(preset))
+}
+
+/// The line under the header while a review mode is on: where it stands
+/// and the keys that drive it.
+fn mode_bar(ui: &mut egui::Ui, theme: &Palette, state: &State, dos: &mut Vec<Do>) {
+    let p = state.preset;
+    let text = match &state.mode {
+        Mode::Browse => return,
+        Mode::Tape(t) => {
+            let at = t.last.map_or(0, |k| k + 1);
+            format!(
+                "Tape {at}/{} · P/X/U mark and skip · {} leaves",
+                t.ids.len(),
+                keys_of("review-exit", p)
+            )
+        }
+        Mode::Compare(_) => format!(
+            "Compare · {} candidate · {} make select · P/X/U mark it · {} leaves",
+            keys_of("review-compare-candidate", p),
+            keys_of("review-compare-promote", p),
+            keys_of("review-exit", p)
+        ),
+        Mode::Survey(s) => {
+            let group = match s.group {
+                Some(g) => format!("group {}/{} · ", g + 1, state.groups.len()),
+                None => String::new(),
+            };
+            format!(
+                "Survey {} · {group}{} drops · {} / {} groups · {} leaves",
+                s.ids.len(),
+                keys_of("review-survey-remove", p),
+                keys_of("review-next-group", p),
+                keys_of("review-prev-group", p),
+                keys_of("review-exit", p)
+            )
+        }
+    };
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(SPACE_XS, SPACE_XS);
+        if let Mode::Tape(t) = &state.mode
+            && ui
+                .selectable_label(t.fast, egui::RichText::new("Fast").size(11.0))
+                .on_hover_text(hint("review-fast", p))
+                .clicked()
+        {
+            dos.push(Do::FastReview);
+        }
+        ui.label(
+            egui::RichText::new(text)
+                .size(11.0)
+                .color(theme::rgb(theme.accent)),
+        );
+    });
+    ui.add_space(SPACE_XS);
 }
 
 /// Saved searches: (label, query).
@@ -812,9 +1023,89 @@ fn empty(ui: &mut egui::Ui, theme: &Palette, query: &Query, matched: usize, dos:
     }
 }
 
+/// Removes the first press of `chord` (an arrow, which is not a row of its
+/// own) from this frame's input, matched exactly ([`keymap::matches`]).
+/// Held-key repeats count when `repeat`.
+fn take_chord(ui: &egui::Ui, chord: egui::KeyboardShortcut, repeat: bool) -> bool {
+    ui.input_mut(|i| {
+        let at = i.events.iter().position(|e| {
+            matches!(
+                e,
+                egui::Event::Key { key, pressed: true, repeat: r, modifiers, .. }
+                    if (repeat || !*r) && keymap::matches(chord, *key, *modifiers)
+            )
+        });
+        at.map(|k| i.events.remove(k)).is_some()
+    })
+}
+
+/// Whether the command `id` was pressed under `preset`; the press is
+/// removed so nothing drawn later reads it too ([`keymap::consume`]).
+fn take(ui: &egui::Ui, id: &str, preset: Preset) -> bool {
+    ui.input_mut(|i| keymap::consume(i, id, preset))
+}
+
+/// Reads the review modes' keys; returns whether the arrows are taken.
+fn mode_keys(ui: &egui::Ui, state: &State, dos: &mut Vec<Do>) -> bool {
+    use egui::{Key, KeyboardShortcut, Modifiers};
+    let p = state.preset;
+    let kind = state.mode.kind();
+    if kind != Kind::Browse && take(ui, "review-exit", p) {
+        dos.push(Do::Mode(Kind::Browse));
+    }
+    for (k, _, id) in MODES {
+        if take(ui, id, p) {
+            dos.push(Do::Mode(k));
+        }
+    }
+    if take(ui, "review-fast", p) {
+        dos.push(Do::FastReview);
+    }
+    let arrow = |key| take_chord(ui, KeyboardShortcut::new(Modifiers::NONE, key), true);
+    match &state.mode {
+        Mode::Browse | Mode::Tape(_) => false,
+        Mode::Compare(_) => {
+            if take(ui, "review-compare-promote", p) {
+                dos.push(Do::Promote);
+            }
+            for (key, step) in [(Key::ArrowLeft, -1), (Key::ArrowRight, 1)] {
+                if arrow(key) {
+                    dos.push(Do::Candidate(step));
+                }
+            }
+            true
+        }
+        Mode::Survey(s) => {
+            if take(ui, "review-survey-remove", p) {
+                dos.push(Do::SurveyRemove(None));
+            }
+            if take(ui, "review-next-group", p) {
+                dos.push(Do::Group(1));
+            }
+            if take(ui, "review-prev-group", p) {
+                dos.push(Do::Group(-1));
+            }
+            let cols = s.columns.max(1) as isize;
+            for (key, step) in [
+                (Key::ArrowLeft, -1),
+                (Key::ArrowRight, 1),
+                (Key::ArrowUp, -cols),
+                (Key::ArrowDown, cols),
+            ] {
+                if arrow(key) {
+                    dos.push(Do::SurveyMove(step));
+                }
+            }
+            true
+        }
+    }
+}
+
 /// Reads the tab's keys.
 fn keys(ui: &egui::Ui, state: &State, dos: &mut Vec<Do>) {
     use egui::Key;
+    // The modes' own keys first: Survey's X drops a tile rather than rejects.
+    let arrows_taken = mode_keys(ui, state, dos);
     let plain = |key: Key| ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, key));
     if plain(Key::P) {
         dos.push(Do::Verdict(Some(Verdict::Pick), true));
@@ -842,6 +1133,9 @@ fn keys(ui: &egui::Ui, state: &State, dos: &mut Vec<Do>) {
     }
     if ui.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, Key::F)) {
         dos.push(Do::Like);
+    }
+    if arrows_taken {
+        return;
     }
     if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, Key::A)) {
         dos.push(Do::All);
@@ -981,7 +1275,17 @@ fn apply(ctx: &mut PageCtx<'_>, state: &mut State, d: Do, egui_ctx: &egui::Conte
             }
             marks_changed(ctx, state);
             if advance && targets.len() == 1 {
-                step(ctx, state, 1, false);
+                match state.mode.kind() {
+                    Kind::Browse => step(ctx, state, 1, false),
+                    Kind::Tape => tape_step(ctx, state, 1),
+                    Kind::Compare => move_candidate(ctx, state, 1),
+                    Kind::Survey => {
+                        if let Mode::Survey(s) = &mut state.mode {
+                            s.step(1);
+                        }
+                        show_survey(ctx, state);
+                    }
+                }
             }
         }
         Do::Rate(r) => {
@@ -1032,12 +1336,287 @@ fn apply(ctx: &mut PageCtx<'_>, state: &mut State, d: Do, egui_ctx: &egui::Conte
             set_selection(ctx, ids);
         }
         Do::Search(text) => *ctx.search = text,
+        Do::Mode(kind) => {
+            let current = state.mode.kind();
+            leave(ctx, state);
+            if kind != current {
+                match kind {
+                    Kind::Browse => {}
+                    Kind::Tape => enter_tape(ctx, state),
+                    Kind::Compare => enter_compare(ctx, state),
+                    Kind::Survey => enter_survey(ctx, state),
+                }
+            }
+        }
+        Do::FastReview => {
+            state.fast_review = !state.fast_review;
+            if let Mode::Tape(t) = &mut state.mode {
+                t.fast = state.fast_review;
+                let rate = t.last.map_or(1.0, |k| t.rate_for(k));
+                ctx.player.set_rate(rate);
+            }
+        }
+        Do::Candidate(delta) => move_candidate(ctx, state, delta),
+        Do::Promote => {
+            let order = result_ids(state);
+            if let Mode::Compare(c) = &mut state.mode {
+                let select = c.candidate.clone();
+                let next = compare::next_candidate(&order, &select, &select, 0);
+                c.candidate = next.unwrap_or_else(|| c.select.clone());
+                c.select = select;
+            }
+            show_compare(ctx, state);
+        }
+        Do::Preview(id) => open_id(ctx, state, &id),
+        Do::SurveyFocus(at) => {
+            if let Mode::Survey(s) = &mut state.mode {
+                s.focus = at.min(s.ids.len().saturating_sub(1));
+            }
+            show_survey(ctx, state);
+        }
+        Do::SurveyMove(delta) => {
+            if let Mode::Survey(s) = &mut state.mode {
+                s.step(delta);
+            }
+            show_survey(ctx, state);
+        }
+        Do::SurveyRemove(at) => {
+            if let Mode::Survey(s) = &mut state.mode {
+                let at = at.unwrap_or(s.focus);
+                s.remove(at);
+            }
+            show_survey(ctx, state);
+        }
+        Do::Group(dir) => {
+            if let Mode::Survey(s) = &state.mode {
+                let from = s.group.or_else(|| {
+                    s.ids
+                        .first()
+                        .and_then(|id| survey::group_of(&state.groups, id))
+                });
+                if let Some(g) = survey::next_group(&state.groups, from, dir)
+                    && let Some(members) = state.groups.get(g)
+                {
+                    let ids = members.iter().take(survey::MAX).cloned().collect();
+                    state.mode = Mode::Survey(survey::Survey::new(ids, 0, Some(g)));
+                    show_survey(ctx, state);
+                }
+            }
+        }
     }
 }
 
-/// Who a verdict, rating or reference applies to: the selection, or the
+/// The segment with this id.
+pub(super) fn segment<'a>(night: &Night<'a>, id: &str) -> Option<&'a crate::index::Scored> {
+    night.index.segments.iter().find(|s| s.id == id)
+}
+
+/// The results' segment ids, in order.
+fn result_ids(state: &State) -> Vec<String> {
+    (0..state.items.len())
+        .filter_map(|i| id_at(state, i))
+        .collect()
+}
+
+/// Makes `id` the focused, selected shot and scrolls it into view.
+fn focus_on(ctx: &mut PageCtx<'_>, state: &mut State, id: String) {
+    set_selection(ctx, vec![id.clone()]);
+    state.anchor = Some(id.clone());
+    state.cursor = Some(id);
+    state.reveal = true;
+}
+
+/// Keeps the selection on the shot under the tape's playhead; drops back
+/// to browsing when the viewer was given something else.
+fn follow_tape(ctx: &mut PageCtx<'_>, state: &mut State) {
+    let Mode::Tape(t) = &mut state.mode else {
+        return;
+    };
+    match tape::follow(t, ctx.player) {
+        tape::Follow::Gone => state.mode = Mode::Browse,
+        tape::Follow::Same => {}
+        tape::Follow::Now(id) => focus_on(ctx, state, id),
+    }
+}
+
+/// Loads the results into the viewer as a tape and plays it from the
+/// focused shot.
+fn enter_tape(ctx: &mut PageCtx<'_>, state: &mut State) {
+    let Some(index) = ctx.project.as_ref().and_then(|p| p.index.as_ref()) else {
+        return;
+    };
+    let tape = tape::Tape::new(
+        index,
+        state.items.iter().map(|it| it.seg),
+        &state.paths,
+        state.fast_review,
+    );
+    if tape.ids.is_empty() {
+        return;
+    }
+    let from = state
+        .cursor
+        .as_deref()
+        .and_then(|c| tape.position_of(c))
+        .unwrap_or(0);
+    ctx.player.set_rate(1.0);
+    ctx.player.open_sequence(tape.shots.clone(), None);
+    ctx.player.seek(tape.start_of(from));
+    ctx.player.play();
+    state.mode = Mode::Tape(tape);
+}
+
+/// Moves the tape's playhead `delta` shots on, to the start of that shot.
+fn tape_step(ctx: &mut PageCtx<'_>, state: &mut State, delta: isize) {
+    let Mode::Tape(t) = &mut state.mode else {
+        return;
+    };
+    let Some(last) = t.ids.len().checked_sub(1) else {
+        return;
+    };
+    let next = t.last.unwrap_or(0).saturating_add_signed(delta).min(last);
+    ctx.player.seek(t.start_of(next));
+    ctx.player.set_rate(t.rate_for(next));
+    t.last = Some(next);
+    if let Some(id) = t.ids.get(next).cloned() {
+        focus_on(ctx, state, id);
+    }
+}
+
+/// Starts comparing: the first selected shot (or the focused one) is the
+/// select, the second selected (or the next result) the candidate.
+fn enter_compare(ctx: &mut PageCtx<'_>, state: &mut State) {
+    let order = result_ids(state);
+    let selected = selected_ids(ctx.selection);
+    let Some(select) = selected
+        .first()
+        .cloned()
+        .or_else(|| state.cursor.clone())
+        .or_else(|| order.first().cloned())
+    else {
+        return;
+    };
+    let candidate = selected
+        .get(1)
+        .filter(|c| **c != select)
+        .cloned()
+        .or_else(|| compare::next_candidate(&order, &select, &select, 0));
+    let Some(candidate) = candidate else {
+        return;
+    };
+    state.mode = Mode::Compare(compare::Compare { select, candidate });
+    show_compare(ctx, state);
+}
+
+/// Steps the candidate `delta` results on.
+fn move_candidate(ctx: &mut PageCtx<'_>, state: &mut State, delta: isize) {
+    let order = result_ids(state);
+    if let Mode::Compare(c) = &mut state.mode
+        && let Some(next) = compare::next_candidate(&order, &c.select, &c.candidate, delta)
+    {
+        c.candidate = next;
+    }
+    show_compare(ctx, state);
+}
+
+/// Selects the select and the candidate (so `R` mentions both) and shows
+/// the candidate in the viewer.
+fn show_compare(ctx: &mut PageCtx<'_>, state: &mut State) {
+    let Mode::Compare(c) = &state.mode else {
+        return;
+    };
+    let (select, candidate) = (c.select.clone(), c.candidate.clone());
+    set_selection(ctx, vec![select, candidate.clone()]);
+    state.cursor = Some(candidate.clone());
+    state.reveal = true;
+    open_id(ctx, state, &candidate);
+}
+
+/// Starts a survey of the selection, or, with fewer than two selected, of
+/// the focused shot's group.
+fn enter_survey(ctx: &mut PageCtx<'_>, state: &mut State) {
+    let selected = selected_ids(ctx.selection);
+    let survey = if selected.len() >= 2 {
+        let focus = state
+            .cursor
+            .as_deref()
+            .and_then(|c| selected.iter().position(|x| x == c))
+            .unwrap_or(0);
+        let group = selected
+            .first()
+            .and_then(|id| survey::group_of(&state.groups, id));
+        survey::Survey::new(selected, focus, group)
+    } else {
+        let from = state
+            .cursor
+            .clone()
+            .or_else(|| selected.first().cloned())
+            .and_then(|id| survey::group_of(&state.groups, &id));
+        let group = from
+            .filter(|g| state.groups.get(*g).is_some_and(|m| m.len() >= 2))
+            .or_else(|| survey::next_group(&state.groups, from, 1))
+            .or_else(|| survey::next_group(&state.groups, None, 1));
+        let Some((g, members)) = group.and_then(|g| state.groups.get(g).map(|m| (g, m))) else {
+            return;
+        };
+        let ids: Vec<String> = members.iter().take(survey::MAX).cloned().collect();
+        let focus = state
+            .cursor
+            .as_deref()
+            .and_then(|c| ids.iter().position(|x| x == c))
+            .unwrap_or(0);
+        survey::Survey::new(ids, focus, Some(g))
+    };
+    if survey.ids.len() < 2 {
+        return;
+    }
+    state.mode = Mode::Survey(survey);
+    show_survey(ctx, state);
+}
+
+/// Selects what is left of the survey and shows the focused tile.
+fn show_survey(ctx: &mut PageCtx<'_>, state: &mut State) {
+    let Mode::Survey(s) = &state.mode else {
+        return;
+    };
+    let ids = s.ids.clone();
+    let focused = s.focused().map(str::to_owned);
+    set_selection(ctx, ids);
+    if let Some(id) = focused {
+        state.cursor = Some(id.clone());
+        state.reveal = true;
+        open_id(ctx, state, &id);
+    }
+}
+
+/// Back to browsing: the tape stops (its shot stays in the viewer as a
+/// clip), Compare leaves the select selected, Survey what is left.
+fn leave(ctx: &mut PageCtx<'_>, state: &mut State) {
+    match std::mem::take(&mut state.mode) {
+        Mode::Browse | Mode::Survey(_) => {}
+        Mode::Tape(t) => {
+            if t.is_loaded(ctx.player) {
+                ctx.player.pause();
+                ctx.player.set_rate(1.0);
+                if let Some(id) = state.cursor.clone() {
+                    open_id(ctx, state, &id);
+                }
+            }
+        }
+        Mode::Compare(c) => focus_on(ctx, state, c.select),
+    }
+    state.reveal = true;
+}
+
+/// Who a verdict, rating or reference applies to: in Compare the
+/// candidate, in Survey the focused tile; otherwise the selection, or the
 /// cursor when nothing is selected.
 fn targets(ctx: &PageCtx<'_>, state: &State) -> Vec<String> {
+    match &state.mode {
+        Mode::Compare(c) => return vec![c.candidate.clone()],
+        Mode::Survey(s) => return s.focused().map(str::to_owned).into_iter().collect(),
+        Mode::Browse | Mode::Tape(_) => {}
+    }
     let ids = selected_ids(ctx.selection);
     if ids.is_empty() {
         state.cursor.iter().cloned().collect()
@@ -1140,16 +1719,40 @@ fn step(ctx: &mut PageCtx<'_>, state: &mut State, delta: isize, extend: bool) {
     state.reveal = true;
 }
 
-/// Loads result `item` into the viewer.
-fn open(ctx: &mut PageCtx<'_>, state: &State, item: usize) {
+/// Loads result `item` into the viewer; on the tape, moves the playhead
+/// to it instead.
+fn open(ctx: &mut PageCtx<'_>, state: &mut State, item: usize) {
     let Some(it) = state.items.get(item) else {
         return;
     };
+    let seg = it.seg;
+    if let Mode::Tape(t) = &mut state.mode
+        && let Some(id) = state.ids.get(seg)
+        && let Some(k) = t.position_of(id)
+        && t.is_loaded(ctx.player)
+    {
+        ctx.player.seek(t.start_of(k));
+        ctx.player.set_rate(t.rate_for(k));
+        t.last = Some(k);
+        return;
+    }
+    open_seg(ctx, state, seg);
+}
+
+/// Loads segment `id` into the viewer.
+fn open_id(ctx: &mut PageCtx<'_>, state: &State, id: &str) {
+    if let Some(seg) = state.ids.iter().position(|x| x == id) {
+        open_seg(ctx, state, seg);
+    }
+}
+
+/// Loads segment `seg` (a position in `Index::segments`) into the viewer.
+fn open_seg(ctx: &mut PageCtx<'_>, state: &State, seg: usize) {
     let Some(seg) = ctx
         .project
         .as_ref()
         .and_then(|p| p.index.as_ref())
-        .and_then(|i| i.segments.get(it.seg))
+        .and_then(|i| i.segments.get(seg))
     else {
         return;
     };
@@ -1325,6 +1928,36 @@ pub(super) fn tooltip(ui: &mut egui::Ui, paint: &Paint<'_>, item: &Item) {
     }
 }
 
+/// The width left in `ui` that is actually on screen: a wide header row
+/// can stretch the pane's layout past its clip edge.
+pub(super) fn visible_width(ui: &egui::Ui) -> f32 {
+    ui.available_width()
+        .min(ui.clip_rect().right() - ui.cursor().left())
+        .max(0.0)
+}
+
+/// The room a vertical scroll bar takes.
+pub(super) fn scroll_bar_width(ui: &egui::Ui) -> f32 {
+    let s = &ui.spacing().scroll;
+    s.bar_width + s.bar_inner_margin + s.bar_outer_margin
+}
+
+/// A play triangle on a dark disc, centred at `c`, `r` across the disc's
+/// radius.
+pub(super) fn play_mark(painter: &egui::Painter, c: egui::Pos2, r: f32, color: egui::Color32) {
+    painter.circle_filled(c, r, egui::Color32::from_black_alpha(170));
+    let h = r * 0.55;
+    painter.add(egui::Shape::convex_polygon(
+        vec![
+            c + egui::vec2(-h * 0.6, -h),
+            c + egui::vec2(h, 0.0),
+            c + egui::vec2(-h * 0.6, h),
+        ],
+        color,
+        egui::Stroke::NONE,
+    ));
+}
+
 /// The mark badge: fill colour and glyph.
 pub(super) fn verdict_style(theme: &Palette, v: Verdict) -> (egui::Color32, &'static str) {
     match v {
@@ -1369,5 +2002,254 @@ mod tests {
             Some(10.0),
             "above"
         );
+    }
+
+    /// The review modes, driven through the real app by key presses in
+    /// egui_kittest's headless harness.
+    mod modes {
+        use super::super::{Kind, Mode, State, result_ids, selected_ids};
+        use crate::analyze::segments::Segment;
+        use crate::analyze::{ClipIndex, Sample};
+        use crate::gui::app::{Action, App, Page};
+        use crate::gui::player::Source;
+        use crate::index::{Index, Scored};
+        use crate::media::Probe;
+        use crate::project::Project;
+        use crate::search::marks::Verdict;
+        use egui::{Key, Modifiers};
+        use egui_kittest::Harness;
+
+        /// Clips A (3 shots), B (2) and C (1), best first.
+        fn index() -> Index {
+            let probe = Probe {
+                duration: 60.0,
+                width: 1920,
+                height: 1080,
+                fps: [24000, 1001],
+                vcodec: "h264".into(),
+                has_audio: false,
+            };
+            let mut clips = Vec::new();
+            let mut segments = Vec::new();
+            let mut q = 0.95;
+            for (clip, n) in [("A", 3), ("B", 2), ("C", 1)] {
+                clips.push(ClipIndex {
+                    id: clip.into(),
+                    path: format!("{clip}.mov"),
+                    stamp: (0, 0),
+                    probe: probe.clone(),
+                    samples: vec![Sample::default()],
+                    segments: Vec::new(),
+                    hist: Vec::new(),
+                    version: crate::analyze::ANALYSIS_VERSION,
+                });
+                for k in 0..n {
+                    let t = k as f32 * 10.0;
+                    segments.push(Scored {
+                        id: format!("{clip}/{}", k + 1),
+                        clip: clip.into(),
+                        seg: Segment {
+                            start: t,
+                            end: t + 2.0 + k as f32 * 4.0,
+                            cx: 0.5,
+                            sharp: 1.0,
+                            ..Segment::default()
+                        },
+                        subject: "fire".into(),
+                        q,
+                        ..Default::default()
+                    });
+                    q -= 0.1;
+                }
+            }
+            Index {
+                source: String::new(),
+                sharp_ref: 1.0,
+                clips,
+                segments,
+                ..Default::default()
+            }
+        }
+
+        /// The app on the Shots tab of a night holding [`index`].
+        fn harness(work: &std::path::Path) -> anyhow::Result<Harness<'static, Option<App>>> {
+            let mut project = Project::open(work)?;
+            project.index = Some(index());
+            let mut project = Some(project);
+            let mut harness = Harness::builder()
+                .with_size(egui::vec2(1600.0, 900.0))
+                .with_accessibility_check(false)
+                .build_ui_state(
+                    move |ui, app: &mut Option<App>| {
+                        let app = app.get_or_insert_with(|| {
+                            let mut app =
+                                App::new(ui.ctx(), crate::config::Config::default(), None);
+                            app.project = project.take();
+                            app.apply(ui.ctx(), Action::Go(Page::Review));
+                            app
+                        });
+                        app.show(ui);
+                    },
+                    None,
+                );
+            harness.run_steps(4);
+            Ok(harness)
+        }
+
+        fn press(h: &mut Harness<'_, Option<App>>, key: Key) {
+            h.key_press(key);
+            h.run_steps(3);
+        }
+
+        fn press_with(h: &mut Harness<'_, Option<App>>, modifiers: Modifiers, key: Key) {
+            h.key_press_modifiers(modifiers, key);
+            h.run_steps(3);
+        }
+
+        fn app<'a>(h: &'a Harness<'_, Option<App>>) -> anyhow::Result<&'a App> {
+            h.state()
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("the app was never built"))
+        }
+
+        fn review<'a>(h: &'a Harness<'_, Option<App>>) -> anyhow::Result<&'a State> {
+            Ok(&app(h)?.pages.review)
+        }
+
+        fn selection(h: &Harness<'_, Option<App>>) -> anyhow::Result<Vec<String>> {
+            Ok(selected_ids(&app(h)?.selection))
+        }
+
+        #[test]
+        fn tape_plays_the_results_and_the_selection_follows() -> anyhow::Result<()> {
+            let dir = tempfile::tempdir()?;
+            let mut h = harness(dir.path())?;
+            let order = result_ids(review(&h)?);
+            assert_eq!(order.len(), 6, "every shot is a result: {order:?}");
+            press(&mut h, Key::ArrowRight);
+            press(&mut h, Key::T);
+            let a = app(&h)?;
+            assert_eq!(a.pages.review.mode.kind(), Kind::Tape, "T starts the tape");
+            let Source::Sequence { shots, .. } = a.player.source() else {
+                anyhow::bail!("the viewer holds {:?}", a.player.source());
+            };
+            assert_eq!(shots.len(), 6, "the whole result set is on the tape");
+            assert!(a.player.playing(), "the tape plays");
+            assert_eq!(selection(&h)?, order[..1], "the first shot is selected");
+
+            press_with(&mut h, Modifiers::SHIFT, Key::L);
+            let Mode::Tape(t) = &review(&h)?.mode else {
+                anyhow::bail!("left the tape");
+            };
+            assert!(t.fast, "Shift+L turns Fast Review on");
+
+            press(&mut h, Key::P);
+            let r = review(&h)?;
+            assert_eq!(
+                r.marks.get(&order[0]).verdict,
+                Some(Verdict::Pick),
+                "P picks the playing shot"
+            );
+            assert_eq!(
+                selection(&h)?,
+                order[1..2],
+                "and the tape moves on, the selection with it"
+            );
+            let Mode::Tape(t) = &r.mode else {
+                anyhow::bail!("P left the tape");
+            };
+            assert_eq!(t.playing(), Some(order[1].as_str()), "the playing card");
+
+            press(&mut h, Key::R);
+            let staged: Vec<String> = selected_ids(&app(&h)?.refs);
+            assert_eq!(staged, order[1..2], "R still mentions the selection");
+
+            press(&mut h, Key::Escape);
+            let a = app(&h)?;
+            assert_eq!(a.pages.review.mode.kind(), Kind::Browse, "Esc leaves");
+            assert!(!a.player.playing(), "and stops the tape");
+            Ok(())
+        }
+
+        #[test]
+        fn compare_steps_the_candidate_and_promotes_it() -> anyhow::Result<()> {
+            let dir = tempfile::tempdir()?;
+            let mut h = harness(dir.path())?;
+            let order = result_ids(review(&h)?);
+            press(&mut h, Key::ArrowRight);
+            press(&mut h, Key::C);
+            let Mode::Compare(c) = &review(&h)?.mode else {
+                anyhow::bail!("C did not compare");
+            };
+            assert_eq!(
+                (c.select.as_str(), c.candidate.as_str()),
+                (order[0].as_str(), order[1].as_str()),
+                "the focused shot against the next"
+            );
+            assert_eq!(selection(&h)?, order[..2], "both are selected");
+
+            press(&mut h, Key::ArrowRight);
+            press(&mut h, Key::X);
+            let r = review(&h)?;
+            assert_eq!(
+                r.marks.get(&order[2]).verdict,
+                Some(Verdict::Reject),
+                "X rejects the candidate"
+            );
+            let Mode::Compare(c) = &r.mode else {
+                anyhow::bail!("X left compare");
+            };
+            assert_eq!(c.candidate, order[3], "and moves the candidate on");
+
+            press(&mut h, Key::ArrowUp);
+            let Mode::Compare(c) = &review(&h)?.mode else {
+                anyhow::bail!("Up left compare");
+            };
+            assert_eq!(c.select, order[3], "Up promotes the candidate");
+            assert_eq!(c.candidate, order[4], "the next result is the candidate");
+
+            press(&mut h, Key::Escape);
+            assert_eq!(review(&h)?.mode.kind(), Kind::Browse, "Esc leaves");
+            assert_eq!(selection(&h)?, order[3..4], "the select stays selected");
+            Ok(())
+        }
+
+        #[test]
+        fn survey_drops_shots_and_goes_on_to_the_next_group() -> anyhow::Result<()> {
+            let dir = tempfile::tempdir()?;
+            let mut h = harness(dir.path())?;
+            press(&mut h, Key::ArrowRight);
+            press(&mut h, Key::G);
+            let Mode::Survey(s) = &review(&h)?.mode else {
+                anyhow::bail!("G did not survey");
+            };
+            assert_eq!(s.ids, ["A/1", "A/2", "A/3"], "the focused shot's group");
+            assert_eq!(selection(&h)?, s.ids, "the tiles are the selection");
+
+            press(&mut h, Key::X);
+            let r = review(&h)?;
+            let Mode::Survey(s) = &r.mode else {
+                anyhow::bail!("X left the survey");
+            };
+            assert_eq!(s.ids, ["A/2", "A/3"], "X drops the focused tile");
+            assert_eq!(r.marks.get("A/1").verdict, None, "without rejecting it");
+            assert_eq!(selection(&h)?, ["A/2", "A/3"], "the selection shrinks too");
+
+            press(&mut h, Key::CloseBracket);
+            let Mode::Survey(s) = &review(&h)?.mode else {
+                anyhow::bail!("] left the survey");
+            };
+            assert_eq!(s.ids, ["B/1", "B/2"], "] loads the next group");
+
+            press(&mut h, Key::OpenBracket);
+            let Mode::Survey(s) = &review(&h)?.mode else {
+                anyhow::bail!("[ left the survey");
+            };
+            assert_eq!(s.ids, ["A/1", "A/2", "A/3"], "[ goes back");
+
+            press_with(&mut h, Modifiers::SHIFT, Key::R);
+            assert!(app(&h)?.ref_popup, "Shift+R still offers the intents");
+            Ok(())
+        }
     }
 }

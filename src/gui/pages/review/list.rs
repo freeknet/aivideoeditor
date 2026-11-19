@@ -453,6 +453,14 @@ fn row(
             StrokeKind::Inside,
         );
     }
+    // The tape is playing this one: a bar down the left edge.
+    if paint.playing == Some(s.id.as_str()) {
+        painter.rect_filled(
+            Rect::from_min_size(rect.min, egui::vec2(3.0, rect.height())),
+            CornerRadius::ZERO,
+            theme::rgb(theme.success),
+        );
+    }
     response.on_hover_ui(|ui| super::tooltip(ui, paint, item))
 }
 
