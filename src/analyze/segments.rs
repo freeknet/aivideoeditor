@@ -22,7 +22,7 @@ const MAX_LEN: f32 = 6.0;
 const MIN_RUN: usize = 4;
 
 /// What the camera is doing.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum Camera {
     /// Locked off or near enough.
@@ -38,6 +38,7 @@ pub(crate) enum Camera {
     /// Handheld jitter without a steady direction.
     Shaky,
     /// Too dark or featureless to tell.
+    #[default]
     Unknown,
 }
 
@@ -57,7 +58,7 @@ impl Camera {
 }
 
 /// A summarised stretch of a clip.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Segment {
     /// Start, seconds.
     pub(crate) start: f32,
@@ -95,6 +96,120 @@ pub(crate) struct Segment {
     pub(crate) pan: f32,
     /// Handheld jitter: spread of the pan speed around its local mean.
     pub(crate) jitter: f32,
+    /// Mean lit-region luma: exposure of what is actually lit.
+    #[serde(default)]
+    pub(crate) lit: f32,
+    /// Mean fraction of the frame that is lit.
+    #[serde(default)]
+    pub(crate) lit_frac: f32,
+    /// Mean 95th-percentile luma of the lit region.
+    #[serde(default)]
+    pub(crate) lit_p95: f32,
+    /// Biggest burst (fire / LED / moving-light onset), fraction of frame.
+    #[serde(default)]
+    pub(crate) burst: f32,
+    /// The best moment: the biggest burst's onset, or the peak of the
+    /// action when nothing bursts. Seconds in the clip.
+    #[serde(default)]
+    pub(crate) peak_t: f32,
+    /// Onset times of every burst moment, strongest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) moments: Vec<f32>,
+    /// Look-alike signature.
+    #[serde(default)]
+    pub(crate) sig: Signature,
+}
+
+/// What a segment looks like, coarsely: enough to tell "same spot, same
+/// performer, same action" from "different shot" without pixels.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct Signature {
+    /// Mean coarse HSV histogram (8 hue x 2 sat x 2 val), sums to 1.
+    #[serde(default)]
+    pub(crate) hist: Vec<f32>,
+    /// Where the emitters are: share of the emitter pixels in each cell of
+    /// a 4x4 grid, sums to 1 (all zero when there are none).
+    #[serde(default)]
+    pub(crate) grid: Vec<f32>,
+    /// Median horizontal centre of the action.
+    #[serde(default)]
+    pub(crate) cx: f32,
+}
+
+impl Signature {
+    /// Weight of the colour histogram in [`Self::distance`].
+    const W_HIST: f32 = 0.45;
+    /// Weight of the emitter layout.
+    const W_GRID: f32 = 0.35;
+    /// Weight of the action centre.
+    const W_CX: f32 = 0.20;
+
+    /// Whether the signature was measured (older indexes have none).
+    pub(crate) fn is_empty(&self) -> bool {
+        self.hist.is_empty()
+    }
+
+    /// Distance 0 (identical) to 1: weighted half-L1 of the histograms and
+    /// the emitter layouts plus the gap between action centres. Two
+    /// segments with no emitters at all match on layout.
+    pub(crate) fn distance(&self, other: &Self) -> f32 {
+        let half_l1 = |a: &[f32], b: &[f32]| {
+            if a.len() != b.len() {
+                return 1.0;
+            }
+            0.5 * a.iter().zip(b).map(|(x, y)| (x - y).abs()).sum::<f32>()
+        };
+        let ea: f32 = self.grid.iter().sum();
+        let eb: f32 = other.grid.iter().sum();
+        let grid = match (ea > 0.0, eb > 0.0) {
+            (true, true) => half_l1(&self.grid, &other.grid),
+            (false, false) => 0.0,
+            (true, false) | (false, true) => 1.0,
+        };
+        Self::W_HIST * half_l1(&self.hist, &other.hist)
+            + Self::W_GRID * grid
+            + Self::W_CX * (self.cx - other.cx).abs()
+    }
+}
+
+/// Fills each segment's signature from the per-sample histograms and
+/// emitter grids (parallel to `samples`).
+pub(crate) fn sign(
+    segments: &mut [Segment],
+    samples: &[Sample],
+    hists: &[[f32; 32]],
+    grids: &[[f32; 16]],
+) {
+    for seg in segments.iter_mut() {
+        let idx: Vec<usize> = (0..samples.len().min(hists.len()).min(grids.len()))
+            .filter(|&i| samples[i].t >= seg.start && samples[i].t < seg.end)
+            .collect();
+        if idx.is_empty() {
+            continue;
+        }
+        let n = idx.len() as f32;
+        let mut hist = vec![0.0_f32; 32];
+        let mut grid = vec![0.0_f32; 16];
+        for &i in &idx {
+            for (a, b) in hist.iter_mut().zip(&hists[i]) {
+                *a += b / n;
+            }
+            for (a, b) in grid.iter_mut().zip(&grids[i]) {
+                *a += b;
+            }
+        }
+        let total: f32 = grid.iter().sum();
+        if total > 0.0 {
+            for g in &mut grid {
+                *g /= total;
+            }
+        }
+        seg.sig = Signature {
+            hist,
+            grid,
+            cx: seg.cx,
+        };
+    }
 }
 
 /// Median of a slice (0 when empty).
@@ -271,6 +386,18 @@ fn summarise(
         1.0 / 6.0
     };
     let zoom_ln: f32 = s.iter().map(|x| x.zoom * dt).sum();
+    let found = super::moments::moments(s);
+    // Peak: the biggest burst's onset, else the most active sample.
+    let peak_t = found.first().map_or_else(
+        || {
+            s.iter()
+                .max_by(|a, b| {
+                    (a.flame + a.led + a.moving).total_cmp(&(b.flame + b.led + b.moving))
+                })
+                .map_or(0.0, |x| x.t + dt / 2.0)
+        },
+        |m| m.t,
+    );
     Segment {
         start: s.first().map_or(0.0, |x| x.t),
         end: s.last().map_or(0.0, |x| x.t) + dt,
@@ -290,6 +417,16 @@ fn summarise(
         zoom_factor: zoom_ln.exp(),
         pan: s.iter().map(|x| x.pan_x * dt).sum(),
         jitter: median(&jitter[lo..hi]),
+        lit: mean(|x| x.lit),
+        lit_frac: mean(|x| x.lit_frac),
+        lit_p95: mean(|x| x.lit_p95),
+        burst: s.iter().map(|x| x.burst).fold(0.0, f32::max),
+        peak_t,
+        moments: found
+            .iter()
+            .map(|m| (m.t * 1000.0).round() / 1000.0)
+            .collect(),
+        sig: Signature::default(),
     }
 }
 
@@ -388,6 +525,70 @@ mod tests {
             "all <= 6 s: {segs:?}"
         );
         assert_eq!(segs.len(), 4, "20 s splits into 4");
+        Ok(())
+    }
+
+    #[test]
+    fn a_segment_peaks_on_its_fireball() -> anyhow::Result<()> {
+        let mut s = series(30, |i| Sample {
+            t: i as f32 / 6.0,
+            motion_ok: true,
+            flame: if i >= 12 { 0.04 } else { 0.001 },
+            ..Sample::default()
+        });
+        crate::analyze::moments::bursts(&mut s);
+        let segs = segment(&s);
+        assert_eq!(segs.len(), 1, "one static segment");
+        let g = &segs[0];
+        assert!(
+            (g.peak_t - 1.917).abs() < 0.02,
+            "peak at the onset between 1.83 and 2.0 s: {}",
+            g.peak_t
+        );
+        assert_eq!(g.moments.len(), 1, "one moment");
+        assert!(g.burst > 0.03, "burst size {}", g.burst);
+        Ok(())
+    }
+
+    #[test]
+    fn signatures_tell_spots_and_layouts_apart() -> anyhow::Result<()> {
+        let s = series(12, |i| Sample {
+            t: i as f32 / 6.0,
+            motion_ok: true,
+            cx: 0.3,
+            ..Sample::default()
+        });
+        let mut segs = segment(&s);
+        let mut warm = [0.0_f32; 32];
+        warm[0] = 1.0;
+        let mut left = [0.0_f32; 16];
+        left[4] = 0.01;
+        super::sign(&mut segs, &s, &[warm; 12], &[left; 12]);
+        let a = segs[0].sig.clone();
+        assert!(
+            (a.grid[4] - 1.0).abs() < 1e-6,
+            "the grid is a layout: {:?}",
+            a.grid
+        );
+        assert!(a.distance(&a) < 1e-6, "self distance is zero");
+        let mut moved = a.clone();
+        moved.grid = vec![0.0; 16];
+        moved.grid[7] = 1.0;
+        let mut other_spot = a.clone();
+        other_spot.hist = vec![0.0; 32];
+        other_spot.hist[20] = 1.0;
+        let d_layout = a.distance(&moved);
+        let d_spot = a.distance(&other_spot);
+        assert!(
+            d_layout > 0.3 && d_spot > 0.4,
+            "different layout {d_layout}, different palette {d_spot}"
+        );
+        let mut nudged = a.clone();
+        nudged.cx = 0.35;
+        assert!(
+            a.distance(&nudged) < 0.02,
+            "a small reframe still looks alike"
+        );
         Ok(())
     }
 }

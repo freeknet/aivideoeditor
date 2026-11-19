@@ -1069,6 +1069,7 @@ mod tests {
             zoom_factor: 1.0,
             pan: 0.0,
             jitter: 0.0,
+            ..Segment::default()
         }
     }
 
@@ -1093,6 +1094,7 @@ mod tests {
                 setting: "outdoor stage".to_owned(),
                 issues: Vec::new(),
             }),
+            ..Scored::default()
         }
     }
 
@@ -1101,6 +1103,8 @@ mod tests {
             source: String::new(),
             sharp_ref: 2.0,
             clips: Vec::new(),
+            thresholds: Default::default(),
+            work: None,
             segments: vec![
                 scored(
                     "MVI_7901/1",

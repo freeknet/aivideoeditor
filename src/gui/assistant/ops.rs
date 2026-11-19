@@ -444,6 +444,7 @@ pub(crate) mod tests {
                     note: format!("n{}", k + 1),
                 })
                 .collect(),
+            finish: Default::default(),
         }
     }
 

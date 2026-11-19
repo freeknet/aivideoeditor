@@ -1,8 +1,9 @@
 // ============================================================================
 // Module:       draft
 // Description:  Drafts an edit plan from the index and the music map: lays out
-//               a beat grid (breakdown, build, drop, phrases, finale, card) and
-//               fills each slot with the best footage the rules allow.
+//               a beat grid (breakdown, build, drop, energy-paced phrases,
+//               finale, card) and fills each slot with the best footage the
+//               rules allow.
 //
 // Dependencies: crate::index, crate::beats, crate::plan, crate::people
 // ============================================================================
@@ -14,16 +15,25 @@
 //! - the edit starts `lead` bars before the drop, in the breakdown: one
 //!   shot per bar, calm subjects (LED, silks, DJ, venue), zooms welcome;
 //! - the bar before the drop builds: 2 + 1 + 1 beats;
-//! - the drop lands on the hero shot (the strongest fire);
-//! - loud bars cut every 2 beats, the last bar of each phrase stutters
-//!   (1 + 1 + 2); quiet bars hold a shot for the whole bar;
+//! - the drop lands on the hero shot (the strongest fire), with its biggest
+//!   burst (see [`crate::analyze::moments`]) put on the downbeat: the
+//!   in-point is the burst's onset, so the flare lands on the cut;
+//! - after the drop, shot lengths follow the music's per-bar energy (see
+//!   [`pace`]): quiet bars hold a shot for the bar (two quiet bars may share
+//!   one 8-beat shot), loud bars cut every 2 beats, the loudest stutter, the
+//!   last bar of a phrase prefers the 1 + 1 + 2 stutter, and a pattern that
+//!   repeats bar after bar costs more each time, so lengths never go uniform;
 //! - the last bar before the end card is a fire finale.
 //!
 //! Slots are filled most-important first (drop, finale, opening, then in
-//! order). A candidate is a window of a clip: it must lie inside segments
-//! free of rejected flags and captions, and it must respect every rule in
-//! [`Rules`] against the shots already placed. The draft is a starting
-//! point: `ave check` re-verifies it and a person or LLM can edit the TOML.
+//! order). A candidate is a window of a clip centred on its segment's best
+//! moment (`peak_t`): it must lie inside segments free of rejected flags and
+//! captions, must not reuse a moment another night's plan used (see
+//! [`Memory`]), must not look like a placed shot, and must respect every
+//! rule in [`Rules`] against the shots already placed. If the footage runs
+//! out of distinct shots the pacing eases (fewer cuts per bar) and the draft
+//! is tried again. The draft is a starting point: `ave check` re-verifies it
+//! and a person or LLM can edit the TOML.
 
 use anyhow::{Result, bail};
 
@@ -32,7 +42,7 @@ use crate::analyze::segments::{Camera, median};
 use crate::beats::MusicMap;
 use crate::index::{Index, Scored};
 use crate::people::People;
-use crate::plan::{Aspect, Plan, Rules, Shot};
+use crate::plan::{Aspect, Finish, Memory, Plan, Rules, Shot};
 
 /// What a slot wants to show.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -110,13 +120,7 @@ fn kind(seg: &Scored, caption: Option<&crate::caption::Caption>) -> &'static str
 
 /// Quality of one analysis sample, on the same scale as segment `q`.
 fn sample_q(s: &Sample, sharp_ref: f32) -> f32 {
-    let expo = if s.p95 < 0.5 {
-        (s.p95 / 0.5).powf(1.5)
-    } else if s.clipped > 0.06 {
-        (1.0 - (s.clipped - 0.06) * 4.0).max(0.2)
-    } else {
-        1.0
-    };
+    let expo = crate::index::exposure_q(s.lit, s.lit_frac, s.clipped);
     let focus = (s.sharp / sharp_ref).clamp(0.0, 1.4) / 1.4;
     let action = (s.moving / 0.01).sqrt().clamp(0.0, 1.0);
     expo * (0.45 + 0.55 * focus) * (0.35 + 0.65 * action)
@@ -144,10 +148,160 @@ struct Candidate {
     kind: &'static str,
     framing: String,
     flame: f32,
+    /// Burst at the in-point (aligned windows) or the biggest inside.
+    burst: f32,
+    /// Whether the in-point is a burst onset (the flare lands on the cut).
+    aligned: bool,
+}
+
+/// A bar pattern after the drop: how a bar (or two) is cut.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Pattern {
+    /// One 8-beat shot over two quiet bars.
+    Hold8,
+    /// One shot for the bar.
+    Hold,
+    /// 2 + 2.
+    Even,
+    /// 1 + 1 + 2: the phrase-end stutter.
+    StutterEnd,
+    /// 2 + 1 + 1.
+    StutterStart,
+}
+
+impl Pattern {
+    /// Every pattern.
+    const ALL: [Self; 5] = [
+        Self::Hold8,
+        Self::Hold,
+        Self::Even,
+        Self::StutterEnd,
+        Self::StutterStart,
+    ];
+
+    /// Shot lengths in beats.
+    fn beats(self) -> &'static [usize] {
+        match self {
+            Self::Hold8 => &[8],
+            Self::Hold => &[4],
+            Self::Even => &[2, 2],
+            Self::StutterEnd => &[1, 1, 2],
+            Self::StutterStart => &[2, 1, 1],
+        }
+    }
+
+    /// Bars the pattern covers.
+    fn bars(self) -> usize {
+        match self {
+            Self::Hold8 => 2,
+            Self::Hold | Self::Even | Self::StutterEnd | Self::StutterStart => 1,
+        }
+    }
+
+    /// Cuts per bar.
+    fn rate(self) -> f32 {
+        self.beats().len() as f32 / self.bars() as f32
+    }
+}
+
+/// Energy of bar `bar` (low end relative to the loudest bar; loud when
+/// unknown).
+fn energy(map: &MusicMap, bar: usize) -> f32 {
+    map.bars.get(bar).map_or(1.0, |b| b.low)
+}
+
+/// Cuts per bar the music asks for at energy `e`: one for quiet bars,
+/// rising to 2.5 for the loudest; `ease` takes half a cut off per step.
+fn target_rate(e: f32, ease: usize) -> f32 {
+    let t = 1.0 + 1.5 * ((e - 0.3) / 0.5).clamp(0.0, 1.0);
+    (t - 0.5 * ease as f32).max(0.5)
+}
+
+/// Cost of the same pattern `run` bars in a row (uniform lengths read as
+/// mechanical; each repeat costs more).
+const UNIFORM: f32 = 0.12;
+
+/// Energy-adaptive pacing (after BEAT's bar DP): picks a pattern for every
+/// bar `first..first + n` of the track so the cut rate follows the bar's
+/// energy, stutters fall on phrase ends (`k % 4 == 3`, `k` counted from
+/// the drop), an 8-beat hold never crosses a phrase line, and a pattern
+/// repeated bar after bar pays [`UNIFORM`] times its run length.
+fn pace(map: &MusicMap, first: usize, k0: usize, n: usize, ease: usize) -> Vec<Pattern> {
+    // Bar cost of pattern `p` starting at offset `i`.
+    let cost = |p: Pattern, i: usize| -> Option<f32> {
+        let k = k0 + i;
+        if i + p.bars() > n {
+            return None;
+        }
+        let phrase_end = k % 4 == 3;
+        let mut c = 0.0;
+        for b in 0..p.bars() {
+            let e = energy(map, first + i + b);
+            c += (p.rate() - target_rate(e, ease)).powi(2);
+        }
+        match p {
+            Pattern::Hold8 => {
+                // Both bars quiet, and inside one phrase.
+                if phrase_end || (0..2).any(|b| energy(map, first + i + b) >= 0.35) {
+                    return None;
+                }
+            }
+            Pattern::StutterEnd => {
+                c += if phrase_end { -0.3 } else { 0.25 };
+            }
+            Pattern::StutterStart => c += 0.25,
+            Pattern::Hold | Pattern::Even => {}
+        }
+        Some(c)
+    };
+    // best[i][(p, run)]: cheapest way to cover bars i.. given the pattern
+    // ending just before i was p, repeated `run` times (run capped at 3).
+    let idx = |p: Pattern| Pattern::ALL.iter().position(|&q| q == p).unwrap_or(0);
+    let states = Pattern::ALL.len() * 4 + 1; // +1: nothing before
+    let mut best = vec![vec![f32::INFINITY; states]; n];
+    best.push(vec![0.0; states]);
+    let mut choice: Vec<Vec<Option<Pattern>>> = vec![vec![None; states]; n + 1];
+    for i in (0..n).rev() {
+        for s in 0..states {
+            let (prev, run) = if s + 1 == states {
+                (None, 0)
+            } else {
+                (Some(Pattern::ALL[s / 4]), s % 4)
+            };
+            for p in Pattern::ALL {
+                let Some(c) = cost(p, i) else { continue };
+                let (next_run, penalty) = if prev == Some(p) {
+                    ((run + 1).min(3), UNIFORM * (run + 1) as f32)
+                } else {
+                    (1, 0.0)
+                };
+                let next = idx(p) * 4 + next_run;
+                let total = c + penalty + best[i + p.bars()][next];
+                if total < best[i][s] {
+                    best[i][s] = total;
+                    choice[i][s] = Some(p);
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    let (mut i, mut s) = (0, states - 1);
+    while i < n {
+        let Some(p) = choice[i][s] else { break };
+        let run = if s + 1 != states && Pattern::ALL[s / 4] == p {
+            (s % 4 + 1).min(3)
+        } else {
+            1
+        };
+        out.push(p);
+        s = idx(p) * 4 + run;
+        i += p.bars();
+    }
+    out
 }
 
 /// The grid of slots for a short edit.
-fn grid(map: &MusicMap, lead: usize, after: usize, drop_bar: usize) -> Vec<Slot> {
+fn grid(map: &MusicMap, lead: usize, after: usize, drop_bar: usize, ease: usize) -> Vec<Slot> {
     let mut slots = Vec::new();
     for b in 0..lead {
         if b + 1 == lead {
@@ -166,44 +320,36 @@ fn grid(map: &MusicMap, lead: usize, after: usize, drop_bar: usize) -> Vec<Slot>
             });
         }
     }
-    for k in 0..after {
-        let bar = drop_bar + k;
-        let loud = map.bars.get(bar).is_none_or(|b| b.low >= 0.35);
+    slots.push(Slot {
+        beats: 4,
+        want: Want::Hero,
+        priority: 0,
+    });
+    let middle = after.saturating_sub(2);
+    let mut k = 1;
+    for p in pace(map, drop_bar + 1, 1, middle, ease) {
         let phrase = k / 4;
-        let last_in_phrase = k % 4 == 3;
-        if k == 0 {
-            slots.push(Slot {
-                beats: 4,
-                want: Want::Hero,
-                priority: 0,
-            });
-        } else if k + 1 == after {
-            slots.push(Slot {
-                beats: 4,
-                want: Want::Finale,
-                priority: 1,
-            });
-        } else if !loud {
-            slots.push(Slot {
-                beats: 4,
-                want: Want::Other,
-                priority: 30,
-            });
+        let quiet = matches!(p, Pattern::Hold8 | Pattern::Hold);
+        let want = if quiet || (phrase % 2 == 1 && k % 4 < 2) {
+            Want::Other
         } else {
-            let want = if phrase % 2 == 1 && k % 4 < 2 {
-                Want::Other
-            } else {
-                Want::Fire
-            };
-            let pattern: &[usize] = if last_in_phrase { &[1, 1, 2] } else { &[2, 2] };
-            for &beats in pattern {
-                slots.push(Slot {
-                    beats,
-                    want,
-                    priority: 60 + k,
-                });
-            }
+            Want::Fire
+        };
+        for &beats in p.beats() {
+            slots.push(Slot {
+                beats,
+                want,
+                priority: if quiet { 30 } else { 60 + k },
+            });
         }
+        k += p.bars();
+    }
+    if after >= 2 {
+        slots.push(Slot {
+            beats: 4,
+            want: Want::Finale,
+            priority: 1,
+        });
     }
     slots
 }
@@ -236,7 +382,9 @@ fn fit(want: Want, c: &Candidate) -> f32 {
         }
         Want::Hero => {
             if fire {
-                1.0 + 20.0 * c.flame
+                // The biggest burst landing on the downbeat wins.
+                let on_cut = if c.aligned { 1.0 + 40.0 * c.burst } else { 1.0 };
+                (1.0 + 20.0 * c.flame) * on_cut
             } else {
                 0.0
             }
@@ -264,9 +412,17 @@ fn fit(want: Want, c: &Candidate) -> f32 {
     }
 }
 
-/// All windows of `dur` seconds that avoid rejected segments, one per
-/// start segment, scored.
-fn candidates(index: &Index, rules: &Rules, aspect: Aspect, dur: f32) -> Vec<Candidate> {
+/// All windows of `dur` seconds that avoid rejected segments, scored: one
+/// per start segment centred on its best moment, plus (when `align`) one
+/// starting on each burst onset, so a flare can land on the cut.
+fn candidates(
+    index: &Index,
+    rules: &Rules,
+    aspect: Aspect,
+    dur: f32,
+    align: bool,
+    memory: &Memory,
+) -> Vec<Candidate> {
     let crop = aspect.crop_frac();
     let mut out = Vec::new();
     for clip in &index.clips {
@@ -300,108 +456,204 @@ fn candidates(index: &Index, rules: &Rules, aspect: Aspect, dur: f32) -> Vec<Can
             if bad(i) {
                 continue;
             }
-            // Extend through following good segments if this one is short.
+            // Extend through the following good segments, so a window may
+            // run on past this segment's end (a moment near its end can
+            // still start a shot).
             let mut end = g.seg.end;
             let mut j = i;
-            while end - g.seg.start < dur + 0.2 && j + 1 < segs.len() && !bad(j + 1) {
+            while j + 1 < segs.len() && !bad(j + 1) && end < g.seg.end + dur + 0.2 {
                 j += 1;
                 end = segs[j].seg.end;
             }
+            // The last segment ends a sample period after its last sample,
+            // which can be past the end of the file.
+            let end = end.min(clip.probe.duration as f32 - 0.02);
             if end - g.seg.start < dur + 0.1 {
                 continue;
             }
-            // Centre the window on the segment, inside the good run.
-            let mid = 0.5 * (g.seg.start + g.seg.end);
-            let t_in = (mid - dur / 2.0).clamp(g.seg.start + 0.05, end - dur - 0.05);
-            let t_out = t_in + dur;
-            let spanned: Vec<usize> = (i..=j)
-                .filter(|&k| segs[k].seg.end > t_in + 0.05 && segs[k].seg.start < t_out - 0.05)
-                .collect();
-            // The same crop limit `check` applies, so a draft never fails it.
-            if crop < 1.0
-                && spanned
-                    .iter()
-                    .any(|&k| segs[k].subject != "none" && segs[k].seg.cx_spread > crop * 1.2)
-            {
-                continue;
-            }
-            let captions: Vec<&crate::caption::Caption> =
-                spanned.iter().filter_map(|&k| caption_of(k)).collect();
-            if captions.iter().any(|c| {
-                rules
-                    .reject_moments
-                    .contains(&c.effective_moment().to_owned())
-                    || (rules.reject_blocked && c.blocked)
-            }) {
-                continue;
-            }
-            let window: Vec<&Sample> = clip
-                .samples
-                .iter()
-                .filter(|s| s.t >= t_in && s.t < t_out)
-                .collect();
-            if window.is_empty() {
-                continue;
-            }
-            let q = window
-                .iter()
-                .map(|s| sample_q(s, index.sharp_ref))
-                .sum::<f32>()
-                / window.len() as f32;
-            let cam = spanned
-                .iter()
-                .map(|&k| steady(segs[k].seg.camera))
-                .fold(1.0_f32, f32::min);
-            let cxs: Vec<f32> = window.iter().map(|s| s.cx).collect();
-            let half = crop / 2.0;
-            let cx = if crop < 1.0 {
-                median(&cxs).clamp(half, 1.0 - half)
+            let lo = g.seg.start + 0.05;
+            let hi = end - dur - 0.05;
+            // Centre the window on the segment's best moment.
+            let peak = if g.seg.peak_t > g.seg.start && g.seg.peak_t < g.seg.end {
+                g.seg.peak_t
             } else {
-                0.5
+                0.5 * (g.seg.start + g.seg.end)
             };
-            let main = caption_of(i);
-            let what = kind(g, main);
-            // The weakest caption over the window decides.
-            let moment = captions
-                .iter()
-                .map(|c| match c.effective_moment() {
-                    "performing" if c.props_active => 1.2,
-                    "performing" => 1.0,
-                    "venue" | "crowd" => 1.0,
-                    _ => 0.5,
-                } * if !c.props_active && (what == "fire" || what == "led") { 0.4 } else { 1.0 })
-                .fold(1.2_f32, f32::min);
-            let issues = main.map_or(0, |c| c.issues.len()) as f32;
-            out.push(Candidate {
-                clip: clip.id.clone(),
-                seg_id: g.id.clone(),
-                t_in,
-                cx,
-                score: q * cam * moment * (1.0 - 0.08 * issues.min(4.0)),
-                kind: what,
-                framing: main.map(|c| c.framing.clone()).unwrap_or_default(),
-                flame: window.iter().map(|s| s.flame).sum::<f32>() / window.len() as f32,
-            });
+            let mut starts = vec![((peak - dur / 2.0).clamp(lo, hi), false)];
+            if align {
+                for &m in &g.seg.moments {
+                    if m >= lo && m <= hi {
+                        starts.push((m, true));
+                    }
+                }
+            }
+            for (t_in, aligned) in starts {
+                if memory.hit(index, &clip.id, t_in, t_in + dur).is_some() {
+                    continue;
+                }
+                if let Some(c) = window(
+                    index,
+                    rules,
+                    clip,
+                    &segs,
+                    (i, j),
+                    t_in,
+                    dur,
+                    crop,
+                    aligned,
+                    &caption_of,
+                ) {
+                    out.push(c);
+                }
+            }
         }
     }
     out
+}
+
+/// Scores the window `t_in..t_in + dur` of `clip`, which starts in segment
+/// `run.0` and stays inside the good run `run.0..=run.1`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the candidate loop's context; a struct would only rename it"
+)]
+fn window<'c>(
+    index: &Index,
+    rules: &Rules,
+    clip: &crate::analyze::ClipIndex,
+    segs: &[&Scored],
+    run: (usize, usize),
+    t_in: f32,
+    dur: f32,
+    crop: f32,
+    aligned: bool,
+    caption_of: &dyn Fn(usize) -> Option<&'c crate::caption::Caption>,
+) -> Option<Candidate> {
+    let (i, j) = run;
+    let g = segs[i];
+    let t_out = t_in + dur;
+    let spanned: Vec<usize> = (i..=j)
+        .filter(|&k| segs[k].seg.end > t_in + 0.05 && segs[k].seg.start < t_out - 0.05)
+        .collect();
+    // The same crop limit `check` applies, so a draft never fails it.
+    if crop < 1.0
+        && spanned
+            .iter()
+            .any(|&k| segs[k].subject != "none" && segs[k].seg.cx_spread > crop * 1.2)
+    {
+        return None;
+    }
+    let captions: Vec<&crate::caption::Caption> =
+        spanned.iter().filter_map(|&k| caption_of(k)).collect();
+    if captions.iter().any(|c| {
+        rules
+            .reject_moments
+            .contains(&c.effective_moment().to_owned())
+            || (rules.reject_blocked && c.blocked)
+    }) {
+        return None;
+    }
+    let window: Vec<&Sample> = clip
+        .samples
+        .iter()
+        .filter(|s| s.t >= t_in && s.t < t_out)
+        .collect();
+    if window.is_empty() {
+        return None;
+    }
+    let q = window
+        .iter()
+        .map(|s| sample_q(s, index.sharp_ref))
+        .sum::<f32>()
+        / window.len() as f32;
+    let cam = spanned
+        .iter()
+        .map(|&k| steady(segs[k].seg.camera))
+        .fold(1.0_f32, f32::min);
+    let cxs: Vec<f32> = window.iter().map(|s| s.cx).collect();
+    let half = crop / 2.0;
+    let cx = if crop < 1.0 {
+        // Rounded to the plan's two decimals, inward, so rounding never
+        // pushes the crop out of the frame.
+        ((median(&cxs) * 100.0).round() / 100.0).clamp(
+            (half * 100.0).ceil() / 100.0,
+            ((1.0 - half) * 100.0).floor() / 100.0,
+        )
+    } else {
+        0.5
+    };
+    let main = caption_of(i);
+    let what = kind(g, main);
+    // The weakest caption over the window decides.
+    let moment = captions
+        .iter()
+        .map(|c| match c.effective_moment() {
+            "performing" if c.props_active => 1.2,
+            "performing" => 1.0,
+            "venue" | "crowd" => 1.0,
+            _ => 0.5,
+        } * if !c.props_active && (what == "fire" || what == "led") { 0.4 } else { 1.0 })
+        .fold(1.2_f32, f32::min);
+    let issues = main.map_or(0, |c| c.issues.len()) as f32;
+    // Burst at the cut for aligned windows (the first sample at or after
+    // the onset carries the rise), else the biggest inside.
+    let burst = if aligned {
+        window.iter().take(2).map(|s| s.burst).fold(0.0, f32::max)
+    } else {
+        window.iter().map(|s| s.burst).fold(0.0, f32::max)
+    };
+    Some(Candidate {
+        clip: clip.id.clone(),
+        seg_id: g.id.clone(),
+        t_in,
+        cx,
+        score: q * cam * moment * (1.0 - 0.08 * issues.min(4.0)),
+        kind: what,
+        framing: main.map(|c| c.framing.clone()).unwrap_or_default(),
+        flame: window.iter().map(|s| s.flame).sum::<f32>() / window.len() as f32,
+        burst,
+        aligned,
+    })
+}
+
+/// A candidate as the shot it would become in a slot of `beats`.
+fn as_shot(c: &Candidate, beats: usize, people: &People) -> Shot {
+    Shot {
+        clip: c.clip.clone(),
+        t_in: (c.t_in * 100.0).round() / 100.0,
+        beats,
+        cx: (c.cx * 100.0).round() / 100.0,
+        who: people.name_at(&c.clip, c.t_in),
+        seg: c.seg_id.clone(),
+        note: String::new(),
+    }
 }
 
 /// Whether `c` may go in slot `k` given what is placed already.
 fn allowed(
     c: &Candidate,
     k: usize,
+    slots: &[Slot],
     placed: &[Option<Shot>],
-    people: &People,
-    rules: &Rules,
+    ctx: (&Index, &People, &Rules, f32),
 ) -> bool {
-    let who = people.name_at(&c.clip, c.t_in);
+    let (index, people, rules, beat) = ctx;
+    let me = as_shot(c, slots[k].beats, people);
+    let who = people.who(&me);
+    let dur = slots[k].beats as f32 * beat;
     placed.iter().enumerate().all(|(j, p)| {
         let Some(p) = p else { return true };
         if p.clip == c.clip && (p.t_in - c.t_in).abs() < rules.same_clip_gap {
             return false;
         }
-        !(people.who(p) == who && k.abs_diff(j) <= rules.person_gap)
+        if people.who(p) == who && k.abs_diff(j) <= rules.person_gap {
+            return false;
+        }
+        let pdur = slots[j].beats as f32 * beat;
+        !(rules.lookalike > 0.0
+            && p.clip != c.clip
+            && crate::plan::lookalike(index, people, (&me, dur), (p, pdur))
+                .is_some_and(|d| d < rules.lookalike))
     })
 }
 
@@ -412,6 +664,32 @@ pub(crate) fn draft(
     people: &People,
     spec: &Spec,
     music: &str,
+) -> Result<Plan> {
+    let memory = Memory::for_index(index);
+    let mut last = None;
+    for ease in 0..3 {
+        match draft_paced(index, map, people, spec, music, &memory, ease) {
+            Ok(plan) => {
+                if ease > 0 {
+                    log::info!("eased the cutting pace {ease} step(s) to find distinct footage");
+                }
+                return Ok(plan);
+            }
+            Err(e) => last = Some(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| anyhow::anyhow!("no draft")))
+}
+
+/// One drafting attempt at pacing ease `ease`.
+fn draft_paced(
+    index: &Index,
+    map: &MusicMap,
+    people: &People,
+    spec: &Spec,
+    music: &str,
+    memory: &Memory,
+    ease: usize,
 ) -> Result<Plan> {
     let Some(drop) = map.drops.first() else {
         bail!("the music map has no drop; pick bars by hand in the plan file");
@@ -430,27 +708,28 @@ pub(crate) fn draft(
     let lead = drop.bar - start_bar;
     let card_bar = drop.bar + after;
     let rules = Rules::default();
-    let slots = grid(map, lead, after, drop.bar);
+    let slots = grid(map, lead, after, drop.bar, ease);
 
     let mut placed: Vec<Option<Shot>> = vec![None; slots.len()];
     let mut order: Vec<usize> = (0..slots.len()).collect();
     order.sort_by_key(|&k| (slots[k].priority, k));
     let beat = 60.0 / map.bpm;
-    let mut pools: std::collections::BTreeMap<usize, Vec<Candidate>> =
+    let mut pools: std::collections::BTreeMap<(usize, bool), Vec<Candidate>> =
         std::collections::BTreeMap::new();
     for &k in &order {
         let slot = slots[k];
         let dur = slot.beats as f32 * beat;
+        let align = slot.want == Want::Hero;
         let pool = pools
-            .entry(slot.beats)
-            .or_insert_with(|| candidates(index, &rules, spec.aspect, dur));
+            .entry((slot.beats, align))
+            .or_insert_with(|| candidates(index, &rules, spec.aspect, dur, align, memory));
         let prev_framing = k
             .checked_sub(1)
             .and_then(|j| placed[j].as_ref())
             .map(|s| s.note.clone());
         let best = pool
             .iter()
-            .filter(|c| allowed(c, k, &placed, people, &rules))
+            .filter(|c| allowed(c, k, &slots, &placed, (index, people, &rules, beat)))
             .map(|c| {
                 let mut s = c.score * fit(slot.want, c);
                 if prev_framing
@@ -471,19 +750,18 @@ pub(crate) fn draft(
                 slot.beats
             );
         };
-        placed[k] = Some(Shot {
-            clip: c.clip.clone(),
-            t_in: (c.t_in * 100.0).round() / 100.0,
-            beats: slot.beats,
-            cx: (c.cx * 100.0).round() / 100.0,
-            who: people.name_at(&c.clip, c.t_in),
-            seg: c.seg_id.clone(),
-            note: format!(
-                "{:?} · {} {} · score {score:.2}",
-                slot.want, c.kind, c.framing
-            )
-            .to_lowercase(),
-        });
+        let mut shot = as_shot(c, slot.beats, people);
+        let accent = if c.aligned {
+            format!(" · burst {:.1}% on the cut", c.burst * 100.0)
+        } else {
+            String::new()
+        };
+        shot.note = format!(
+            "{:?} · {} {} · score {score:.2}{accent}",
+            slot.want, c.kind, c.framing
+        )
+        .to_lowercase();
+        placed[k] = Some(shot);
     }
     Ok(Plan {
         name: spec.name.clone(),
@@ -495,32 +773,43 @@ pub(crate) fn draft(
         end_bar: card_bar + spec.card_bars,
         end_card: spec.end_card.clone(),
         rules,
+        finish: Finish::default(),
         shots: placed.into_iter().flatten().collect(),
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Want, grid};
+    use super::{Pattern, Want, grid, pace};
     use crate::beats::{Bar, MusicMap};
 
-    #[test]
-    fn the_grid_fills_whole_bars() -> anyhow::Result<()> {
-        let map = MusicMap {
+    /// A 140 BPM map whose bar energies are `low`.
+    fn map(low: &[f32]) -> MusicMap {
+        MusicMap {
             path: String::new(),
             duration: 100.0,
             bpm: 140.0,
-            beats: (0..200).map(|i| i as f32 * 60.0 / 140.0).collect(),
-            bars: (0..50)
-                .map(|i| Bar {
+            beats: (0..low.len() * 4)
+                .map(|i| i as f32 * 60.0 / 140.0)
+                .collect(),
+            bars: low
+                .iter()
+                .enumerate()
+                .map(|(i, &l)| Bar {
                     t: i as f32,
                     rms: 1.0,
-                    low: 1.0,
+                    low: l,
                 })
                 .collect(),
+            drops: Vec::new(),
             ..MusicMap::default()
-        };
-        let slots = grid(&map, 4, 12, 16);
+        }
+    }
+
+    #[test]
+    fn the_grid_fills_whole_bars() -> anyhow::Result<()> {
+        let map = map(&[1.0; 50]);
+        let slots = grid(&map, 4, 12, 16, 0);
         let beats: usize = slots.iter().map(|s| s.beats).sum();
         assert_eq!(beats, 16 * 4, "4 lead + 12 after bars");
         assert_eq!(
@@ -532,6 +821,182 @@ mod tests {
             slots.last().is_some_and(|s| s.want == Want::Finale),
             "ends on the finale"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn pacing_follows_energy_and_avoids_uniform_lengths() -> anyhow::Result<()> {
+        // Four quiet bars, then eight loud ones.
+        let mut low = vec![0.1; 4];
+        low.extend([1.0; 8]);
+        let m = map(&low);
+        let p = pace(&m, 0, 0, 12, 0);
+        let covered: usize = p.iter().map(|x| x.bars()).sum();
+        assert_eq!(covered, 12, "every bar paced: {p:?}");
+        let quiet_cuts: usize = p
+            .iter()
+            .scan(0, |bar, x| {
+                let here = *bar;
+                *bar += x.bars();
+                Some((here, x))
+            })
+            .filter(|(bar, _)| *bar < 4)
+            .map(|(_, x)| x.beats().len())
+            .sum();
+        assert!(quiet_cuts <= 4, "quiet bars hold: {p:?}");
+        let loud: Vec<&Pattern> = p.iter().rev().take(8).collect();
+        assert!(
+            loud.iter().all(|x| x.rate() >= 2.0),
+            "loud bars cut at least every 2 beats: {p:?}"
+        );
+        assert!(
+            loud.windows(3).all(|w| !(w[0] == w[1] && w[1] == w[2])),
+            "no pattern three bars running: {p:?}"
+        );
+        // Bars 7 and 11 end phrases: they stutter 1 + 1 + 2.
+        let at = |bar: usize| {
+            let mut b = 0;
+            p.iter().find(|x| {
+                let hit = b == bar;
+                b += x.bars();
+                hit
+            })
+        };
+        assert_eq!(
+            at(7),
+            Some(&Pattern::StutterEnd),
+            "phrase end stutters: {p:?}"
+        );
+        assert_eq!(
+            at(11),
+            Some(&Pattern::StutterEnd),
+            "phrase end stutters: {p:?}"
+        );
+        Ok(())
+    }
+
+    /// Fourteen 60 s fire clips, each with one fireball; clip F07's is the
+    /// biggest. Returns the index and F07's fireball onset.
+    fn fireball_night() -> (crate::index::Index, f32) {
+        use crate::analyze::{ClipIndex, Sample, moments, segments};
+        let mut clips = Vec::new();
+        for c in 0..14 {
+            let ball = 20 + 7 * c; // sample index of the fireball
+            let size = if c == 7 { 0.15 } else { 0.08 };
+            let mut samples: Vec<Sample> = (0..360)
+                .map(|i| Sample {
+                    t: i as f32 / 6.0,
+                    luma: 0.05,
+                    p95: 0.6,
+                    sharp: 1.0,
+                    flame: if (ball..ball + 12).contains(&i) {
+                        size
+                    } else {
+                        0.03
+                    },
+                    moving: 0.01,
+                    cx: 0.5,
+                    cy: 0.5,
+                    motion_ok: true,
+                    lit: 0.4,
+                    lit_frac: 0.05,
+                    lit_p95: 0.9,
+                    ..Sample::default()
+                })
+                .collect();
+            moments::bursts(&mut samples);
+            let segs = segments::segment(&samples);
+            clips.push(ClipIndex {
+                id: format!("F{c:02}"),
+                path: String::new(),
+                stamp: (0, 0),
+                probe: crate::media::Probe {
+                    duration: 60.0,
+                    width: 1920,
+                    height: 1080,
+                    fps: [24, 1],
+                    vcodec: String::new(),
+                    has_audio: false,
+                },
+                samples,
+                segments: segs,
+                hist: Vec::new(),
+                version: crate::analyze::ANALYSIS_VERSION,
+            });
+        }
+        let onset = (20 + 7 * 7) as f32 / 6.0 - 1.0 / 12.0;
+        let thresholds = crate::index::Thresholds::default();
+        let (sharp_ref, segments) = crate::index::score(&clips, &thresholds);
+        (
+            crate::index::Index {
+                sharp_ref,
+                clips,
+                segments,
+                thresholds,
+                ..crate::index::Index::default()
+            },
+            onset,
+        )
+    }
+
+    #[test]
+    fn the_drop_puts_the_biggest_burst_on_the_downbeat() -> anyhow::Result<()> {
+        let (index, onset) = fireball_night();
+        let mut music = map(&[0.2; 8]
+            .iter()
+            .chain(&[1.0; 32])
+            .copied()
+            .collect::<Vec<_>>());
+        music.drops.push(crate::beats::Drop {
+            bar: 8,
+            t: 0.0,
+            score: 1.0,
+            user: false,
+        });
+        let spec = super::Spec {
+            name: "reel-15".into(),
+            aspect: crate::plan::Aspect::Vertical,
+            seconds: 15.0,
+            end_card: String::new(),
+            card_bars: 1,
+        };
+        let people = crate::people::People::default();
+        let plan = super::draft(&index, &music, &people, &spec, "m.wav")?;
+        let drop_beat = (plan.drop_bar - plan.start_bar) * 4;
+        let mut beat = 0;
+        let hero = plan
+            .shots
+            .iter()
+            .find(|s| {
+                let hit = beat == drop_beat;
+                beat += s.beats;
+                hit
+            })
+            .ok_or_else(|| anyhow::anyhow!("no shot on the drop"))?;
+        assert_eq!(hero.clip, "F07", "the biggest fireball: {hero:?}");
+        assert!(
+            (hero.t_in - onset).abs() <= 1.0 / 24.0,
+            "the burst lands within a frame of the cut: in {} vs onset {onset}",
+            hero.t_in
+        );
+        let problems = crate::plan::check(&plan, &index, &music, &people);
+        assert!(
+            problems.is_empty(),
+            "the draft passes its check: {problems:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn easing_cuts_less() -> anyhow::Result<()> {
+        let m = map(&[1.0; 12]);
+        let cuts = |ease| -> usize {
+            pace(&m, 0, 0, 12, ease)
+                .iter()
+                .map(|x| x.beats().len())
+                .sum()
+        };
+        assert!(cuts(2) < cuts(0), "eased pacing has fewer cuts");
         Ok(())
     }
 }

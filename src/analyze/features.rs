@@ -25,6 +25,18 @@ use crate::media::Frame;
 /// this before any per-pixel work).
 pub(crate) const PLANE_W: usize = 240;
 
+/// Luma above which a pixel counts as part of the lit region. Night
+/// footage is mostly black; exposure is judged on what is above this floor
+/// (the performer, the fire, the lit ground), not on the frame average.
+pub(crate) const LIT_FLOOR: f32 = 0.08;
+
+/// Mid-tone band for colour matching: above the noise floor, below the
+/// highlights, and never an emitter (flames would set the white balance).
+const MID_BAND: (f32, f32) = (0.08, 0.7);
+
+/// Columns and rows of the emitter layout grid.
+pub(crate) const GRID: (usize, usize) = (4, 4);
+
 /// Measurements for one frame.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct FrameFeatures {
@@ -43,6 +55,18 @@ pub(crate) struct FrameFeatures {
     pub(crate) led: f32,
     /// Fraction that is white emitter (lamps, bulbs, flame cores).
     pub(crate) white: f32,
+    /// Fraction of the frame above [`LIT_FLOOR`].
+    pub(crate) lit_frac: f32,
+    /// Mean luma of the lit region (0 when nothing is lit).
+    pub(crate) lit: f32,
+    /// 95th-percentile luma of the lit region.
+    pub(crate) lit_p95: f32,
+    /// Mean RGB (0..1) of mid-tone, non-emitter pixels.
+    pub(crate) mid: [f32; 3],
+    /// Fraction of the frame those mid-tone pixels cover.
+    pub(crate) mid_frac: f32,
+    /// Emitter share of each [`GRID`] cell, row-major.
+    pub(crate) grid: [f32; 16],
     /// Emitter mask over the analysis plane (1 = emitter).
     pub(crate) emitters: Vec<u8>,
     /// Coarse HSV histogram (8 hue x 2 sat x 2 val), normalised.
@@ -152,12 +176,21 @@ pub(crate) fn measure(frame: &Frame) -> FrameFeatures {
 
     let mut hist = [0.0_f32; 32];
     let mut counts = [0_u32; 101];
+    let mut lit_counts = [0_u32; 101];
+    let (mut lit_n, mut lit_sum) = (0_u32, 0.0_f64);
+    let (mut mid_n, mut mid_sum) = (0_u32, [0.0_f64; 3]);
+    let mut grid = [0.0_f32; 16];
     let (mut flame, mut led, mut white, mut clipped) = (0_u32, 0_u32, 0_u32, 0_u32);
     let mut emitters = vec![0_u8; n];
     for (i, p) in px.iter().enumerate() {
         let (hue, s, v) = hsv(p[0], p[1], p[2]);
         let l = plane[i];
         counts[(l * 100.0).clamp(0.0, 100.0) as usize] += 1;
+        if l > LIT_FLOOR {
+            lit_n += 1;
+            lit_sum += f64::from(l);
+            lit_counts[(l * 100.0).clamp(0.0, 100.0) as usize] += 1;
+        }
         if l > 0.97 {
             clipped += 1;
         }
@@ -167,6 +200,9 @@ pub(crate) fn measure(frame: &Frame) -> FrameFeatures {
         hist[hb * 4 + sb * 2 + vb] += 1.0;
         if v > 0.5 && v - local[i] > 0.16 {
             emitters[i] = 1;
+            let cell = (i / w * GRID.1 / h.max(1)).min(GRID.1 - 1) * GRID.0
+                + (i % w * GRID.0 / w.max(1)).min(GRID.0 - 1);
+            grid[cell] += 1.0;
             if s < 0.25 {
                 white += 1;
             } else if (5.0..=55.0).contains(&hue) {
@@ -176,20 +212,31 @@ pub(crate) fn measure(frame: &Frame) -> FrameFeatures {
             } else {
                 white += 1;
             }
+        } else if l > MID_BAND.0 && l < MID_BAND.1 {
+            mid_n += 1;
+            for (acc, c) in mid_sum.iter_mut().zip(p) {
+                *acc += f64::from(*c) / 255.0;
+            }
         }
     }
     for value in &mut hist {
         *value /= n as f32;
     }
-    let mut seen = 0;
-    let mut p95 = 1.0;
-    for (bin, count) in counts.iter().enumerate() {
-        seen += count;
-        if seen as f32 >= 0.95 * n as f32 {
-            p95 = bin as f32 / 100.0;
-            break;
-        }
+    let cell_area = (n as f32 / (GRID.0 * GRID.1) as f32).max(1.0);
+    for value in &mut grid {
+        *value /= cell_area;
     }
+    let p95 = percentile_of(&counts, n as u32, 0.95);
+    let lit_p95 = if lit_n == 0 {
+        0.0
+    } else {
+        percentile_of(&lit_counts, lit_n, 0.95)
+    };
+    let mid = if mid_n == 0 {
+        [0.0; 3]
+    } else {
+        mid_sum.map(|s| (s / f64::from(mid_n)) as f32)
+    };
 
     // Focus: Laplacian magnitude where there is something to see.
     let (mut lap, mut lit) = (0.0_f64, 0_u32);
@@ -222,12 +269,34 @@ pub(crate) fn measure(frame: &Frame) -> FrameFeatures {
         flame: flame as f32 / n as f32,
         led: led as f32 / n as f32,
         white: white as f32 / n as f32,
+        lit_frac: lit_n as f32 / n as f32,
+        lit: if lit_n == 0 {
+            0.0
+        } else {
+            (lit_sum / f64::from(lit_n)) as f32
+        },
+        lit_p95,
+        mid,
+        mid_frac: mid_n as f32 / n as f32,
+        grid,
         emitters,
         hist,
         plane,
         pw: w,
         ph: h,
     }
+}
+
+/// Percentile `p` (0..1) of a 101-bin luma histogram holding `n` pixels.
+fn percentile_of(counts: &[u32; 101], n: u32, p: f32) -> f32 {
+    let mut seen = 0;
+    for (bin, count) in counts.iter().enumerate() {
+        seen += count;
+        if seen as f32 >= p * n as f32 {
+            return bin as f32 / 100.0;
+        }
+    }
+    1.0
 }
 
 /// Histogram distance (half L1), 0 = identical, 1 = disjoint.
@@ -272,6 +341,56 @@ mod tests {
         assert!(f.flame > 0.005, "flame fraction {}", f.flame);
         assert!(f.led < 0.001, "no LED expected, got {}", f.led);
         assert!(f.luma < 0.05, "mostly black, got {}", f.luma);
+        assert!(
+            f.lit > 0.4 && f.lit_p95 > 0.5,
+            "the lit region is well exposed: {} / {}",
+            f.lit,
+            f.lit_p95
+        );
+        assert!(
+            f.lit_frac > 0.005 && f.lit_frac < 0.02,
+            "a small lit region: {}",
+            f.lit_frac
+        );
+        // The light sits around x 0.5, y 0.5: grid cells 5, 6, 9, 10.
+        let centre: f32 = [5, 6, 9, 10].iter().map(|&c| f.grid[c]).sum();
+        let total: f32 = f.grid.iter().sum();
+        assert!(
+            total > 0.0 && centre / total > 0.99,
+            "emitters in the centre cells: {:?}",
+            f.grid
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mid_tones_skip_black_and_emitters() -> anyhow::Result<()> {
+        let (w, h) = (480, 270);
+        let mut rgb = vec![0_u8; w * h * 3];
+        // A dim grey-blue ground on the bottom half, a flame on top.
+        for y in 0..h {
+            for x in 0..w {
+                let i = (y * w + x) * 3;
+                if y > h / 2 {
+                    rgb[i..i + 3].copy_from_slice(&[60, 70, 100]);
+                } else if (60..90).contains(&y) && (200..240).contains(&x) {
+                    rgb[i..i + 3].copy_from_slice(&[255, 150, 30]);
+                }
+            }
+        }
+        let f = measure(&Frame {
+            width: w,
+            height: h,
+            rgb,
+        });
+        let want = [60.0 / 255.0, 70.0 / 255.0, 100.0 / 255.0];
+        for (got, want) in f.mid.iter().zip(want) {
+            assert!(
+                (got - want).abs() < 0.02,
+                "mid-tones are the ground only: {:?}",
+                f.mid
+            );
+        }
         Ok(())
     }
 

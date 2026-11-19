@@ -72,3 +72,30 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - GUI Export: deliverables × plan versions with check status, file names before
   rendering, a serial render + OTIO queue that copies each video to its delivery
   name, "render anyway" for failing plans, reveal / open folder / copy path.
+- Night-tuned technical cull: exposure is measured on the lit region (pixels
+  above black), so a fire spinner on black is no longer `dark`; per-night
+  thresholds in `ave.toml` `[thresholds]` (or `[pages.thresholds]`); every flag
+  records its measured value and threshold, and the shot log prints them.
+- Moment detector: a per-sample burst signal (onset of fire / LED area and
+  moving light), with each segment's `peak_t` and `moments` in the index and
+  the shot log.
+- Look-alike rule: each segment stores a signature (colour histogram, emitter
+  layout grid, action centre); `ave check` flags two shots from different clips
+  closer than `lookalike` (default 0.12, calibrated on 2026-11-11) unless the
+  people map names different performers.
+- Cross-week memory: `ave plan` avoids, and `ave check` rejects (rule
+  `reject_reused`), moments used by sibling nights' plans
+  (`<night>/../*/_ave/plans/*.toml`), matched by clip id, file size and range.
+- Planner: windows centre on each segment's best moment; the drop puts the
+  biggest burst on the downbeat (in-point at the burst onset); shot lengths
+  follow per-bar energy through a pacing DP that penalises uniform lengths, and
+  the pace eases when distinct footage runs out; the draft avoids look-alikes.
+- Render: exposure matched on the lit region, mid-tone colour matching to the
+  drop shot (black, highlights and emitters excluded, gains clamped), and an
+  optional cut ahead of the beat; both set in the plan's `[finish]` table
+  (`match_colour`, `cut_lead_frames`).
+
+### Fixed
+
+- Drafted crops are rounded inward so a two-decimal `cx` never leaves the frame,
+  and windows never run past the end of the file.

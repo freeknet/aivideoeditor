@@ -881,11 +881,13 @@ mod tests {
                 zoom_factor: 1.0,
                 pan: 0.0,
                 jitter: 0.0,
+                ..Default::default()
             },
             subject: "none".to_owned(),
             q: 0.1,
             flags: Vec::new(),
             caption: None,
+            ..Default::default()
         };
         assert!(
             flag_reason("dark", &seg, 1.0).contains("0.30"),
