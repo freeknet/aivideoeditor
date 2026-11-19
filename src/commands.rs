@@ -122,6 +122,12 @@ pub(crate) enum Cmd {
         #[arg(long)]
         work: PathBuf,
     },
+    /// Serve the engine as MCP tools on stdio, for an agent (Claude Code).
+    Mcp {
+        /// Work folder (a night's _ave).
+        #[arg(long)]
+        work: PathBuf,
+    },
     /// Print one segment's numbers and caption, or a shot-log summary.
     Show {
         /// Work folder.
@@ -256,6 +262,7 @@ pub(crate) fn execute(command: Cmd, out: &mut impl Write) -> anyhow::Result<()> 
             crate::otio::export(&plan, &index, &map, &path)?;
             writeln!(out, "{}", path.display())?;
         }
+        Cmd::Mcp { work } => crate::mcp::serve(&work)?,
         Cmd::Show { work, ids } => {
             let index = crate::index::Index::load(&work)?;
             if ids.is_empty() {

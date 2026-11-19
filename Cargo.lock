@@ -63,6 +63,7 @@ dependencies = [
  "egui",
  "egui_kittest",
  "env_logger",
+ "image",
  "log",
  "rayon",
  "rfd",
@@ -1815,6 +1816,8 @@ dependencies = [
  "num-traits",
  "png",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]

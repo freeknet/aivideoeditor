@@ -40,9 +40,9 @@ mod complete;
 mod context;
 mod markdown;
 mod model;
-mod ops;
+pub(crate) mod ops;
 mod provider;
-mod store;
+pub(crate) mod store;
 mod tools;
 
 use std::collections::{BTreeSet, HashMap};

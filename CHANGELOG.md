@@ -113,3 +113,6 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `check` with a problem list and red edges, autosaved versions in
   `plans/.history/<name>/` with view and restore, "Draft new…", context menu with
   chat references, and ranked swap alternatives per slot (`A`, `1`–`8`).
+- `ave mcp --work <night>/_ave`: the engine as MCP tools (overview, shot search, segment facts, `look`
+  contact sheets, music map, plan get/edit/draft with stage-then-commit, alternatives, versions, revert,
+  people), so Claude Code or any MCP client can edit inside a night.

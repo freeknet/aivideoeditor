@@ -20,6 +20,7 @@ clap = { version = "4", features = ["derive"] }
 dirs = "7"
 eframe = { version = "0.37", default-features = false, features = ["wgpu", "default_fonts", "x11", "wayland"] }
 egui = "0.37"
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
 toml = "1.2"

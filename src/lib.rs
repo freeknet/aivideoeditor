@@ -52,6 +52,7 @@ pub mod icon;
 mod index;
 mod jobs;
 mod logging;
+mod mcp;
 mod media;
 pub mod motion;
 mod otio;
