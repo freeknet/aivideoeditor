@@ -45,6 +45,10 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   biggest burst on the downbeat (in-point at the burst onset); shot lengths
   follow per-bar energy through a pacing DP that penalises uniform lengths, and
   the pace eases when distinct footage runs out; the draft avoids look-alikes.
+- Render: exposure matched on the lit region, mid-tone colour matching to the
+  drop shot (black, highlights and emitters excluded, gains clamped), and an
+  optional cut ahead of the beat; both set in the plan's `[finish]` table
+  (`match_colour`, `cut_lead_frames`).
 
 ### Fixed
 
