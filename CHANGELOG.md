@@ -25,6 +25,13 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - `ave people`: drafts `people.toml` from caption descriptions and recording times.
 - `ave plan` / `ave check`: TOML storyboard plans on the beat grid, drafted from the
   index under configurable rules, and a checker for hand-edited plans.
+- Shots browser: search over the shot log (free text over captions, people and clip
+  ids, plus facets such as `fire>0.5`, `-flag:soft`, `move:static`, `person:`, `pick`,
+  `like:<id>` more-like-this) with a score and a match reason per result; thumbnail
+  grid with hover scrub and metric bars, or a dense virtualised list; clip stacks,
+  score cut-off, removable filter chips, smart searches; P / X / U pick-reject with
+  auto-advance and 1-5 ratings saved to `<work>/review.toml`; right-click to reference
+  shots in chat.
 - `ave render` / `ave otio`: one-graph ffmpeg render with a 720p preview, and
   OpenTimelineIO export.
 - GUI People tab: performer cards (frames cropped on the action, clip/segment counts,
