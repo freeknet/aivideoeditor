@@ -168,6 +168,23 @@ pub(crate) struct Used {
     pub(crate) t1: f32,
 }
 
+/// The footage folder a night's index was built from, normalised for
+/// comparison (case and slash style), or `None` when it has no index.
+fn footage_of(work: &Path) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct Source {
+        source: String,
+    }
+    let text = std::fs::read_to_string(work.join("index.json")).ok()?;
+    let s: Source = serde_json::from_str(&text).ok()?;
+    Some(
+        s.source
+            .replace('\\', "/")
+            .trim_end_matches('/')
+            .to_lowercase(),
+    )
+}
+
 impl Memory {
     /// Reads the plans of every sibling night of the work folder `work`.
     pub(crate) fn load(work: &Path) -> Self {
@@ -195,12 +212,18 @@ impl Memory {
             return Self { used };
         };
         let me = std::fs::canonicalize(night).unwrap_or_else(|_| night.to_path_buf());
+        // Copies of this same night (same footage folder) are not earlier
+        // weeks: their plans are this night's own cuts, not moments to avoid.
+        let my_footage = footage_of(work);
         for entry in entries.flatten() {
             let dir = entry.path();
             if !dir.is_dir() || std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone()) == me {
                 continue;
             }
             let other = dir.join("_ave");
+            if my_footage.is_some() && footage_of(&other) == my_footage {
+                continue;
+            }
             let Ok(plans) = std::fs::read_dir(other.join("plans")) else {
                 continue;
             };

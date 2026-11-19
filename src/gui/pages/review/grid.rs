@@ -36,7 +36,13 @@ pub(super) fn draw(
 ) -> Drawn {
     let s = &ui.spacing().scroll;
     let bar = s.bar_width + s.bar_inner_margin + s.bar_outer_margin;
-    let inner_w = (ui.available_width() - bar).max(60.0);
+    // Never wider than what is visible: a wide header row can stretch the
+    // pane's layout past its clip edge.
+    let inner_w = (ui
+        .available_width()
+        .min(ui.clip_rect().right() - ui.cursor().left())
+        - bar)
+        .max(60.0);
     let cols = (((inner_w + GAP) / (card_w + GAP)).floor() as usize).max(1);
     let w = (inner_w - GAP * (cols as f32 - 1.0)) / cols as f32;
     let thumb_h = (w * 9.0 / 16.0).round();

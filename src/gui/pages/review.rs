@@ -692,7 +692,7 @@ fn header(
             }
         });
     });
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         egui::ComboBox::from_id_salt("review-sort")
             .selected_text(small(if state.opts.sort == Sort::Best && !query.ranks() {
                 "Best (quality)"
