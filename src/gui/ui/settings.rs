@@ -27,6 +27,8 @@ pub fn draw(app: &App, ctx: &egui::Context, actions: &mut Vec<Action>) {
     let outcome = modal::show(ctx, &theme, "Settings", app.settings_open, WIDTH, |ui| {
         appearance(app, ui, actions);
         ui.add_space(SPACE_LG);
+        keyboard(app, ui, actions);
+        ui.add_space(SPACE_LG);
         behaviour(app, ui, actions);
         ui.add_space(SPACE_LG);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -128,6 +130,40 @@ fn theme_card(
     );
     widgets::focus_ring(ui, active, &response);
     response
+}
+
+/// The keyboard preset: which editor's habits the shortcuts follow, as
+/// Selects asks on its first run.
+fn keyboard(app: &App, ui: &mut Ui, actions: &mut Vec<Action>) {
+    widgets::title(ui, &app.theme, "Keyboard");
+    ui.add_space(SPACE_SM);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = super::theme::SPACE_XS;
+        for preset in super::keymap::Preset::ALL {
+            let on = app.keymap == preset;
+            if widgets::tab(ui, &app.theme, preset.label(), on).clicked() && !on {
+                actions.push(Action::SetKeymap(preset));
+            }
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if widgets::button(
+                ui,
+                &app.theme,
+                "Show all shortcuts",
+                widgets::Emphasis::Secondary,
+            )
+            .clicked()
+            {
+                actions.push(Action::CloseSettings);
+                actions.push(Action::ToggleShortcuts);
+            }
+        });
+    });
+    widgets::muted(
+        ui,
+        &app.theme,
+        "Premiere and Final Cut move the panel keys (Shift+1…4 or Cmd+1…4) and export to where those editors put them.",
+    );
 }
 
 /// The switches.

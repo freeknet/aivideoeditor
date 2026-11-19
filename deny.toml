@@ -24,6 +24,10 @@ allow = [
     "Unlicense",
     "BSL-1.0",
     "MPL-2.0",
+    # Fonts. egui's bundled faces come in under these; the app also ships
+    # Inter (assets/fonts/Inter-Regular.ttf, OFL-1.1, licence text in
+    # assets/fonts/OFL.txt) as its UI face. Not a crate, so cargo-deny does
+    # not see it; this note is the record that its licence was checked.
     "OFL-1.1",
     "Ubuntu-font-1.0",
     # webpki-roots ships the Mozilla CA bundle as data under CDLA-Permissive-2.0

@@ -60,6 +60,49 @@ pub struct Config {
     /// Recently opened nights, newest first.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recent_projects: Option<Vec<String>>,
+    /// The workspace view mode, by its stable name (`default`, `vertical`,
+    /// `comment`, `preview`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view_mode: Option<String>,
+    /// The keyboard preset, by its stable name (`ave`, `premiere`,
+    /// `final-cut`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keymap: Option<String>,
+    /// The default view's panel sizes, as fractions of their parent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panel_sizes: Option<PanelSizes>,
+    /// The panels folded to rails in the default view, by stable name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folded_panels: Option<Vec<String>>,
+    /// The top bar's recent searches, newest first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recent_searches: Option<Vec<String>>,
+}
+
+/// The workspace's splits, each a fraction of the region it divides.
+///
+/// Fractions rather than pixels, so a layout chosen on one monitor keeps its
+/// proportions on another and when the window is resized.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct PanelSizes {
+    /// The chat's share of the window width.
+    pub chat: f32,
+    /// The browser's share of the editor width (right of the chat).
+    pub browser: f32,
+    /// The inspector's share of the editor width.
+    pub inspector: f32,
+    /// The timeline's share of the editor height.
+    pub timeline: f32,
+}
+
+impl PanelSizes {
+    /// Whether every fraction is a usable share: finite and inside (0, 1).
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        [self.chat, self.browser, self.inspector, self.timeline]
+            .iter()
+            .all(|f| f.is_finite() && *f > 0.0 && *f < 1.0)
+    }
 }
 
 /// Where the config file lives: `<config dir>/aivideoeditor/config.toml`.
@@ -100,6 +143,11 @@ pub fn parse(text: &str) -> Config {
             .filter(|[width, height]| width.is_finite() && height.is_finite()),
         last_project: field(&table, "last_project"),
         recent_projects: field(&table, "recent_projects"),
+        view_mode: field(&table, "view_mode"),
+        keymap: field(&table, "keymap"),
+        panel_sizes: field::<PanelSizes>(&table, "panel_sizes").filter(PanelSizes::is_valid),
+        folded_panels: field(&table, "folded_panels"),
+        recent_searches: field(&table, "recent_searches"),
     }
 }
 
@@ -170,10 +218,36 @@ mod tests {
             window_size: Some([1440.0, 900.0]),
             last_project: Some("C:/nights/x/_ave".to_string()),
             recent_projects: Some(vec!["C:/nights/x/_ave".to_string()]),
+            view_mode: Some("vertical".to_string()),
+            keymap: Some("premiere".to_string()),
+            panel_sizes: Some(PanelSizes {
+                chat: 0.25,
+                browser: 0.2,
+                inspector: 0.2,
+                timeline: 0.4,
+            }),
+            folded_panels: Some(vec!["browser".to_string()]),
+            recent_searches: Some(vec!["fire>0.3".to_string()]),
         };
         let text = toml::to_string_pretty(&original)?;
         assert_eq!(parse(&text), original, "what was written must read back");
         Ok(())
+    }
+
+    #[test]
+    fn panel_sizes_outside_zero_to_one_are_dropped() {
+        let config = parse(
+            r#"
+            theme = "nebula"
+            [panel_sizes]
+            chat = 1.5
+            browser = 0.2
+            inspector = 0.2
+            timeline = 0.4
+            "#,
+        );
+        assert_eq!(config.panel_sizes, None, "a share above 1 is not a layout");
+        assert_eq!(config.theme.as_deref(), Some("nebula"), "the rest survives");
     }
 
     #[test]

@@ -1,7 +1,7 @@
 // ============================================================================
 // Module:       screenshot (example)
-// Description:  Renders every page of the app headlessly to PNG files, for the
-//               README and for reviewing a visual change.
+// Description:  Renders every page, view mode and overlay of the app headlessly
+//               to PNG files, for the README and for reviewing a visual change.
 //
 // Dependencies: egui_kittest (headless harness + wgpu renderer), anyhow;
 //               aivideoeditor::gui::app
@@ -16,6 +16,7 @@
 //! trust a picture that is three changes out of date.
 
 use aivideoeditor::gui::app::{Action, App, Page};
+use aivideoeditor::gui::ui::layout::ViewMode;
 
 fn main() -> anyhow::Result<()> {
     let out = std::env::args().nth(1).map_or_else(
@@ -34,7 +35,25 @@ fn main() -> anyhow::Result<()> {
     } else {
         aivideoeditor::gui::DEFAULT_SIZE
     };
-    for page in Page::ALL {
+    // Every page, then the workspace's view modes and overlays.
+    let mut shots: Vec<(String, Vec<Action>)> = Page::ALL
+        .into_iter()
+        .map(|page| (page.key().to_owned(), vec![Action::Go(page)]))
+        .collect();
+    for mode in [ViewMode::Vertical, ViewMode::Comment, ViewMode::Preview] {
+        shots.push((
+            format!("view-{}", mode.key()),
+            vec![Action::Go(Page::Review), Action::SetViewMode(mode)],
+        ));
+    }
+    for (name, overlay) in [
+        ("shortcuts", Action::ToggleShortcuts),
+        ("search", Action::FocusSearch),
+        ("settings", Action::OpenSettings),
+    ] {
+        shots.push((name.to_owned(), vec![Action::Go(Page::Review), overlay]));
+    }
+    for (name, actions) in shots {
         let mut harness = egui_kittest::Harness::builder()
             .with_size(egui::vec2(width, height))
             // The recipe editor's inputs still lack accessible names; the
@@ -48,7 +67,9 @@ fn main() -> anyhow::Result<()> {
                             aivideoeditor::config::Config::default(),
                             night.clone(),
                         );
-                        app.apply(ui.ctx(), Action::Go(page));
+                        for action in &actions {
+                            app.apply(ui.ctx(), action.clone());
+                        }
                         app
                     });
                     app.show(ui);
@@ -66,8 +87,8 @@ fn main() -> anyhow::Result<()> {
         }
         let image = harness
             .render()
-            .map_err(|error| anyhow::anyhow!("rendering {page:?} failed: {error}"))?;
-        let path = out.join(format!("{}.png", page.key()));
+            .map_err(|error| anyhow::anyhow!("rendering {name} failed: {error}"))?;
+        let path = out.join(format!("{name}.png"));
         image.save(&path)?;
         println!("wrote {}", path.display());
     }

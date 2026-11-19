@@ -173,6 +173,22 @@ pub enum Action {
     Focus,
     /// Close the window and quit.
     Quit,
+    /// Switch the workspace to a view mode.
+    SetViewMode(ui::layout::ViewMode),
+    /// Fold a panel to its rail, or unfold it.
+    TogglePanel(ui::layout::Region),
+    /// Unfold a panel and bring it forward (Selects' Shift+1…4).
+    FocusRegion(ui::layout::Region),
+    /// Mention the app-wide selection in chat (`R`).
+    StageSelection,
+    /// Ask which intent to mention the selection with (`Shift+R`).
+    ChooseSelectionIntent,
+    /// Show or hide the keyboard shortcut sheet (`?`).
+    ToggleShortcuts,
+    /// Switch the keyboard to a preset.
+    SetKeymap(ui::keymap::Preset),
+    /// Put the keyboard in the top bar's search box.
+    FocusSearch,
 }
 
 /// The application state.
@@ -215,10 +231,18 @@ pub struct App {
     pub(crate) home: bool,
     /// Whether the export panel is docked.
     pub(crate) export_open: bool,
-    /// Whether the chat panel is shown.
-    pub(crate) chat_open: bool,
-    /// Whether the inspector is shown.
-    pub(crate) inspector_open: bool,
+    /// The view mode, and which panels are folded and how big, per mode.
+    pub(crate) layout: ui::layout::Layout,
+    /// The keyboard preset in force.
+    pub(crate) keymap: ui::keymap::Preset,
+    /// Whether the shortcut sheet is open.
+    pub(crate) shortcuts_open: bool,
+    /// Whether the search popover is open under the search box.
+    pub(crate) search_open: bool,
+    /// Set by [`Action::FocusSearch`]; the top bar takes it next frame.
+    pub(crate) focus_search: bool,
+    /// The top bar's recent searches, newest first.
+    pub(crate) recent_searches: Vec<String>,
     /// The browser's tab.
     pub(crate) browser_tab: BrowserTab,
     /// Whether the "reference as…" chooser is open.
@@ -241,6 +265,13 @@ impl App {
         let _ = crate::gui::font::setup(ctx, config.font.as_deref());
         let catalog = crate::theme::Catalog::load();
         let theme = catalog.get(config.theme.as_deref());
+        let layout = ui::layout::Layout::from_config(&config);
+        let keymap = config
+            .keymap
+            .as_deref()
+            .and_then(ui::keymap::Preset::from_key)
+            .unwrap_or_default();
+        let recent_searches = config.recent_searches.clone().unwrap_or_default();
         let mut app = Self {
             page: config
                 .page
@@ -265,8 +296,12 @@ impl App {
             search: String::new(),
             home: false,
             export_open: false,
-            chat_open: true,
-            inspector_open: true,
+            layout,
+            keymap,
+            shortcuts_open: false,
+            search_open: false,
+            focus_search: false,
+            recent_searches,
             browser_tab: BrowserTab::Shots,
             ref_popup: false,
             chat_inbox: Vec::new(),
@@ -315,21 +350,53 @@ impl App {
             Action::Go(page) => {
                 self.page = page;
                 self.home = page == Page::Night;
+                use ui::layout::Region;
                 match page {
-                    Page::Review => self.browser_tab = BrowserTab::Shots,
-                    Page::People => self.browser_tab = BrowserTab::People,
-                    Page::Music => self.browser_tab = BrowserTab::Music,
+                    Page::Review => self.show_browser(BrowserTab::Shots),
+                    Page::People => self.show_browser(BrowserTab::People),
+                    Page::Music => self.show_browser(BrowserTab::Music),
                     Page::Deliver => self.export_open = true,
-                    Page::Night | Page::Plan => {}
+                    Page::Plan => self.layout.set_open(Region::Timeline, true),
+                    Page::Night => {}
                 }
             }
             Action::ChatInbox(text) => {
                 self.chat_inbox.push(text);
-                self.chat_open = true;
+                self.layout.set_open(ui::layout::Region::Chat, true);
             }
-            Action::ToggleChat => self.chat_open = !self.chat_open,
-            Action::ToggleInspector => self.inspector_open = !self.inspector_open,
+            Action::ToggleChat => self.layout.toggle(ui::layout::Region::Chat),
+            Action::ToggleInspector => self.layout.toggle(ui::layout::Region::Inspector),
             Action::ToggleExport => self.export_open = !self.export_open,
+            Action::SetViewMode(mode) => {
+                // Choosing the mode already on screen puts it back to its
+                // own arrangement, which is the way out of a mess.
+                if self.layout.mode == mode {
+                    self.layout.reset();
+                }
+                self.layout.mode = mode;
+            }
+            Action::TogglePanel(region) => self.layout.toggle(region),
+            Action::FocusRegion(region) => {
+                self.home = false;
+                self.layout.set_open(region, true);
+            }
+            Action::StageSelection => {
+                if !self.selection.is_empty() {
+                    for item in self.selection.clone() {
+                        if !self.refs.contains(&item) {
+                            self.refs.push(item);
+                        }
+                    }
+                    self.layout.set_open(ui::layout::Region::Chat, true);
+                }
+            }
+            Action::ChooseSelectionIntent => self.ref_popup = !self.selection.is_empty(),
+            Action::ToggleShortcuts => self.shortcuts_open = !self.shortcuts_open,
+            Action::SetKeymap(preset) => self.keymap = preset,
+            Action::FocusSearch => {
+                self.focus_search = true;
+                self.search_open = true;
+            }
             Action::OpenSettings => self.settings_open = true,
             Action::CloseSettings => self.settings_open = false,
             Action::OpenCommands => self.commands.open(),
@@ -355,7 +422,7 @@ impl App {
                 if !self.refs.contains(&reference) {
                     self.refs.push(reference);
                 }
-                self.chat_open = true;
+                self.layout.set_open(ui::layout::Region::Chat, true);
             }
             Action::ClearRefs => self.refs.clear(),
             Action::ReloadProject => {
@@ -403,8 +470,28 @@ impl App {
         egui::Rgba::from(ui::theme::rgb(self.theme.app)).to_array()
     }
 
+    /// Opens the browser on `tab`.
+    fn show_browser(&mut self, tab: BrowserTab) {
+        self.browser_tab = tab;
+        self.layout.set_open(ui::layout::Region::Browser, true);
+    }
+
+    /// Remembers a search the user ran, newest first, without repeats.
+    pub(crate) fn remember_search(&mut self, query: &str) {
+        let query = query.trim();
+        if query.is_empty() {
+            return;
+        }
+        self.recent_searches.retain(|q| q != query);
+        self.recent_searches.insert(0, query.to_owned());
+        self.recent_searches.truncate(8);
+        self.config.recent_searches = Some(self.recent_searches.clone());
+    }
+
     /// Called by the runtime on a normal quit.
     pub fn on_exit(&mut self) {
+        // Splits are dragged without an action, so they are copied here.
+        self.remember_choices();
         // The window is already closing, so a failed save has nowhere to
         // be shown; the next start simply uses the previous preferences.
         let _ = crate::config::save(&self.config);
@@ -416,6 +503,8 @@ impl App {
         self.config.sidebar_collapsed = Some(self.sidebar_collapsed);
         self.config.theme = Some(self.theme.id.clone());
         self.config.reduce_motion = Some(self.reduce_motion);
+        self.config.keymap = Some(self.keymap.key().to_owned());
+        self.layout.write(&mut self.config);
     }
 
     /// Keeps the restored window size in the config, so the next start
@@ -479,6 +568,54 @@ mod tests {
         app.apply(&ctx, Action::OpenSettings);
         run(&ctx, &mut app, 2);
         assert!(app.settings_open, "settings stays open until dismissed");
+    }
+
+    #[test]
+    fn every_view_mode_draws_headless_and_is_remembered() {
+        use ui::layout::ViewMode;
+        let ctx = egui::Context::default();
+        let mut app = app(&ctx);
+        for mode in ViewMode::ALL {
+            app.apply(&ctx, Action::SetViewMode(mode));
+            run(&ctx, &mut app, 2);
+            assert_eq!(app.layout.mode, mode);
+            assert_eq!(app.config.view_mode.as_deref(), Some(mode.key()));
+        }
+        app.apply(&ctx, Action::ToggleShortcuts);
+        run(&ctx, &mut app, 2);
+        assert!(app.shortcuts_open, "the sheet stays open until dismissed");
+    }
+
+    #[test]
+    fn a_folded_panel_unfolds_when_something_is_sent_to_it() {
+        use ui::layout::Region;
+        let ctx = egui::Context::default();
+        let mut app = app(&ctx);
+        app.apply(&ctx, Action::TogglePanel(Region::Chat));
+        assert!(!app.layout.is_open(Region::Chat), "folded");
+        assert_eq!(
+            app.config.folded_panels.as_deref(),
+            Some(&["chat".to_owned()][..]),
+            "the fold is saved"
+        );
+        app.apply(&ctx, Action::ChatInbox("hello".to_owned()));
+        assert!(app.layout.is_open(Region::Chat), "a message opens the chat");
+    }
+
+    #[test]
+    fn the_keymap_preset_is_saved_and_searches_are_remembered_once() {
+        let ctx = egui::Context::default();
+        let mut app = app(&ctx);
+        app.apply(&ctx, Action::SetKeymap(ui::keymap::Preset::FinalCut));
+        assert_eq!(app.config.keymap.as_deref(), Some("final-cut"));
+        app.remember_search("fire>0.3");
+        app.remember_search("dark");
+        app.remember_search("fire>0.3");
+        assert_eq!(
+            app.recent_searches,
+            ["fire>0.3", "dark"],
+            "newest first, no repeats"
+        );
     }
 
     #[test]

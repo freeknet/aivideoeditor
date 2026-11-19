@@ -17,7 +17,7 @@
 use super::theme::{SPACE_MD, SPACE_SM, SPACE_XS};
 use super::widgets;
 use crate::command_palette::Command;
-use crate::gui::app::{Action, App, Page};
+use crate::gui::app::{Action, App};
 use egui::{Key, Ui};
 
 /// The palette's width.
@@ -46,46 +46,19 @@ impl State {
     }
 }
 
-/// Every command the palette offers, built from the app's current state.
+/// Every command the palette offers, built from the app's current state:
+/// each runnable row of the command table with its keys under the preset
+/// in force, then the settings and themes.
 #[must_use]
 pub fn commands(app: &App) -> Vec<Command<Action>> {
-    let mut commands: Vec<Command<Action>> = Page::ALL
-        .into_iter()
-        .zip(1..)
-        .map(|(page, number)| {
-            Command::new(
-                format!("Go to {}", page.label()),
-                format!("Ctrl+{number}"),
-                Action::Go(page),
-            )
+    let mut commands: Vec<Command<Action>> = super::keymap::COMMANDS
+        .iter()
+        .filter(|command| command.id != "palette")
+        .filter_map(|command| {
+            let run = command.run?;
+            Some(Command::new(command.label, command.hint(app.keymap), run()))
         })
         .collect();
-    commands.push(Command::new(
-        "Open settings",
-        "Ctrl+,",
-        Action::OpenSettings,
-    ));
-    commands.push(Command::new("Open a night", "Ctrl+O", Action::PickProject));
-    commands.push(Command::new(
-        "Show or hide the chat",
-        "Ctrl+J",
-        Action::ToggleChat,
-    ));
-    commands.push(Command::new(
-        "Show or hide the inspector",
-        "Ctrl+I",
-        Action::ToggleInspector,
-    ));
-    commands.push(Command::new(
-        "Show or hide export",
-        "Ctrl+E",
-        Action::ToggleExport,
-    ));
-    commands.push(Command::new(
-        "Reload the night from disk",
-        "",
-        Action::ReloadProject,
-    ));
     commands.push(Command::new(
         if app.reduce_motion {
             "Turn animations on"
@@ -102,13 +75,20 @@ pub fn commands(app: &App) -> Vec<Command<Action>> {
             Action::SetTheme(theme.id.clone()),
         ));
     }
-    commands.push(Command::new("Quit", "", Action::Quit));
+    for preset in super::keymap::Preset::ALL {
+        commands.push(Command::new(
+            format!("Use {} keyboard shortcuts", preset.label()),
+            "Keyboard",
+            Action::SetKeymap(preset),
+        ));
+    }
     commands
 }
 
 /// Draws the palette while it is open; Ctrl+K opens it from anywhere.
 pub fn draw(app: &mut App, ctx: &egui::Context, actions: &mut Vec<Action>) {
-    let toggle = ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, Key::K));
+    let chord = super::keymap::chord("palette", app.keymap);
+    let toggle = chord.is_some_and(|chord| ctx.input_mut(|input| input.consume_shortcut(&chord)));
     if toggle && !app.settings_open {
         if app.commands.open {
             app.commands.open = false;
@@ -236,6 +216,7 @@ fn row(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gui::app::Page;
 
     #[test]
     fn every_page_is_reachable_from_the_palette() {

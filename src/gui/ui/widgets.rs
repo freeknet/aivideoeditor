@@ -17,7 +17,7 @@
 //! through [`hover_t`], [`fade`] and [`level`], which are the only places
 //! that know whether motion is compiled in.
 
-use super::theme::{self, SPACE_MD, SPACE_SM, SPACE_XS};
+use super::theme::{self, SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XS};
 use crate::color::Rgb;
 use crate::theme::Palette;
 use egui::{Align2, Color32, CornerRadius, Rect, Response, Sense, Stroke, Ui, Vec2};
@@ -115,22 +115,213 @@ pub fn nav_item(ui: &mut Ui, theme: &Palette, label: &str, active: bool, compact
 /// A square, borderless button for the header. The caller paints the icon
 /// into [`Slot::icon`]; `label` is its tooltip and accessible name.
 pub fn icon_button(ui: &mut Ui, theme: &Palette, label: &str) -> Slot {
+    toggle_button(ui, theme, label, false)
+}
+
+/// A square, borderless header button that shows whether what it toggles
+/// is on: an ink fill and full-strength ink when on, muted when off. The
+/// caller paints the icon into [`Slot::icon`].
+pub fn toggle_button(ui: &mut Ui, theme: &Palette, label: &str, on: bool) -> Slot {
     let size = Vec2::splat(theme::CONTROL_HEIGHT);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let response = response.on_hover_text(label);
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, label));
     let lift = hover_t(ui, response.id, response.hovered());
-    ui.painter().rect_filled(
-        rect,
-        CornerRadius::same(theme::RADIUS),
-        blend(theme.panel, theme.hover, lift),
-    );
+    let painter = ui.painter();
+    if on {
+        painter.rect_filled(
+            rect,
+            CornerRadius::same(theme::RADIUS),
+            theme::ink_hover(theme),
+        );
+    }
+    if lift > 0.0 {
+        painter.rect_filled(
+            rect,
+            CornerRadius::same(theme::RADIUS),
+            theme::translucent(theme.text, (f32::from(theme::INK_HOVER) * lift) as u8),
+        );
+    }
     focus_ring(ui, theme, &response);
+    let rest = if on { theme.text } else { theme.text_muted };
     Slot {
-        icon: rect.shrink(SPACE_SM),
-        ink: blend(theme.text_muted, theme.text, lift),
+        icon: rect.shrink(SPACE_SM - 2.0),
+        ink: blend(rest, theme.text, lift),
         response,
     }
+}
+
+/// A tab in a strip: text, with an underline in the key colour when it is
+/// the open one. Flat, as Selects' tabs are.
+pub fn tab(ui: &mut Ui, theme: &Palette, label: &str, open: bool) -> Response {
+    let galley = ui.painter().layout_no_wrap(
+        label.to_owned(),
+        theme::font(theme::BODY_SIZE),
+        Color32::PLACEHOLDER,
+    );
+    let size = Vec2::new(galley.size().x + SPACE_SM * 2.0, theme::CONTROL_HEIGHT);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, open, label));
+    let lift = hover_t(ui, response.id, response.hovered());
+    let painter = ui.painter();
+    if lift > 0.0 && !open {
+        painter.rect_filled(
+            rect.shrink2(Vec2::new(0.0, 2.0)),
+            CornerRadius::same(theme::RADIUS),
+            theme::translucent(theme.text, (f32::from(theme::INK_HOVER) * lift) as u8),
+        );
+    }
+    let ink = if open {
+        theme::rgb(theme.text)
+    } else {
+        blend(theme.text_muted, theme.text, lift)
+    };
+    painter.galley(rect.center() - galley.size() / 2.0, galley, ink);
+    if open {
+        let line = Rect::from_min_max(
+            egui::pos2(rect.left() + SPACE_SM, rect.bottom() - 2.0),
+            egui::pos2(rect.right() - SPACE_SM, rect.bottom()),
+        );
+        painter.rect_filled(line, CornerRadius::same(1), theme::rgb(theme.accent));
+    }
+    focus_ring(ui, theme, &response);
+    response
+}
+
+/// Which way a rail runs, and so which way its label reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RailSide {
+    /// A tall rail at the left or right edge; the label reads downwards.
+    Vertical,
+    /// A short rail along the foot; the label reads across.
+    Horizontal,
+}
+
+/// A folded panel's rail: the panel's name, a chevron, and a hover fill.
+/// The whole rail is the button that unfolds it.
+pub fn rail(ui: &mut Ui, theme: &Palette, label: &str, hint: &str, side: RailSide) -> Response {
+    let rect = ui.max_rect();
+    let response = ui
+        .interact(rect, ui.scope_id().with(("rail", label)), Sense::click())
+        .on_hover_text(hint);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+    let lift = hover_t(ui, response.id, response.hovered());
+    let painter = ui.painter();
+    if lift > 0.0 {
+        painter.rect_filled(
+            rect,
+            CornerRadius::ZERO,
+            theme::translucent(theme.text, (f32::from(theme::INK_HOVER) * lift) as u8),
+        );
+    }
+    let ink = blend(theme.text_muted, theme.text, lift);
+    let galley = painter.layout_no_wrap(label.to_owned(), theme::font(theme::BODY_SIZE), ink);
+    match side {
+        RailSide::Vertical => {
+            // Rotated a quarter turn clockwise about its top-left corner,
+            // the galley's height runs leftwards: start half a line right
+            // of the centre so it lands centred.
+            let x = rect.center().x + galley.size().y / 2.0;
+            chevron(
+                painter,
+                egui::pos2(rect.center().x, rect.top() + SPACE_MD),
+                Vec2::X,
+                ink,
+            );
+            let at = egui::pos2(x, rect.top() + SPACE_LG + SPACE_SM);
+            painter.add(
+                egui::epaint::TextShape::new(at, galley, ink)
+                    .with_angle(std::f32::consts::FRAC_PI_2),
+            );
+        }
+        RailSide::Horizontal => {
+            let at = egui::pos2(
+                rect.left() + SPACE_MD + SPACE_LG,
+                rect.center().y - galley.size().y / 2.0,
+            );
+            chevron(
+                painter,
+                egui::pos2(rect.left() + SPACE_MD + SPACE_XS, rect.center().y),
+                -Vec2::Y,
+                ink,
+            );
+            painter.galley(at, galley, ink);
+        }
+    }
+    focus_ring(ui, theme, &response);
+    response
+}
+
+/// A small open chevron at `center`, pointing along `towards` (a unit
+/// vector), drawn as two strokes so it needs no glyph from any font.
+pub fn chevron(painter: &egui::Painter, center: egui::Pos2, towards: Vec2, color: Color32) {
+    let size = 3.5;
+    let across = towards.rot90();
+    let tip = center + towards * size * 0.5;
+    let back = center - towards * size * 0.5;
+    let stroke = Stroke::new(1.5, color);
+    painter.line_segment([back + across * size, tip], stroke);
+    painter.line_segment([back - across * size, tip], stroke);
+}
+
+/// The "Mention in chat ▸ about / keep / avoid / replace / more like /
+/// feature" submenu, for any region's context menu. Choosing an intent
+/// pushes [`Action::AddRef`](crate::gui::app::Action::AddRef) with that
+/// modifier, which stages the reference and opens the chat.
+pub fn mention_menu(
+    ui: &mut Ui,
+    actions: &mut Vec<crate::gui::app::Action>,
+    reference: &crate::refs::Reference,
+) {
+    mention_menu_many(ui, actions, std::slice::from_ref(reference));
+}
+
+/// [`mention_menu`] for several references at once (a multi-selection),
+/// staged in the order given: pass timeline items in timeline order.
+pub fn mention_menu_many(
+    ui: &mut Ui,
+    actions: &mut Vec<crate::gui::app::Action>,
+    references: &[crate::refs::Reference],
+) {
+    if references.is_empty() {
+        return;
+    }
+    ui.menu_button("Mention in chat", |ui| {
+        for intent in crate::refs::Modifier::ALL {
+            if ui.button(mention_label(intent)).clicked() {
+                actions.extend(mention_actions(references, intent));
+                ui.close();
+            }
+        }
+    });
+}
+
+/// How an intent reads in the mention menu: its label, then its prefix.
+#[must_use]
+pub fn mention_label(intent: crate::refs::Modifier) -> String {
+    let prefix = intent.prefix();
+    if prefix.is_empty() {
+        intent.label().to_owned()
+    } else {
+        format!("{}   {prefix}", intent.label())
+    }
+}
+
+/// The actions that mention `references` with `intent`.
+#[must_use]
+pub fn mention_actions(
+    references: &[crate::refs::Reference],
+    intent: crate::refs::Modifier,
+) -> Vec<crate::gui::app::Action> {
+    references
+        .iter()
+        .map(|reference| {
+            crate::gui::app::Action::AddRef(crate::refs::Reference {
+                modifier: intent,
+                ..reference.clone()
+            })
+        })
+        .collect()
 }
 
 /// The emphasis a button carries.
@@ -149,7 +340,10 @@ pub fn button(ui: &mut Ui, theme: &Palette, label: &str, emphasis: Emphasis) -> 
         theme::font(theme::BODY_SIZE),
         Color32::PLACEHOLDER,
     );
-    let size = Vec2::new(galley.size().x + SPACE_MD * 2.0, theme::CONTROL_HEIGHT);
+    let size = Vec2::new(
+        galley.size().x + SPACE_MD * 2.0 - SPACE_XS,
+        theme::CONTROL_HEIGHT,
+    );
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
     let lift = hover_t(ui, response.id, response.hovered());
@@ -162,7 +356,7 @@ pub fn button(ui: &mut Ui, theme: &Palette, label: &str, emphasis: Emphasis) -> 
         Emphasis::Secondary => (
             blend(theme.raised, theme.hover, lift),
             theme::rgb(theme.text),
-            Stroke::new(1.0, theme::rgb(theme.border)),
+            theme::ink_line(theme),
         ),
     };
     let painter = ui.painter();
@@ -357,6 +551,33 @@ pub fn focus_ring(ui: &Ui, theme: &Palette, response: &Response) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_mention_keeps_the_reference_and_takes_the_intent() {
+        use crate::refs::{Modifier, Reference};
+        let picked = [
+            Reference::new(crate::refs::Target::Person {
+                name: "ava".to_owned(),
+            }),
+            Reference::new(crate::refs::Target::Person {
+                name: "bo".to_owned(),
+            }),
+        ];
+        let actions = mention_actions(&picked, Modifier::Avoid);
+        assert_eq!(actions.len(), 2, "one per reference, in order");
+        for (action, original) in actions.iter().zip(&picked) {
+            assert_eq!(
+                action,
+                &crate::gui::app::Action::AddRef(Reference {
+                    modifier: Modifier::Avoid,
+                    ..original.clone()
+                }),
+                "the target is kept, the intent replaced"
+            );
+        }
+        assert_eq!(mention_label(Modifier::About), "about");
+        assert_eq!(mention_label(Modifier::Keep), "keep   +");
+    }
 
     #[test]
     fn the_grid_fits_as_many_columns_as_the_minimum_allows() {
