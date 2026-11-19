@@ -20,7 +20,34 @@ that a rule checker verifies before anything renders.
 Built for the weekly JaJa Flow Night promo edits; nothing in it is specific
 to that event except the default rules, which live in each plan file.
 
-## The workflow
+## The app
+
+`ave` with no arguments opens the desktop editor; `ave --open <night>/_ave`
+opens a night directly. One workspace, laid out like Selects or Resolve's Cut
+page (details in [`docs/GUI_CONTRACTS.md`](docs/GUI_CONTRACTS.md)):
+
+- **Home** — recent nights, "new night from last week", the pipeline
+  (index → caption → music → people → plans → export) with live job logs,
+  footage / track / end-card settings and the weekly recipe.
+- **Chat** (left) — ask for changes in plain words; attach **references**
+  as chips (`R` on any selection, `Shift-R` to say keep / avoid / replace /
+  more like / feature, or type `@shot:reel-30#5`, `~@seg:MVI_7925/3`,
+  `!@person:x`, `@bars:17-20`). Answers come back as proposals with a diff
+  and the predicted rule check; applying one saves a new plan version.
+  Claude via `ANTHROPIC_API_KEY`, or a local llama.cpp server.
+- **Browser** — *Shots* (searchable shot log: `fire>0.3 -dark person:x`,
+  grid or list, hover scrub, pick/reject P/X/U, more-like-this), *People*
+  (groups, merge/split, confirm queue), *Music* (beat grid, sections, drops,
+  grid fixes, song ranges).
+- **Viewer** — real-time playback with audio, 16:9 / 9:16 / 4:5 framing with
+  safe areas, J/K/L, I/O marks, `Alt-R` to reference a range.
+- **Inspector** — everything known about the selection.
+- **Timeline** — the plan on the beat grid over the waveform: reorder, roll,
+  slip, `A` for ranked alternatives, live rule check, versions and undo.
+- **Export** — deliverables × plan versions, filename templates, render and
+  OTIO queue.
+
+## The workflow (command line)
 
 ```bash
 ave index  <footage-dir> --work <work>   # ~40 s for 20 min of 1080p: index.json + shotlog.md
