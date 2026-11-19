@@ -243,11 +243,15 @@ fn toolbar(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) -> bool 
         egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
             ui.spacing_mut().item_spacing.x = theme::SPACE_XS;
-            ui.label(
-                egui::RichText::new(source_label(ctx.player))
-                    .size(12.0)
-                    .color(muted),
-            );
+            // The label gives way to the controls when the centre is narrow
+            // (export or a wide browser docked), instead of drawing under them.
+            if ui.available_width() > 640.0 {
+                ui.label(
+                    egui::RichText::new(source_label(ctx.player))
+                        .size(12.0)
+                        .color(muted),
+                );
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = theme::SPACE_XS;
                 let current = QUALITIES

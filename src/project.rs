@@ -180,6 +180,12 @@ impl Project {
         } else {
             None
         };
+        // A night mapped from the command line has its track only in the map.
+        if self.settings.track.is_none()
+            && let Some(music) = &self.music
+        {
+            self.settings.track = Some(PathBuf::from(&music.path));
+        }
     }
 
     /// Re-reads `people.toml`.

@@ -544,7 +544,13 @@ fn deliverable_row(
 ) -> bool {
     let mut changed = false;
     changed |= ui
-        .add(egui::TextEdit::singleline(&mut d.id).desired_width(80.0))
+        .add(
+            // min_size: a TextEdit in a Grid shrinks to the remembered column width
+            // (the header's), so desired_width alone leaves it clipped.
+            egui::TextEdit::singleline(&mut d.id)
+                .desired_width(80.0)
+                .min_size(egui::vec2(80.0, 0.0)),
+        )
         .changed();
     egui::ComboBox::from_id_salt(("recipe-aspect", i))
         .width(64.0)
@@ -585,6 +591,7 @@ fn deliverable_row(
     let response = ui.add(
         egui::TextEdit::singleline(&mut template)
             .desired_width(140.0)
+            .min_size(egui::vec2(140.0, 0.0))
             .hint_text(egui::RichText::new("recipe default").color(theme::rgb(theme.text_faint))),
     );
     if response.changed() {
