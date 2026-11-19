@@ -380,9 +380,14 @@ fn parse_args(args: &str) -> Value {
     }
 }
 
-/// An HTTP agent that leaves status handling to us.
+/// An HTTP agent that leaves status handling to us, over the system's TLS.
 fn agent(read_timeout: Option<Duration>) -> ureq::Agent {
     ureq::Agent::config_builder()
+        .tls_config(
+            ureq::tls::TlsConfig::builder()
+                .provider(ureq::tls::TlsProvider::NativeTls)
+                .build(),
+        )
         .http_status_as_error(false)
         .timeout_connect(Some(Duration::from_secs(15)))
         .timeout_recv_response(read_timeout)

@@ -32,7 +32,9 @@ rayon = "1"
 rfd = "0.15"
 rustfft = "6"
 serde_json = "1"
-ureq = { version = "3", features = ["json"] }
+# native-tls: Schannel on Windows, so no C crypto build (ring) in the
+# shipped binary or the Windows cross-check.
+ureq = { version = "3", default-features = false, features = ["json", "gzip", "native-tls"] }
 
 [dev-dependencies]
 tempfile = "3"
