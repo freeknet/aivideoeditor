@@ -26,6 +26,10 @@
 //! A cut plays its music from the plan's offset with clip sound muted,
 //! because beat sync is judged against the music; a clip plays its own
 //! sound; a music range plays the track.
+//!
+//! **End card.** A cut may carry an [`EndCard`]: a still image held after
+//! the last shot for as long as the render holds it, with the music still
+//! running under it, so playback ends where the rendered file ends.
 
 mod audio;
 pub(crate) mod clock;
@@ -85,6 +89,15 @@ pub(crate) struct SeqShot {
     pub(crate) dur: f64,
     /// Horizontal crop centre.
     pub(crate) cx: f32,
+}
+
+/// The still a cut ends on (see the module docs).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct EndCard {
+    /// The image file.
+    pub(crate) path: PathBuf,
+    /// How long it holds after the last shot, seconds.
+    pub(crate) dur: f64,
 }
 
 /// How [`Player::show_framed`] frames the picture.
@@ -156,6 +169,8 @@ const PRIME_TIMEOUT: Duration = Duration::from_secs(3);
 pub(crate) struct Player {
     source: Source,
     segs: Vec<Seg>,
+    /// The still held after a cut's last shot.
+    card: Option<EndCard>,
     /// Position within the source range, seconds from its start.
     pos: f64,
     playing: bool,
@@ -198,6 +213,7 @@ impl Default for Player {
         Self {
             source: Source::Empty,
             segs: Vec::new(),
+            card: None,
             pos: 0.0,
             playing: false,
             looping: true,
@@ -240,7 +256,43 @@ impl Player {
 
     /// Loads a cut (shots back to back over `music`) at its start.
     pub(crate) fn open_sequence(&mut self, shots: Vec<SeqShot>, music: Option<(PathBuf, f64)>) {
-        self.load(Source::Sequence { shots, music });
+        self.open_cut(shots, music, None);
+    }
+
+    /// Loads a cut that ends on `card` (held after the last shot, the music
+    /// running on under it) at its start.
+    pub(crate) fn open_cut(
+        &mut self,
+        shots: Vec<SeqShot>,
+        music: Option<(PathBuf, f64)>,
+        card: Option<EndCard>,
+    ) {
+        let next = Source::Sequence { shots, music };
+        let card = card.filter(|c| c.dur > 0.0);
+        if self.source == next && self.card == card {
+            return;
+        }
+        // Force the reload even when only the card changed.
+        self.source = Source::Empty;
+        self.load(next);
+        self.card = card;
+    }
+
+    /// The end card of the loaded cut.
+    pub(crate) fn end_card(&self) -> Option<&EndCard> {
+        self.card.as_ref()
+    }
+
+    /// Whether the playhead is on the end card.
+    pub(crate) fn in_card(&self) -> bool {
+        self.card_at(self.pos)
+    }
+
+    /// Whether position `pos` falls on the end card.
+    fn card_at(&self, pos: f64) -> bool {
+        self.card.is_some()
+            && matches!(self.source, Source::Sequence { .. })
+            && pos >= clock::total(&self.segs)
     }
 
     /// Loads an audio range (no picture).
@@ -259,6 +311,7 @@ impl Player {
         }
         self.segs = segments(&next);
         self.source = next;
+        self.card = None;
         self.pos = 0.0;
         self.mark_in = None;
         self.mark_out = None;
@@ -281,6 +334,9 @@ impl Player {
         let Source::Sequence { .. } = &self.source else {
             return None;
         };
+        if self.in_card() {
+            return None;
+        }
         clock::locate(&self.segs, self.pos)
     }
 
@@ -296,6 +352,9 @@ impl Player {
 
     /// The frame at position `pos` (seconds from the source start).
     pub(crate) fn here_at(&self, pos: f64) -> Option<Here> {
+        if self.card_at(pos) {
+            return None;
+        }
         let (seg, within) = clock::locate(&self.segs, pos)?;
         let s = self.segs.get(seg)?;
         Some(Here {
@@ -310,9 +369,13 @@ impl Player {
     /// Where segment `index` starts, seconds from the source start (shot
     /// boundaries for the scrub bar).
     pub(crate) fn seg_starts(&self) -> Vec<f64> {
-        (1..self.segs.len())
+        let mut starts: Vec<f64> = (1..self.segs.len())
             .map(|i| clock::seg_start(&self.segs, i))
-            .collect()
+            .collect();
+        if self.card.is_some() && !self.segs.is_empty() {
+            starts.push(clock::total(&self.segs));
+        }
+        starts
     }
 
     /// The frame rate of the picture under the playhead (23.976 when not
@@ -406,7 +469,9 @@ impl Player {
         match &self.source {
             Source::Empty => 0.0,
             Source::Clip { t0, t1, .. } | Source::Audio { t0, t1, .. } => t1 - t0,
-            Source::Sequence { .. } => clock::total(&self.segs),
+            Source::Sequence { .. } => {
+                clock::total(&self.segs) + self.card.as_ref().map_or(0.0, |c| c.dur)
+            }
         }
     }
 
@@ -693,34 +758,54 @@ impl Player {
         let aspect = framing.aspect.max(0.1);
         let mut frame = fit(stage.shrink(2.0), aspect);
         let here = self.here();
-        match (&self.source, here) {
-            (Source::Empty, _) | (Source::Clip { .. } | Source::Sequence { .. }, None) => {
-                ui.painter()
-                    .rect_filled(frame, egui::CornerRadius::ZERO, background);
+        let card = self.in_card().then(|| self.card.clone()).flatten();
+        if let Some(card) = card {
+            // The still is there as soon as its thumbnail is: nothing to
+            // wait for, so the clock may run.
+            self.frame_ok = true;
+            let width =
+                (ui.ctx().pixels_per_point() * frame.width()).clamp(320.0, 1280.0) as u32 / 64 * 64;
+            match thumbs.get(ui.ctx(), &card.path, 0.0, width) {
+                Some(tex) => {
+                    let uv = cover_uv(tex.size_vec2(), frame.size(), 0.5);
+                    ui.painter()
+                        .image(tex.id(), frame, uv, egui::Color32::WHITE);
+                }
+                None => {
+                    ui.painter()
+                        .rect_filled(frame, egui::CornerRadius::ZERO, background);
+                }
             }
-            (Source::Audio { path, .. }, _) => {
-                let name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                ui.painter().text(
-                    stage.center(),
-                    egui::Align2::CENTER_CENTER,
-                    format!("Music: {name}"),
-                    egui::FontId::proportional(16.0),
-                    egui::Color32::from_gray(170),
-                );
-            }
-            (Source::Clip { .. } | Source::Sequence { .. }, Some(here)) => {
-                let cx = self.segs.get(here.seg).map_or(0.5, |s| s.cx);
-                let picture = self.picture(ui, thumbs, &here);
-                match picture {
-                    Some((tex, src)) => {
-                        frame = paint_picture(ui, stage, &tex, src, framing, cx);
-                    }
-                    None => {
-                        ui.painter()
-                            .rect_filled(frame, egui::CornerRadius::ZERO, background);
+        } else {
+            match (&self.source, here) {
+                (Source::Empty, _) | (Source::Clip { .. } | Source::Sequence { .. }, None) => {
+                    ui.painter()
+                        .rect_filled(frame, egui::CornerRadius::ZERO, background);
+                }
+                (Source::Audio { path, .. }, _) => {
+                    let name = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    ui.painter().text(
+                        stage.center(),
+                        egui::Align2::CENTER_CENTER,
+                        format!("Music: {name}"),
+                        egui::FontId::proportional(16.0),
+                        egui::Color32::from_gray(170),
+                    );
+                }
+                (Source::Clip { .. } | Source::Sequence { .. }, Some(here)) => {
+                    let cx = self.segs.get(here.seg).map_or(0.5, |s| s.cx);
+                    let picture = self.picture(ui, thumbs, &here);
+                    match picture {
+                        Some((tex, src)) => {
+                            frame = paint_picture(ui, stage, &tex, src, framing, cx);
+                        }
+                        None => {
+                            ui.painter()
+                                .rect_filled(frame, egui::CornerRadius::ZERO, background);
+                        }
                     }
                 }
             }
@@ -1067,6 +1152,35 @@ mod tests {
         p.open_audio(std::path::Path::new("m.wav"), 10.0, 20.0);
         assert!((p.duration() - 10.0).abs() < 1e-9, "audio range");
         assert_eq!(p.here(), None, "no picture for audio");
+        Ok(())
+    }
+
+    #[test]
+    fn a_cut_holds_its_end_card_after_the_last_shot() -> anyhow::Result<()> {
+        let mut p = Player::default();
+        let card = super::EndCard {
+            path: "card.png".into(),
+            dur: 2.0,
+        };
+        p.open_cut(vec![shot(1.0), shot(2.0)], None, Some(card.clone()));
+        assert!((p.duration() - 5.0).abs() < 1e-9, "shots plus the card");
+        assert_eq!(p.seg_starts(), vec![1.0, 3.0], "the card starts a segment");
+        p.seek(2.0);
+        assert!(!p.in_card(), "on a shot");
+        assert_eq!(p.sequence_shot().map(|(i, _)| i), Some(1), "the second");
+        p.seek(4.0);
+        assert!(p.in_card(), "past the shots");
+        assert_eq!(p.here(), None, "no clip frame on the card");
+        assert_eq!(p.sequence_shot(), None, "and no shot");
+        p.open_cut(vec![shot(1.0), shot(2.0)], None, None);
+        assert!(
+            (p.duration() - 3.0).abs() < 1e-9,
+            "dropping the card reloads"
+        );
+        assert_eq!(p.end_card(), None, "no card now");
+        p.open_cut(vec![shot(1.0)], None, Some(card));
+        p.open_clip(std::path::Path::new("a.mov"), 0.0, 1.0, 0.5);
+        assert_eq!(p.end_card(), None, "a clip never carries a card");
         Ok(())
     }
 

@@ -12,6 +12,13 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Timeline playback ends like the render: after the last shot the viewer holds the
+  plan's end card for the render's span (`card_bar` to `end_bar`, `Plan::card_span`)
+  over the music, and V1 draws it as a block there. Plan compare (A/B): "Compare" in
+  the tab strip (`Shift+C` for the previous version) stacks the open plan over another
+  plan or a saved version on one beat grid, highlights the shots that differ, lists
+  them as added / removed / replaced / moved / changed with both shots' notes, plays
+  A or B in the viewer (`B`), and "Adopt B" saves B as a new version of the open plan.
 - Chat panel runs on Claude Code (the default when `claude` is on PATH): one headless
   `claude -p` stream-json session per conversation with `ave mcp` as its only tool
   server (no shell, no file edits, no user settings or MCP servers), resumed across

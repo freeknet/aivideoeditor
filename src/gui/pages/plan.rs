@@ -29,12 +29,19 @@
 //! as one batch ([`comments`]). While the assistant commits an edit it
 //! holds `plans/.lock-<name>` and the timeline goes read-only. A
 //! storyboard lane ([`storyboard`]) shows the plan as cards with their
-//! notes, grouped by song section.
+//! notes, grouped by song section. "Compare" in the tab strip
+//! ([`compare`]) stacks the plan over another plan or a saved version on
+//! one beat grid and lists what differs, shot by shot.
+//!
+//! Playback ends the way the render does: after the last shot the viewer
+//! holds the end card for the span [`Plan::card_span`] gives it, over the
+//! music, and V1 draws the card as a block in that span.
 //!
 //! Layout and the rest of the region contract: `docs/GUI_CONTRACTS.md`;
 //! the spec this follows: `docs/research/02-ui-and-workflow.md` §3, §9.7.
 
 mod comments;
+mod compare;
 mod edit;
 mod history;
 mod storyboard;
@@ -51,7 +58,7 @@ use super::PageCtx;
 use crate::alternatives::Alternative;
 use crate::beats::MusicMap;
 use crate::gui::app::Action;
-use crate::gui::player::{Player, SeqShot, Source};
+use crate::gui::player::{EndCard, Player, SeqShot, Source};
 use crate::gui::thumbs::Thumbs;
 use crate::gui::ui::theme;
 use crate::plan::{Aspect, Plan, Problem};
@@ -260,6 +267,8 @@ pub(crate) struct State {
     tab_form: Option<tabs::Form>,
     /// The assistant holds the open plan's lock: read-only.
     locked: bool,
+    /// An A/B compare on show, in place of the tracks.
+    compare: Option<compare::Compare>,
 }
 
 /// Everything about the shown plan a frame needs, computed once.
@@ -291,9 +300,7 @@ struct Shown<'a> {
     /// Whether edits are allowed (not viewing an old version).
     editable: bool,
     /// The plan as the viewer plays it.
-    seq: Vec<SeqShot>,
-    /// The music under it and the second it starts at.
-    music: Option<(PathBuf, f64)>,
+    cut: Cut,
     /// The plan revision this frame started from.
     rev: u64,
     /// Whether the viewer is playing this plan.
@@ -369,7 +376,7 @@ impl Io<'_> {
     /// Loads the shown plan into the viewer unless it is already there.
     fn load(&mut self, s: &Shown<'_>) {
         if !s.ours {
-            self.player.open_sequence(s.seq.clone(), s.music.clone());
+            s.cut.open(self.player);
         }
     }
 
@@ -426,12 +433,44 @@ fn is_error(p: &Problem) -> bool {
         .any(|k| p.message.contains(k))
 }
 
-/// The plan's shots as the viewer plays them.
-fn sequence(
-    plan: &Plan,
-    project: &Project,
-    map: &MusicMap,
-) -> (Vec<SeqShot>, Option<(PathBuf, f64)>) {
+/// A plan as the viewer plays it: the shots back to back over the music,
+/// then the end card for as long as the render holds it.
+#[derive(Clone, Debug, PartialEq)]
+struct Cut {
+    /// The shots.
+    shots: Vec<SeqShot>,
+    /// The music file and the second the plan starts at.
+    music: Option<(PathBuf, f64)>,
+    /// The end card, when the plan names one and holds it a while.
+    card: Option<EndCard>,
+}
+
+impl Cut {
+    /// Loads it into the viewer (a no-op when it is already there).
+    fn open(&self, player: &mut Player) {
+        player.open_cut(self.shots.clone(), self.music.clone(), self.card.clone());
+    }
+
+    /// Whether the viewer holds this cut.
+    fn is_loaded(&self, player: &Player) -> bool {
+        matches!(player.source(), Source::Sequence { shots, .. } if *shots == self.shots)
+            && player.end_card() == self.card.as_ref()
+    }
+}
+
+/// The end card as the viewer holds it: the plan's image over the span the
+/// render gives it ([`Plan::card_span`]); none without an image, as the
+/// render then stops at the card bar.
+fn end_card(plan: &Plan, map: &MusicMap) -> Option<EndCard> {
+    let (from, to) = plan.card_span(map);
+    (!plan.end_card.is_empty() && to > from).then(|| EndCard {
+        path: PathBuf::from(&plan.end_card),
+        dur: f64::from(to - from),
+    })
+}
+
+/// The plan as the viewer plays it.
+fn sequence(plan: &Plan, project: &Project, map: &MusicMap) -> Cut {
     let shots = plan
         .shots
         .iter()
@@ -452,7 +491,11 @@ fn sequence(
             f64::from(map.beat_time(plan.start_bar, 0)),
         )
     });
-    (shots, music)
+    Cut {
+        shots,
+        music,
+        card: end_card(plan, map),
+    }
 }
 
 /// The shots of `name` in the app-wide selection, 0-based.
@@ -569,6 +612,7 @@ impl State {
         self.undo.clear();
         self.dirty = None;
         self.viewing = None;
+        self.compare = None;
         self.alts = None;
         self.anchor = None;
         self.drag = None;
@@ -706,9 +750,9 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
             .or_default()
             .push(p.message.clone());
     }
-    let (seq, music) = sequence(&shown_plan, project, map);
-    let ours = matches!(player.source(), Source::Sequence { shots, .. } if *shots == seq);
-    let origin = map.beat_time(shown_plan.start_bar, 0);
+    let cut = sequence(&shown_plan, project, map);
+    let ours = cut.is_loaded(player);
+    let (card, total) = shown_plan.card_span(map);
     let s = Shown {
         theme: palette,
         project,
@@ -716,13 +760,12 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
         timing: shown_plan.timing(map),
         grid: edit::grid(&shown_plan, map),
         starts: edit::starts(&shown_plan),
-        card: map.beat_time(shown_plan.card_bar, 0) - origin,
-        total: map.beat_time(shown_plan.end_bar, 0) - origin,
+        card,
+        total,
         sel: selected(selection, &name, shown_plan.shots.len()),
         issues,
         editable: state.viewing.is_none() && !state.locked,
-        seq,
-        music,
+        cut,
         ours,
         rev: state.rev,
         name,
@@ -745,9 +788,17 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
         strips::viewing_banner(state, &s, ui, n, &saved, &change);
     }
 
+    let whole = ui.available_rect_before_wrap();
+    if state.compare.is_some() {
+        compare::view(state, &s, &mut io, ui, whole);
+        if keys_free && hovered {
+            compare::keys(state, &s, &mut io, ui);
+        }
+        return;
+    }
+
     // Rows, bottom up: check bar, selection bar or alternatives, tracks;
     // the comments list, when open, takes the right-hand side.
-    let whole = ui.available_rect_before_wrap();
     let side_w = if state.show_comments {
         COMMENTS_W.min(whole.width() * 0.4)
     } else {
@@ -799,8 +850,7 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
         && let Some(plan) = state.plan.as_ref()
     {
         let pos = io.player.position();
-        let (seq, music) = sequence(plan, project, map);
-        io.player.open_sequence(seq, music);
+        sequence(plan, project, map).open(io.player);
         io.player.seek(pos);
     }
     if state.dirty.is_some() {
@@ -914,8 +964,7 @@ fn housekeeping(
 /// Loads the open plan into the viewer (paused at its start).
 fn open_in_player(state: &State, project: &Project, player: &mut Player) {
     if let (Some(plan), Some(map)) = (state.plan.as_ref(), project.music.as_ref()) {
-        let (seq, music) = sequence(plan, project, map);
-        player.open_sequence(seq, music);
+        sequence(plan, project, map).open(player);
     }
 }
 
@@ -1435,6 +1484,12 @@ fn keys(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &egui::Ui, hovere
         if ui.input(|i| i.key_pressed(Key::Z) && i.modifiers.shift && !i.modifiers.command) {
             state.view.fit = true;
         }
+        if ui.input(|i| i.key_pressed(Key::C) && i.modifiers.shift && !i.modifiers.command) {
+            match compare::default_choice(state, s.project) {
+                Some((label, plan)) => compare::open(state, label, plan),
+                None => state.status = "nothing to compare with yet".to_owned(),
+            }
+        }
         // Space plays the timeline: load it so the viewer's Space plays it.
         if plain(Key::Space) && !s.ours {
             let t = s
@@ -1502,6 +1557,235 @@ mod tests {
             got,
             vec![1],
             "1-based to 0-based, other plans and out of range dropped"
+        );
+        Ok(())
+    }
+
+    /// A night with a music map (120 bpm: a bar is 2 s) and two plans,
+    /// `reel-a` and `reel-b`, both ending on a 1-bar end card. No index:
+    /// the timeline and the viewer need none.
+    fn night() -> anyhow::Result<(tempfile::TempDir, std::path::PathBuf)> {
+        use crate::plan::{Aspect, Plan, Rules, Shot};
+        let dir = tempfile::tempdir()?;
+        let work = dir.path().join("2026-11-12").join("_ave");
+        std::fs::create_dir_all(work.join("plans"))?;
+        crate::beats::MusicMap {
+            path: "m.wav".into(),
+            duration: 60.0,
+            bpm: 120.0,
+            beats: (0..120).map(|i| i as f32 * 0.5).collect(),
+            bars: (0..30)
+                .map(|i| crate::beats::Bar {
+                    t: i as f32 * 2.0,
+                    rms: 1.0,
+                    low: 1.0,
+                })
+                .collect(),
+            ..crate::beats::MusicMap::default()
+        }
+        .save(&work)?;
+        let shot = |clip: &str, t_in: f32, note: &str| Shot {
+            clip: clip.into(),
+            t_in,
+            beats: 4,
+            cx: 0.5,
+            who: String::new(),
+            seg: String::new(),
+            note: note.into(),
+        };
+        let plan = |name: &str, shots: Vec<Shot>| Plan {
+            name: name.into(),
+            aspect: Aspect::Vertical,
+            music: "m.wav".into(),
+            start_bar: 0,
+            drop_bar: 1,
+            card_bar: 2,
+            end_bar: 3,
+            end_card: work.join("card.png").display().to_string(),
+            rules: Rules::default(),
+            finish: Default::default(),
+            shots,
+            comments: Vec::new(),
+        };
+        plan(
+            "reel-a",
+            vec![shot("A", 1.0, "opener"), shot("B", 2.0, "the drop")],
+        )
+        .save(&super::history::live_path(&work, "reel-a"))?;
+        plan(
+            "reel-b",
+            vec![shot("B", 2.0, "drop first"), shot("C", 5.0, "new closer")],
+        )
+        .save(&super::history::live_path(&work, "reel-b"))?;
+        Ok((dir, work))
+    }
+
+    /// The app on the timeline of `work`, headless.
+    fn harness(
+        work: std::path::PathBuf,
+    ) -> egui_kittest::Harness<'static, Option<crate::gui::app::App>> {
+        use crate::gui::app::{Action, App, Page};
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1680.0, 1000.0))
+            .with_accessibility_check(false)
+            .build_ui_state(
+                move |ui, app: &mut Option<App>| {
+                    let app = app.get_or_insert_with(|| {
+                        let mut app = App::new(
+                            ui.ctx(),
+                            crate::config::Config::default(),
+                            Some(work.clone()),
+                        );
+                        app.apply(ui.ctx(), Action::Go(Page::Plan));
+                        app
+                    });
+                    app.show(ui);
+                },
+                None,
+            );
+        harness.run_steps(6);
+        harness
+    }
+
+    #[test]
+    fn timeline_playback_holds_the_end_card_like_the_render() -> anyhow::Result<()> {
+        let (_dir, work) = night()?;
+        let mut h = harness(work.clone());
+        let app = h
+            .state_mut()
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("no app"))?;
+        assert_eq!(
+            app.pages.plan.name.as_deref(),
+            Some("reel-a"),
+            "the first plan opens"
+        );
+        let card = app
+            .player
+            .end_card()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("the viewer has no end card"))?;
+        assert_eq!(card.path, work.join("card.png"), "the plan's image");
+        assert!(
+            (card.dur - 2.0).abs() < 1e-6,
+            "card_bar 2 to end_bar 3 is one bar, 2 s: {}",
+            card.dur
+        );
+        assert!(
+            (app.player.duration() - 6.0).abs() < 1e-6,
+            "4 s of shots then the card, as long as the render: {}",
+            app.player.duration()
+        );
+        app.player.seek(5.0);
+        h.run_steps(3);
+        let app = h
+            .state()
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("no app"))?;
+        assert!(app.player.in_card(), "the playhead is on the card");
+        assert_eq!(app.player.here(), None, "showing the card, not a clip");
+        assert!(
+            (app.player.position() - 5.0).abs() < 1e-6,
+            "and stays there: the timeline does not stop at the last shot"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn compare_lists_differences_plays_either_side_and_adopts_b() -> anyhow::Result<()> {
+        use egui_kittest::kittest::Queryable;
+        let (_dir, work) = night()?;
+        let mut h = harness(work.clone());
+        h.query_by_label("Compare")
+            .ok_or_else(|| anyhow::anyhow!("no Compare menu in the tab strip"))?
+            .click();
+        h.run_steps(3);
+        h.query_by_label("Plan reel-b")
+            .ok_or_else(|| anyhow::anyhow!("reel-b is not offered"))?
+            .click();
+        h.run_steps(3);
+        {
+            let app = h
+                .state()
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("no app"))?;
+            let c = app
+                .pages
+                .plan
+                .compare
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("compare did not open"))?;
+            assert_eq!(c.label, "reel-b", "B is the picked plan");
+            let a = app
+                .pages
+                .plan
+                .plan
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("no plan"))?;
+            let kinds: Vec<super::compare::Kind> = super::compare::diff(a, &c.plan)
+                .iter()
+                .map(|d| d.kind)
+                .collect();
+            assert_eq!(
+                kinds,
+                vec![
+                    super::compare::Kind::Removed,
+                    super::compare::Kind::Moved,
+                    super::compare::Kind::Added
+                ],
+                "A's opener gone, the drop moved up, a new closer"
+            );
+        }
+        assert!(
+            h.query_all_by_label_contains("moved").next().is_some(),
+            "the diff list shows the move"
+        );
+        assert!(
+            h.query_all_by_label_contains("new closer").next().is_some(),
+            "with the shot's note"
+        );
+        h.query_by_label("Play B")
+            .ok_or_else(|| anyhow::anyhow!("no Play B"))?
+            .click();
+        h.run_steps(3);
+        {
+            let app = h
+                .state()
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("no app"))?;
+            let first = match app.player.source() {
+                crate::gui::player::Source::Sequence { shots, .. } => shots.first().map(|s| s.t_in),
+                crate::gui::player::Source::Empty
+                | crate::gui::player::Source::Clip { .. }
+                | crate::gui::player::Source::Audio { .. } => None,
+            };
+            assert_eq!(first, Some(2.0), "the viewer plays B (B @ 2.0s first)");
+            assert!(app.player.end_card().is_some(), "B's end card too");
+        }
+        h.query_by_label("Adopt B")
+            .ok_or_else(|| anyhow::anyhow!("no Adopt B"))?
+            .click();
+        h.run_steps(3);
+        let app = h
+            .state()
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("no app"))?;
+        assert!(
+            app.pages.plan.compare.is_none(),
+            "adopting ends the compare"
+        );
+        let live = crate::plan::Plan::load(&super::history::live_path(&work, "reel-a"))?;
+        assert_eq!(live.name, "reel-a", "keeps its own name");
+        let clips: Vec<&str> = live.shots.iter().map(|s| s.clip.as_str()).collect();
+        assert_eq!(clips, vec!["B", "C"], "with B's shots");
+        let versions = super::history::list(&work, "reel-a");
+        assert_eq!(
+            versions
+                .iter()
+                .map(|v| v.change.as_str())
+                .collect::<Vec<_>>(),
+            vec!["original", "adopt reel-b"],
+            "saved through the version path, the original kept"
         );
         Ok(())
     }

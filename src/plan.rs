@@ -419,6 +419,18 @@ impl Plan {
             .collect()
     }
 
+    /// Where the end card sits, seconds from the start bar: `(start, end)`,
+    /// i.e. `card_bar` to `end_bar` on the music map. The render holds the
+    /// end card image over this span (and stops at `start` without one);
+    /// timeline playback holds it for the same span.
+    pub(crate) fn card_span(&self, map: &MusicMap) -> (f32, f32) {
+        let origin = map.beat_time(self.start_bar, 0);
+        (
+            map.beat_time(self.card_bar, 0) - origin,
+            map.beat_time(self.end_bar, 0) - origin,
+        )
+    }
+
     /// Beats of footage before the end card.
     pub(crate) fn footage_beats(&self) -> usize {
         (self.card_bar - self.start_bar) * 4

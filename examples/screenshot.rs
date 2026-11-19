@@ -14,9 +14,17 @@
 //! output directory is under `target/`: these are build output, regenerated
 //! on demand, and a directory of stale committed PNGs is what makes someone
 //! trust a picture that is three changes out of date.
+//!
+//! With a night open it also shoots the timeline's A/B compare
+//! (`plan-compare.png`): it opens the tab strip's "Compare" menu and picks
+//! the first other plan, or else the latest earlier version.
 
 use aivideoeditor::gui::app::{Action, App, Page};
 use aivideoeditor::gui::ui::layout::ViewMode;
+use egui_kittest::kittest::Queryable;
+
+/// The shot that opens the timeline's compare view.
+const COMPARE: &str = "plan-compare";
 
 fn main() -> anyhow::Result<()> {
     let out = std::env::args().nth(1).map_or_else(
@@ -53,6 +61,9 @@ fn main() -> anyhow::Result<()> {
     ] {
         shots.push((name.to_owned(), vec![Action::Go(Page::Review), overlay]));
     }
+    if night.is_some() {
+        shots.push((COMPARE.to_owned(), vec![Action::Go(Page::Plan)]));
+    }
     for (name, actions) in shots {
         let mut harness = egui_kittest::Harness::builder()
             .with_size(egui::vec2(width, height))
@@ -85,12 +96,46 @@ fn main() -> anyhow::Result<()> {
                 std::thread::sleep(std::time::Duration::from_millis(150));
             }
         }
+        if name == COMPARE {
+            open_compare(&mut harness)?;
+        }
         let image = harness
             .render()
             .map_err(|error| anyhow::anyhow!("rendering {name} failed: {error}"))?;
         let path = out.join(format!("{name}.png"));
         image.save(&path)?;
         println!("wrote {}", path.display());
+    }
+    Ok(())
+}
+
+/// Opens the timeline's "Compare" menu and picks B: the first other plan,
+/// or else the latest earlier version of the open one.
+fn open_compare(harness: &mut egui_kittest::Harness<'_, Option<App>>) -> anyhow::Result<()> {
+    harness
+        .query_by_label("Compare")
+        .ok_or_else(|| anyhow::anyhow!("no Compare menu: the night has no plan"))?
+        .click();
+    harness.run_steps(4);
+    let is_plan = |label: &str| label.starts_with("Plan ");
+    let is_version = |label: &str| {
+        label.strip_prefix('v').is_some_and(|rest| {
+            rest.starts_with(|c: char| c.is_ascii_digit()) && rest.contains(" · ")
+        })
+    };
+    let pick = |want: &dyn Fn(&str) -> bool| {
+        harness
+            .query_all_by(|node| node.label().is_some_and(|l| want(&l)))
+            .next()
+            .map(|node| node.click())
+            .is_some()
+    };
+    if !pick(&is_plan) && !pick(&is_version) {
+        anyhow::bail!("nothing to compare with: one plan and no earlier version");
+    }
+    for _ in 0..20 {
+        harness.run_steps(15);
+        std::thread::sleep(std::time::Duration::from_millis(150));
     }
     Ok(())
 }

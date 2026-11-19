@@ -137,8 +137,8 @@ fn build(
     let frames = |sec: f64| (sec * rate).round() as i64;
     let timing = plan.timing(map);
     let origin = map.beat_time(plan.start_bar, 0);
-    let card_t = f64::from(map.beat_time(plan.card_bar, 0) - origin);
-    let end_t = f64::from(map.beat_time(plan.end_bar, 0) - origin);
+    let (card_t, end_t) = plan.card_span(map);
+    let (card_t, end_t) = (f64::from(card_t), f64::from(end_t));
     let (ow, oh) = plan.aspect.size();
     let mut args: Vec<String> = Vec::new();
     let mut graph = String::new();
