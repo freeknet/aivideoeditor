@@ -166,6 +166,9 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Symbols (▾ ✕ ▶ …) draw on Linux and macOS: the symbol-font fallback now looks
+  in the per-family folders (`/usr/share/fonts/truetype/dejavu`, `…/noto`,
+  `/System/Library/Fonts`) and loads every fallback it finds, not just the first.
 - `ave index` no longer stops the night at one unreadable clip: a clip that fails
   (ffmpeg error, no frames, garbage file) is skipped with a warning, recorded in
   `index.json` (`skipped`, with the reason) and listed at the top of `shotlog.md`;

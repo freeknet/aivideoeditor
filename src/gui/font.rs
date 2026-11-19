@@ -89,21 +89,26 @@ pub fn setup(ctx: &egui::Context, family: Option<&str>) -> Option<PathBuf> {
             .or_default()
             .insert(0, KEY.to_owned());
     }
-    let symbols = directories()
+    // Every fallback found, in order: one file rarely has every symbol.
+    let mut seen = std::collections::HashSet::new();
+    let symbols: Vec<Vec<u8>> = directories()
         .into_iter()
         .flat_map(|dir| SYMBOL_FALLBACKS.iter().map(move |f| dir.join(f)))
-        .find_map(|p| std::fs::read(p).ok());
-    if let Some(bytes) = symbols {
+        .filter_map(|p| {
+            let bytes = std::fs::read(&p).ok()?;
+            // The same file in two folders (the per-user one and the
+            // system one) is loaded once.
+            seen.insert(p.file_name()?.to_owned()).then_some(bytes)
+        })
+        .collect();
+    for (i, bytes) in symbols.into_iter().enumerate() {
+        let key = format!("{SYMBOLS}-{i}");
         fonts.font_data.insert(
-            SYMBOLS.to_owned(),
+            key.clone(),
             std::sync::Arc::new(egui::FontData::from_owned(bytes)),
         );
         for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-            fonts
-                .families
-                .entry(family)
-                .or_default()
-                .push(SYMBOLS.to_owned());
+            fonts.families.entry(family).or_default().push(key.clone());
         }
     }
     ctx.set_fonts(fonts);
@@ -137,8 +142,19 @@ fn directories() -> Vec<PathBuf> {
         directories.push(Path::new(&home).join(".local").join("share").join("fonts"));
         directories.push(Path::new(&home).join("Library").join("Fonts"));
     }
-    directories.push(PathBuf::from("/usr/share/fonts/truetype"));
-    directories.push(PathBuf::from("/Library/Fonts"));
+    // Linux keeps each family in its own folder under truetype/ or opentype/.
+    for dir in [
+        "/usr/share/fonts/truetype",
+        "/usr/share/fonts/truetype/dejavu",
+        "/usr/share/fonts/truetype/noto",
+        "/usr/share/fonts/opentype/noto",
+        "/usr/share/fonts/TTF",
+        "/usr/share/fonts/noto",
+        "/Library/Fonts",
+        "/System/Library/Fonts",
+    ] {
+        directories.push(PathBuf::from(dir));
+    }
     directories
 }
 
