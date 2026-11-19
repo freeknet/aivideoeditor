@@ -72,6 +72,7 @@ macro_rules! page_ctx {
             chat_inbox: &mut $app.chat_inbox,
             actions: $actions,
             blocked: $blocked,
+            keymap: $app.keymap,
         }
     };
 }

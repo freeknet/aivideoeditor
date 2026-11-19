@@ -37,7 +37,7 @@ use egui::{Key, Modifiers, Ui};
 
 use super::PageCtx;
 use crate::gui::app::Action;
-use crate::gui::ui::{theme, widgets};
+use crate::gui::ui::{keymap, theme, widgets};
 use crate::refs::{Modifier, Reference, Target};
 
 use model::{Group, Order};
@@ -187,39 +187,40 @@ fn keys(ctx: &PageCtx<'_>, state: &mut State, ui: &Ui, hot: bool, ops: &mut Vec<
     if !ctx.keys_free(ui) || !hot {
         return;
     }
-    let shift_cmd = Modifiers::COMMAND | Modifiers::SHIFT;
+    let preset = ctx.keymap;
     ui.input_mut(|i| {
+        let mut take = |id| keymap::consume(i, id, preset);
         if state.queue.is_some() {
-            for (key, answer) in [
-                (Key::Y, Answer::Yes),
-                (Key::N, Answer::No),
-                (Key::S, Answer::Skip),
+            for (id, answer) in [
+                ("people-yes", Answer::Yes),
+                ("people-no", Answer::No),
+                ("people-skip", Answer::Skip),
             ] {
-                if i.consume_key(Modifiers::NONE, key) {
+                if take(id) {
                     ops.push(Op::Answer(answer));
                 }
             }
             return;
         }
-        if i.consume_key(shift_cmd, Key::M) {
+        if take("people-new-person") {
             if !state.picked.is_empty() {
                 ops.push(Op::Open(Dialog::NewPerson {
                     segs: state.picked.clone(),
                     name: String::new(),
                 }));
             }
-        } else if i.consume_key(Modifiers::COMMAND, Key::M) && state.selected.len() > 1 {
+        } else if take("people-merge") && state.selected.len() > 1 {
             ops.push(Op::Merge(state.selected.clone()));
         }
-        if i.consume_key(shift_cmd, Key::Z) || i.consume_key(Modifiers::COMMAND, Key::Y) {
+        if take("people-redo") || take("people-redo-alt") {
             ops.push(Op::Redo);
-        } else if i.consume_key(Modifiers::COMMAND, Key::Z) {
+        } else if take("people-undo") {
             ops.push(Op::Undo);
         }
-        if i.consume_key(Modifiers::NONE, Key::Space) {
+        if take("people-queue") {
             ops.push(Op::StartQueue);
         }
-        if (i.consume_key(Modifiers::NONE, Key::F2) || i.consume_key(Modifiers::NONE, Key::Enter))
+        if (take("people-rename") || take("people-rename-alt"))
             && let Focus::Person(name) = &state.focus
         {
             ops.push(Op::StartRename(name.clone()));
@@ -442,12 +443,14 @@ fn card_actions(
             response.rect.left_bottom() - egui::vec2(-theme::SPACE_XS, 50.0),
             egui::vec2(response.rect.width() - 2.0 * theme::SPACE_XS, 20.0),
         );
-        let edit = ui.put(
-            rect,
-            egui::TextEdit::singleline(buffer)
-                .font(theme::font(SMALL))
-                .id(egui::Id::unique("people-rename")),
-        );
+        let edit = ui
+            .put(
+                rect,
+                egui::TextEdit::singleline(buffer)
+                    .font(theme::font(SMALL))
+                    .id(egui::Id::unique("people-rename")),
+            )
+            .accessible_name(format!("Rename {old}"));
         if !edit.has_focus() && !edit.lost_focus() {
             edit.request_focus();
         }
@@ -934,11 +937,13 @@ fn dialog(ctx: &mut PageCtx<'_>, state: &mut State, ui: &Ui, ops: &mut Vec<Op>) 
                         if segs.len() == 1 { "" } else { "s" }
                     ),
                 );
-                let edit = ui.add(
-                    egui::TextEdit::singleline(name)
-                        .hint_text("e.g. white-mask")
-                        .desired_width(f32::INFINITY),
-                );
+                let edit = ui
+                    .add(
+                        egui::TextEdit::singleline(name)
+                            .hint_text("e.g. white-mask")
+                            .desired_width(f32::INFINITY),
+                    )
+                    .accessible_name("New person's name");
                 if !edit.has_focus() && !edit.lost_focus() {
                     edit.request_focus();
                 }
@@ -973,7 +978,7 @@ fn dialog(ctx: &mut PageCtx<'_>, state: &mut State, ui: &Ui, ops: &mut Vec<Op>) 
                     .num_columns(2)
                     .spacing([theme::SPACE_SM, theme::SPACE_XS])
                     .show(ui, |ui| {
-                        ui.label("Clip");
+                        let label = ui.label("Clip");
                         egui::ComboBox::from_id_salt("people-range-clip")
                             .selected_text(clip.as_str())
                             .width(180.0)
@@ -985,17 +990,22 @@ fn dialog(ctx: &mut PageCtx<'_>, state: &mut State, ui: &Ui, ops: &mut Vec<Op>) 
                                             ui.selectable_value(clip, c.clone(), c);
                                         }
                                     });
-                            });
+                            })
+                            .response
+                            .labelled_by(label.id);
                         ui.end_row();
-                        ui.label("From (s)");
-                        ui.add(egui::DragValue::new(from).speed(0.1).range(0.0..=f32::MAX));
+                        let label = ui.label("From (s)");
+                        ui.add(egui::DragValue::new(from).speed(0.1).range(0.0..=f32::MAX))
+                            .labelled_by(label.id);
                         ui.end_row();
-                        ui.label("To (s)");
-                        ui.add(egui::DragValue::new(to).speed(0.1).range(0.0..=f32::MAX));
+                        let label = ui.label("To (s)");
+                        ui.add(egui::DragValue::new(to).speed(0.1).range(0.0..=f32::MAX))
+                            .labelled_by(label.id);
                         ui.end_row();
-                        ui.label("Person");
+                        let label = ui.label("Person");
                         ui.horizontal(|ui| {
-                            ui.add(egui::TextEdit::singleline(name).desired_width(130.0));
+                            ui.add(egui::TextEdit::singleline(name).desired_width(130.0))
+                                .labelled_by(label.id);
                             egui::ComboBox::from_id_salt("people-range-name")
                                 .selected_text("▾")
                                 .width(24.0)
@@ -1007,7 +1017,9 @@ fn dialog(ctx: &mut PageCtx<'_>, state: &mut State, ui: &Ui, ops: &mut Vec<Op>) 
                                                 ui.selectable_value(name, n.clone(), n);
                                             }
                                         });
-                                });
+                                })
+                                .response
+                                .accessible_name("Pick a known person");
                         });
                         ui.end_row();
                     });

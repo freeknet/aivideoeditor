@@ -117,6 +117,11 @@ jobs:
         with:
           key: linux
 
+      # cpal (the viewer's audio) links ALSA on Linux; its build script
+      # fails without the headers.
+      - name: System libraries
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev
+
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 

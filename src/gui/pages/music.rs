@@ -35,7 +35,7 @@ use super::PageCtx;
 use crate::beats::{MusicMap, structure};
 use crate::color::Rgb;
 use crate::commands::Cmd;
-use crate::gui::ui::{theme, widgets};
+use crate::gui::ui::{keymap, theme, widgets};
 use crate::theme::Palette;
 
 /// A correction to the music map, applied after the frame.
@@ -413,15 +413,17 @@ fn toolbar(
     edits: &mut Vec<Edit>,
 ) {
     ui.horizontal_wrapped(|ui| {
-        ui.label("Tempo");
+        let label = ui.label("Tempo");
         let mut bpm = state.bpm_edit.unwrap_or(map.bpm);
-        let field = ui.add(
-            egui::DragValue::new(&mut bpm)
-                .speed(0.01)
-                .range(40.0..=300.0)
-                .max_decimals(2)
-                .suffix(" BPM"),
-        );
+        let field = ui
+            .add(
+                egui::DragValue::new(&mut bpm)
+                    .speed(0.01)
+                    .range(40.0..=300.0)
+                    .max_decimals(2)
+                    .suffix(" BPM"),
+            )
+            .labelled_by(label.id);
         if field.changed() {
             state.bpm_edit = Some(bpm);
         }
@@ -532,46 +534,50 @@ fn keys(
         .hover_bar
         .or(playhead_bar)
         .or(state.sel.map(|(a, _)| a));
+    let preset = ctx.keymap;
     for (key, m) in pressed {
-        if m.command || m.alt {
-            continue;
-        }
-        // `egui::Key` has a hundred variants; compare rather than match.
+        // The keys are the Music rows of `keymap::COMMANDS` under the preset.
+        let fires = |id| keymap::fires(id, preset, key, m);
+        // `+` is Shift+`=` on most layouts and is read by its physical key.
+        let zoom_in = fires("music-zoom-in")
+            || keymap::fires(
+                "music-zoom-in",
+                preset,
+                key,
+                egui::Modifiers { shift: false, ..m },
+            )
+            || key == egui::Key::Plus;
         let centre = state.view_t0 + 0.5 * state.view_span;
-        if key == egui::Key::Num0 {
+        if fires("music-grid") {
             state.show_grid = !state.show_grid;
-        } else if key == egui::Key::Comma {
-            edits.push(if m.shift {
-                Edit::Nudge(-0.01)
-            } else {
-                Edit::ShiftDownbeat(-1)
-            });
-        } else if key == egui::Key::Period {
-            edits.push(if m.shift {
-                Edit::Nudge(0.01)
-            } else {
-                Edit::ShiftDownbeat(1)
-            });
-        } else if key == egui::Key::D {
+        } else if fires("music-nudge-earlier") {
+            edits.push(Edit::Nudge(-0.01));
+        } else if fires("music-nudge-later") {
+            edits.push(Edit::Nudge(0.01));
+        } else if fires("music-downbeat-earlier") {
+            edits.push(Edit::ShiftDownbeat(-1));
+        } else if fires("music-downbeat-later") {
+            edits.push(Edit::ShiftDownbeat(1));
+        } else if fires("music-drop") {
             if let Some(bar) = target {
                 edits.push(Edit::ToggleDrop(bar));
             }
-        } else if key == egui::Key::I {
+        } else if fires("music-from") {
             if let Some(bar) = playhead_bar.or(state.hover_bar) {
                 let to = state.sel.map_or(bar, |(_, b)| b.max(bar));
                 view::select(ctx, state, bar, to);
                 state.anchor = Some(bar);
             }
-        } else if key == egui::Key::O {
+        } else if fires("music-to") {
             if let Some(bar) = playhead_bar.or(state.hover_bar) {
                 let from = state.sel.map_or(bar, |(a, _)| a.min(bar));
                 view::select(ctx, state, from, bar);
             }
-        } else if key == egui::Key::Equals || key == egui::Key::Plus {
+        } else if zoom_in {
             state.zoom(1.0 / 1.5, centre, map.duration);
-        } else if key == egui::Key::Minus {
+        } else if fires("music-zoom-out") {
             state.zoom(1.5, centre, map.duration);
-        } else if key == egui::Key::Escape {
+        } else if fires("music-deselect") {
             state.sel = None;
             ctx.selection.clear();
         }
@@ -580,11 +586,24 @@ fn keys(
 
 /// The shortcut line under the strips.
 fn hint(ctx: &PageCtx<'_>, ui: &mut egui::Ui) {
+    let key = |id| {
+        keymap::command(id)
+            .map(|c| c.hint(ctx.keymap))
+            .unwrap_or_default()
+    };
     ui.label(
-        RichText::new(
-            "drag bars to select · drag a bar number to move the downbeat · , . beat · \
-             Shift+, . 10 ms · D drop · I/O range · 0 grid · Ctrl+wheel zoom · R reference",
-        )
+        RichText::new(format!(
+            "drag bars to select · drag a bar number to move the downbeat · {} {} beat · \
+             {} {} 10 ms · {} drop · {}/{} range · {} grid · Ctrl+wheel zoom · R reference",
+            key("music-downbeat-earlier"),
+            key("music-downbeat-later"),
+            key("music-nudge-earlier"),
+            key("music-nudge-later"),
+            key("music-drop"),
+            key("music-from"),
+            key("music-to"),
+            key("music-grid"),
+        ))
         .small()
         .color(theme::rgb(ctx.theme.text_faint)),
     );
@@ -624,11 +643,13 @@ fn selection_row(
                 edits.push(Edit::SetRange(name.to_owned(), from, to));
             }
         }
-        let field = ui.add(
-            egui::TextEdit::singleline(&mut state.range_name)
-                .hint_text("other name")
-                .desired_width(90.0),
-        );
+        let field = ui
+            .add(
+                egui::TextEdit::singleline(&mut state.range_name)
+                    .hint_text("other name")
+                    .desired_width(90.0),
+            )
+            .accessible_name("Range name");
         let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         if (ui.small_button("Save").clicked() || enter) && !state.range_name.trim().is_empty() {
             edits.push(Edit::SetRange(state.range_name.trim().to_owned(), from, to));
@@ -668,7 +689,9 @@ fn sections(
                     let mut commit = None;
                     let mut cancel = false;
                     if let Some((_, text)) = state.rename.as_mut() {
-                        let field = ui.add(egui::TextEdit::singleline(text).desired_width(110.0));
+                        let field = ui
+                            .add(egui::TextEdit::singleline(text).desired_width(110.0))
+                            .accessible_name("Section name");
                         if state.focus_rename {
                             field.request_focus();
                             state.focus_rename = false;

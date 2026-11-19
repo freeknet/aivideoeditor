@@ -114,8 +114,9 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui);
 | `project: &mut Option<Project>` | the night: `work`, `settings`, `index` (shot log), `music`, `people`, `plans`; `reload_*()` after you write a file |
 | `jobs` | `spawn(label, Cmd)` runs an engine step (`crate::commands::Cmd`) in the background; `running()`, `get(id)`; the app reloads the project when one finishes |
 | `thumbs` | `paint(ui, rect, path, t, cx, placeholder)` cover-fits a frame (cropped around `cx`); `get(..)` for the raw texture |
-| `player` | the shared viewer: `open_clip(path, t0, t1, cx)`, `open_sequence(Vec<SeqShot>, music)`, `open_audio(path, t0, t1)`, `sequence_shot()`, `play/pause/toggle/seek/position/duration`, `show(ui, thumbs, size, aspect, bg)`, `transport(ui)`, `handle_keys(ui)` (Space, J/K/L, ←/→) |
+| `player` | the shared viewer: `open_clip(path, t0, t1, cx)`, `open_sequence(Vec<SeqShot>, music)`, `open_audio(path, t0, t1)`, `sequence_shot()`, `play/pause/toggle/seek/position/duration`, `show(ui, thumbs, size, aspect, bg)`, `transport(ui)`, `handle_keys(ui, ctx.keymap)` (Space, J/K/L, ←/→, under the preset) |
 | `config` | saved preferences |
+| `keymap` | the keyboard preset: read region keys with `keymap::pressed(input, id, ctx.keymap)` / `consume` / `fires`, never a hard-coded `Key` |
 | `refs` | references staged for the assistant (read; add with `Action::AddRef`) |
 | `selection` | the app-wide selection as `Vec<Reference>`: **replace it** when the user selects in your region; the inspector shows it; `R`/`Shift-R` stage it for chat (handled by the workspace) |
 | `search` | the top bar search text (Shots filters by it; others may too) |

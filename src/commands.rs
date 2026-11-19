@@ -605,9 +605,10 @@ fn run(command: Cmd, out: &mut impl Write, progress: &Progress) -> anyhow::Resul
             let index = crate::index::run(&footage, &work, jobs, force, progress)?;
             writeln!(
                 out,
-                "{} clips, {} segments -> {}",
+                "{} clips, {} segments, {} skipped -> {}",
                 index.clips.len(),
                 index.segments.len(),
+                index.skipped.len(),
                 work.join("shotlog.md").display()
             )?;
         }

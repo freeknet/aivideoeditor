@@ -1104,6 +1104,7 @@ mod tests {
             sharp_ref: 2.0,
             clips: Vec::new(),
             thresholds: Default::default(),
+            skipped: Vec::new(),
             work: None,
             segments: vec![
                 scored(

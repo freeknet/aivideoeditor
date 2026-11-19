@@ -405,7 +405,7 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
     let keys_free = ctx.keys_free(ui) && !state.inactive;
     track_focus(state, ui);
     sync_project(ctx, state);
-    state.preset = preset(ctx);
+    state.preset = ctx.keymap;
     follow_tape(ctx, state);
     let mut dos: Vec<Do> = Vec::new();
     // The marks leave the state while the night borrows them.
@@ -1023,8 +1023,9 @@ fn empty(ui: &mut egui::Ui, theme: &Palette, query: &Query, matched: usize, dos:
     }
 }
 
-/// Removes the first press of `chord` from this frame's input, matched
-/// exactly ([`keymap::matches`]). Held-key repeats count when `repeat`.
+/// Removes the first press of `chord` (an arrow, which is not a row of its
+/// own) from this frame's input, matched exactly ([`keymap::matches`]).
+/// Held-key repeats count when `repeat`.
 fn take_chord(ui: &egui::Ui, chord: egui::KeyboardShortcut, repeat: bool) -> bool {
     ui.input_mut(|i| {
         let at = i.events.iter().position(|e| {
@@ -1038,9 +1039,10 @@ fn take_chord(ui: &egui::Ui, chord: egui::KeyboardShortcut, repeat: bool) -> boo
     })
 }
 
-/// [`take_chord`] for the command `id` under `preset`.
-fn take(ui: &egui::Ui, id: &str, preset: Preset, repeat: bool) -> bool {
-    keymap::chord(id, preset).is_some_and(|chord| take_chord(ui, chord, repeat))
+/// Whether the command `id` was pressed under `preset`; the press is
+/// removed so nothing drawn later reads it too ([`keymap::consume`]).
+fn take(ui: &egui::Ui, id: &str, preset: Preset) -> bool {
+    ui.input_mut(|i| keymap::consume(i, id, preset))
 }
 
 /// Reads the review modes' keys; returns whether the arrows are taken.
@@ -1048,22 +1050,22 @@ fn mode_keys(ui: &egui::Ui, state: &State, dos: &mut Vec<Do>) -> bool {
     use egui::{Key, KeyboardShortcut, Modifiers};
     let p = state.preset;
     let kind = state.mode.kind();
-    if kind != Kind::Browse && take(ui, "review-exit", p, false) {
+    if kind != Kind::Browse && take(ui, "review-exit", p) {
         dos.push(Do::Mode(Kind::Browse));
     }
     for (k, _, id) in MODES {
-        if take(ui, id, p, false) {
+        if take(ui, id, p) {
             dos.push(Do::Mode(k));
         }
     }
-    if take(ui, "review-fast", p, false) {
+    if take(ui, "review-fast", p) {
         dos.push(Do::FastReview);
     }
     let arrow = |key| take_chord(ui, KeyboardShortcut::new(Modifiers::NONE, key), true);
     match &state.mode {
         Mode::Browse | Mode::Tape(_) => false,
         Mode::Compare(_) => {
-            if take(ui, "review-compare-promote", p, false) {
+            if take(ui, "review-compare-promote", p) {
                 dos.push(Do::Promote);
             }
             for (key, step) in [(Key::ArrowLeft, -1), (Key::ArrowRight, 1)] {
@@ -1074,13 +1076,13 @@ fn mode_keys(ui: &egui::Ui, state: &State, dos: &mut Vec<Do>) -> bool {
             true
         }
         Mode::Survey(s) => {
-            if take(ui, "review-survey-remove", p, false) {
+            if take(ui, "review-survey-remove", p) {
                 dos.push(Do::SurveyRemove(None));
             }
-            if take(ui, "review-next-group", p, false) {
+            if take(ui, "review-next-group", p) {
                 dos.push(Do::Group(1));
             }
-            if take(ui, "review-prev-group", p, false) {
+            if take(ui, "review-prev-group", p) {
                 dos.push(Do::Group(-1));
             }
             let cols = s.columns.max(1) as isize;
@@ -1402,15 +1404,6 @@ fn apply(ctx: &mut PageCtx<'_>, state: &mut State, d: Do, egui_ctx: &egui::Conte
             }
         }
     }
-}
-
-/// The keyboard preset in force (the app keeps the config current).
-fn preset(ctx: &PageCtx<'_>) -> Preset {
-    ctx.config
-        .keymap
-        .as_deref()
-        .and_then(Preset::from_key)
-        .unwrap_or_default()
 }
 
 /// The segment with this id.
