@@ -66,9 +66,12 @@ pub(crate) struct Rules {
     pub(crate) same_clip_gap: f32,
     /// The same performer may not appear again within this many shots.
     pub(crate) person_gap: usize,
-    /// Clip colour signatures closer than this (0..1 distance) read as the same
-    /// shot. Off (0) by default: one location gives every clip the same
-    /// palette, and real repeats are caught by the clip and person rules.
+    /// Two shots from different clips whose segment signatures (colour
+    /// histogram, emitter layout, action centre; see
+    /// [`crate::analyze::segments::Signature`]) are closer than this read
+    /// as the same shot when they also show the same performer (or the
+    /// people map does not name either). 0 turns the rule off. Calibrated
+    /// on 2026-11-11: see [`LOOKALIKE`].
     pub(crate) lookalike: f32,
     /// Shots whose source range carries any of these flags fail the check.
     pub(crate) reject_flags: Vec<String>,
@@ -85,7 +88,7 @@ impl Default for Rules {
         Self {
             same_clip_gap: 30.0,
             person_gap: 8,
-            lookalike: 0.0,
+            lookalike: LOOKALIKE,
             reject_flags: vec!["dark".into(), "whip".into(), "soft".into()],
             drop_subject: "fire".into(),
             reject_moments: vec!["transition".into(), "idle".into()],
@@ -93,6 +96,15 @@ impl Default for Rules {
         }
     }
 }
+
+/// Default look-alike threshold on segment-signature distance.
+///
+/// Calibrated on 2026-11-11 over the usable segments' signatures: adjacent
+/// segments of one clip (same spot and performer, mostly the same action)
+/// sit at a median distance of 0.153 with a third under 0.12; pairs of
+/// clips showing different performers start at 0.158 (p1), only 0.1 %
+/// under 0.12; other clips of the same performer, 4.1 % under 0.12.
+pub(crate) const LOOKALIKE: f32 = 0.12;
 
 /// One cut.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -346,14 +358,19 @@ pub(crate) fn check(plan: &Plan, index: &Index, map: &MusicMap, people: &People)
                     ),
                 );
             }
-            if let (Some(ha), Some(hb)) = (shot_hist(index, shot), shot_hist(index, prev)) {
-                let d = 0.5 * ha.iter().zip(&hb).map(|(x, y)| (x - y).abs()).sum::<f32>();
-                if r.lookalike > 0.0 && d < r.lookalike && prev.clip != shot.clip {
-                    push(
-                        n,
-                        format!("looks like shot {} (colour distance {d:.3})", j + 1),
-                    );
-                }
+            if r.lookalike > 0.0
+                && prev.clip != shot.clip
+                && let Some(d) = lookalike(index, people, (shot, *dur), (prev, timing[j].1))
+                && d < r.lookalike
+            {
+                push(
+                    n,
+                    format!(
+                        "looks like shot {} (signature distance {d:.3} < {:.3}, same spot, performer and action)",
+                        j + 1,
+                        r.lookalike
+                    ),
+                );
             }
         }
     }
@@ -366,14 +383,37 @@ pub(crate) fn check(plan: &Plan, index: &Index, map: &MusicMap, people: &People)
     problems
 }
 
-/// Mean colour histogram of a shot's first second, from the index samples.
-fn shot_hist(index: &Index, shot: &Shot) -> Option<Vec<f32>> {
-    // Clip-level signature: the samples carry no histogram, and two shots
-    // of one clip are already caught by the same-clip rule.
-    index
-        .clip(&shot.clip)
-        .map(|c| c.hist.clone())
-        .filter(|h| !h.is_empty())
+/// Whether a people-map name says who someone is (unlisted footage is
+/// named after its clip, which says nothing).
+fn known(name: &str, clip: &str) -> bool {
+    !name.is_empty() && name != clip
+}
+
+/// Signature distance between two shots (each with its length in
+/// seconds), or `None` when they cannot be look-alikes: a signature is
+/// missing, or the people map names two different performers.
+pub(crate) fn lookalike(
+    index: &Index,
+    people: &People,
+    a: (&Shot, f32),
+    b: (&Shot, f32),
+) -> Option<f32> {
+    let (wa, wb) = (people.who(a.0), people.who(b.0));
+    if known(&wa, &a.0.clip) && known(&wb, &b.0.clip) && wa != wb {
+        return None;
+    }
+    let sa = &index
+        .segment_at(&a.0.clip, a.0.t_in, a.0.t_in + a.1)?
+        .seg
+        .sig;
+    let sb = &index
+        .segment_at(&b.0.clip, b.0.t_in, b.0.t_in + b.1)?
+        .seg
+        .sig;
+    if sa.is_empty() || sb.is_empty() {
+        return None;
+    }
+    Some(sa.distance(sb))
 }
 
 /// Renders problems as text.
@@ -458,6 +498,13 @@ beats = 4
             zoom_factor: 1.0,
             pan: 0.0,
             jitter: 0.0,
+            lit: 0.4,
+            lit_frac: 0.1,
+            lit_p95: 0.8,
+            burst: 0.0,
+            peak_t: 0.0,
+            moments: Vec::new(),
+            sig: Default::default(),
         };
         let probe = Probe {
             duration: 120.0,
@@ -475,6 +522,7 @@ beats = 4
             samples: Vec::new(),
             segments: vec![seg(0.0, 120.0)],
             hist: vec![hist; 32],
+            version: 0,
         };
         let scored = |c: &str| Scored {
             id: format!("{c}/1"),
@@ -483,6 +531,7 @@ beats = 4
             subject: "fire".into(),
             q: 0.9,
             flags: Vec::new(),
+            why: Vec::new(),
             caption: None,
         };
         Index {
@@ -490,6 +539,7 @@ beats = 4
             sharp_ref: 1.0,
             clips: vec![clip("A", 0.0), clip("B", 1.0)],
             segments: vec![scored("A"), scored("B")],
+            ..Index::default()
         }
     }
 

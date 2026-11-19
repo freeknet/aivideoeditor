@@ -27,3 +27,14 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   index under configurable rules, and a checker for hand-edited plans.
 - `ave render` / `ave otio`: one-graph ffmpeg render with a 720p preview, and
   OpenTimelineIO export.
+- Night-tuned technical cull: exposure is measured on the lit region (pixels
+  above black), so a fire spinner on black is no longer `dark`; per-night
+  thresholds in `ave.toml` `[thresholds]` (or `[pages.thresholds]`); every flag
+  records its measured value and threshold, and the shot log prints them.
+- Moment detector: a per-sample burst signal (onset of fire / LED area and
+  moving light), with each segment's `peak_t` and `moments` in the index and
+  the shot log.
+- Look-alike rule: each segment stores a signature (colour histogram, emitter
+  layout grid, action centre); `ave check` flags two shots from different clips
+  closer than `lookalike` (default 0.12, calibrated on 2026-11-11) unless the
+  people map names different performers.

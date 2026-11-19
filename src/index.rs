@@ -19,6 +19,41 @@
 //!
 //! Scores and flags are relative to the whole shoot where that matters
 //! (focus varies by lens and light, so "soft" means soft for this night).
+//!
+//! **The night-tuned cull.** Exposure is judged on the *lit region*, the
+//! pixels above a luma floor of 0.08, not on the frame average: a sharp
+//! fire spinner on black is a well-exposed shot even though 97 % of the
+//! frame is black. A segment is `dark` when almost nothing is lit (lit share
+//! under `min_lit`), when its lit region is dim (mean lit luma under
+//! `dark`), or when nothing in it is bright (lit-region p95 under
+//! `highlights`: no flame, no LED, no lit face). Every flag records the
+//! measured value and the threshold it crossed (`why`), and the shot log
+//! prints them.
+//!
+//! Defaults were calibrated on 2026-11-11 (417 segments): the old
+//! frame-average rule (p95 < 0.30 or mean < 0.035) flagged 130 segments
+//! dark, yet the vision model called only one of the 83 it captioned "too
+//! dark". Lit-region means there sit between 0.19 and 0.29 (p5..p90) and
+//! lit-region p95 between 0.45 and 0.89, so `dark = 0.18` and
+//! `highlights = 0.40` flag the dim tail (about 3 %), including the one
+//! segment the vision model called too dark.
+//!
+//! The thresholds are per night, read from `<work>/ave.toml`:
+//!
+//! ```toml
+//! [thresholds]          # or [pages.thresholds], which survives GUI saves
+//! dark = 0.18           # lit-region mean luma below this is dark
+//! highlights = 0.40     # lit-region p95 below this is dark
+//! min_lit = 0.003       # lit share of the frame below this is dark
+//! soft = 0.6            # focus below this x the night's median is soft
+//! blown = 0.12          # clipped share of the frame above this is blown
+//! no_action = 0.0008    # moving-light share below this is no-action
+//! short = 1.0           # segments shorter than this (s) are short
+//! ```
+//!
+//! Each key is optional and read on its own; a bad value costs that key,
+//! not the table. `[thresholds]` wins over `[pages.thresholds]` key by key.
+//! Re-run `ave index` after editing: cached clips make that a re-score.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -31,6 +66,153 @@ use crate::analyze::{self, ClipIndex};
 
 /// File extensions treated as video.
 const VIDEO_EXT: [&str; 8] = ["mov", "mp4", "m4v", "mkv", "avi", "mts", "mxf", "webm"];
+
+/// The technical-cull thresholds of one night (see the module docs).
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub(crate) struct Thresholds {
+    /// Lit-region mean luma below this is `dark`.
+    pub(crate) dark: f32,
+    /// Lit-region 95th-percentile luma below this is `dark` (nothing
+    /// bright: no flame, LED or lit face).
+    pub(crate) highlights: f32,
+    /// Lit share of the frame below this is `dark` (nothing to see).
+    pub(crate) min_lit: f32,
+    /// Focus below this fraction of the night's median is `soft`.
+    pub(crate) soft: f32,
+    /// Clipped share of the frame above this is `blown`.
+    pub(crate) blown: f32,
+    /// Moving-light share below this is `no-action`.
+    pub(crate) no_action: f32,
+    /// Segments shorter than this many seconds are `short`.
+    pub(crate) short: f32,
+}
+
+impl Default for Thresholds {
+    fn default() -> Self {
+        Self {
+            dark: 0.18,
+            highlights: 0.40,
+            min_lit: 0.003,
+            soft: 0.6,
+            blown: 0.12,
+            no_action: 0.0008,
+            short: 1.0,
+        }
+    }
+}
+
+impl Thresholds {
+    /// Reads the thresholds from the text of an `ave.toml`, key by key;
+    /// returns them with one warning per value that could not be used.
+    pub(crate) fn parse(text: &str) -> (Self, Vec<String>) {
+        let mut out = Self::default();
+        let mut warnings = Vec::new();
+        let Ok(table) = text.parse::<toml::Table>() else {
+            return (
+                out,
+                vec!["ave.toml does not parse; default thresholds".into()],
+            );
+        };
+        let pages = table
+            .get("pages")
+            .and_then(|p| p.get("thresholds"))
+            .and_then(toml::Value::as_table);
+        let own = table.get("thresholds").and_then(toml::Value::as_table);
+        for source in [pages, own].into_iter().flatten() {
+            for (key, value) in source {
+                let number = value
+                    .as_float()
+                    .or_else(|| value.as_integer().map(|i| i as f64))
+                    .filter(|v| v.is_finite() && *v >= 0.0)
+                    .map(|v| v as f32);
+                let slot = match key.as_str() {
+                    "dark" => &mut out.dark,
+                    "min_lit" => &mut out.min_lit,
+                    "highlights" => &mut out.highlights,
+                    "soft" => &mut out.soft,
+                    "blown" => &mut out.blown,
+                    "no_action" => &mut out.no_action,
+                    "short" => &mut out.short,
+                    other => {
+                        warnings.push(format!("thresholds: unknown key `{other}`"));
+                        continue;
+                    }
+                };
+                match number {
+                    Some(v) => *slot = v,
+                    None => warnings.push(format!(
+                        "thresholds: `{key}` must be a non-negative number, got {value}"
+                    )),
+                }
+            }
+        }
+        (out, warnings)
+    }
+
+    /// The thresholds for the night whose work folder is `work`.
+    pub(crate) fn for_work(work: &Path) -> Self {
+        let Ok(text) = std::fs::read_to_string(work.join("ave.toml")) else {
+            return Self::default();
+        };
+        let (t, warnings) = Self::parse(&text);
+        for w in warnings {
+            log::warn!("{w}");
+        }
+        t
+    }
+}
+
+/// Why a flag was raised: the measurement and the threshold it crossed.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct FlagWhy {
+    /// The flag (`dark`, `soft`, ...).
+    pub(crate) flag: String,
+    /// What was measured (`lit`, `lit_frac`, `focus`, ...).
+    pub(crate) measure: String,
+    /// The measured value.
+    pub(crate) value: f32,
+    /// The threshold it crossed.
+    pub(crate) threshold: f32,
+}
+
+impl FlagWhy {
+    /// `lit 0.11 < 0.18`.
+    pub(crate) fn text(&self) -> String {
+        let op = if self.value < self.threshold {
+            "<"
+        } else {
+            ">"
+        };
+        if self.threshold < 0.01 {
+            format!(
+                "{} {:.2}% {op} {:.2}%",
+                self.measure,
+                self.value * 100.0,
+                self.threshold * 100.0
+            )
+        } else {
+            format!(
+                "{} {:.2} {op} {:.2}",
+                self.measure, self.value, self.threshold
+            )
+        }
+    }
+}
+
+/// Exposure quality 0..1 from the lit region: best when what is lit has
+/// a mean luma of 0.3 or more and covers at least 2 % of the frame, and
+/// marked down when more than 6 % of the frame clips.
+pub(crate) fn exposure_q(lit: f32, lit_frac: f32, clipped: f32) -> f32 {
+    let level = (lit / 0.30).clamp(0.0, 1.0).powf(1.5);
+    let extent = 0.4 + 0.6 * (lit_frac / 0.02).clamp(0.0, 1.0).sqrt();
+    let blown = if clipped > 0.06 {
+        (1.0 - (clipped - 0.06) * 4.0).max(0.2)
+    } else {
+        1.0
+    };
+    level * extent * blown
+}
 
 /// A segment with its shoot-relative score, flags and caption.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -48,6 +230,9 @@ pub(crate) struct Scored {
     pub(crate) q: f32,
     /// Problems: `dark`, `soft`, `shaky`, `whip`, `blown`, `no-action`.
     pub(crate) flags: Vec<String>,
+    /// The measurement and threshold behind each flag in `flags`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) why: Vec<FlagWhy>,
     /// Vision-model caption, once `ave caption` has run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) caption: Option<crate::caption::Caption>,
@@ -64,6 +249,13 @@ pub(crate) struct Index {
     pub(crate) clips: Vec<ClipIndex>,
     /// Every segment, scored, in clip then time order.
     pub(crate) segments: Vec<Scored>,
+    /// The cull thresholds the flags were raised with.
+    #[serde(default)]
+    pub(crate) thresholds: Thresholds,
+    /// The work folder this index was loaded from or written to (not
+    /// stored): how the planner finds sibling nights' plans.
+    #[serde(skip)]
+    pub(crate) work: Option<PathBuf>,
 }
 
 impl Index {
@@ -72,7 +264,20 @@ impl Index {
         let path = work.join("index.json");
         let text = std::fs::read_to_string(&path)
             .with_context(|| format!("reading {} (run `ave index` first)", path.display()))?;
-        Ok(serde_json::from_str(&text)?)
+        let mut index: Self = serde_json::from_str(&text)?;
+        index.work = Some(work.to_path_buf());
+        Ok(index)
+    }
+
+    /// The scored segment of `clip` that covers most of `t0..t1`.
+    pub(crate) fn segment_at(&self, clip: &str, t0: f32, t1: f32) -> Option<&Scored> {
+        self.segments
+            .iter()
+            .filter(|g| g.clip == clip)
+            .map(|g| (g.seg.end.min(t1) - g.seg.start.max(t0), g))
+            .filter(|(overlap, _)| *overlap > 0.0)
+            .max_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, g)| g)
     }
 
     /// Saves `<work>/index.json` and regenerates `<work>/shotlog.md`.
@@ -129,6 +334,7 @@ fn clip_index(path: &Path, cache: &Path, force: bool) -> Result<ClipIndex> {
         && let Ok(text) = std::fs::read_to_string(&cached)
         && let Ok(clip) = serde_json::from_str::<ClipIndex>(&text)
         && clip.stamp == st
+        && clip.version >= analyze::ANALYSIS_VERSION
     {
         return Ok(clip);
     }
@@ -145,45 +351,72 @@ fn clip_index(path: &Path, cache: &Path, force: bool) -> Result<ClipIndex> {
     Ok(clip)
 }
 
+/// Whether a segment is dark under `t`, with the reason.
+fn dark(seg: &Segment, t: &Thresholds) -> Option<FlagWhy> {
+    let why = |measure: &str, value: f32, threshold: f32| FlagWhy {
+        flag: "dark".into(),
+        measure: measure.into(),
+        value,
+        threshold,
+    };
+    if seg.lit_frac < t.min_lit {
+        Some(why("lit share", seg.lit_frac, t.min_lit))
+    } else if seg.lit < t.dark {
+        Some(why("lit", seg.lit, t.dark))
+    } else if seg.lit_p95 < t.highlights {
+        Some(why("lit p95", seg.lit_p95, t.highlights))
+    } else {
+        None
+    }
+}
+
 /// Scores every segment against the shoot.
-fn score(clips: &[ClipIndex]) -> (f32, Vec<Scored>) {
+pub(crate) fn score(clips: &[ClipIndex], t: &Thresholds) -> (f32, Vec<Scored>) {
     let lit: Vec<f32> = clips
         .iter()
         .flat_map(|c| c.segments.iter())
-        .filter(|s| s.p95 > 0.3)
+        .filter(|s| dark(s, t).is_none())
         .map(|s| s.sharp)
         .collect();
     let sharp_ref = median(&lit).max(0.05);
     let mut out = Vec::new();
     for clip in clips {
         for (k, seg) in clip.segments.iter().enumerate() {
-            let mut flags = Vec::new();
-            let dark = seg.p95 < 0.30 || seg.luma < 0.035;
+            let mut why: Vec<FlagWhy> = Vec::new();
+            let mut raise = |flag: &str, measure: &str, value: f32, threshold: f32| {
+                why.push(FlagWhy {
+                    flag: flag.into(),
+                    measure: measure.into(),
+                    value,
+                    threshold,
+                });
+            };
             let rel_sharp = seg.sharp / sharp_ref;
-            if dark {
-                flags.push("dark".to_owned());
+            if let Some(d) = dark(seg, t) {
+                raise(&d.flag, &d.measure, d.value, d.threshold);
             }
-            if rel_sharp < 0.6 {
-                flags.push("soft".to_owned());
+            if rel_sharp < t.soft {
+                raise("soft", "focus", rel_sharp, t.soft);
             }
             match seg.camera {
-                Camera::Shaky => flags.push("shaky".to_owned()),
-                Camera::Whip => flags.push("whip".to_owned()),
+                Camera::Shaky => raise("shaky", "jitter", seg.jitter, 0.22),
+                Camera::Whip => raise("whip", "camera", 1.0, 0.0),
                 Camera::Static
                 | Camera::Pan
                 | Camera::ZoomIn
                 | Camera::ZoomOut
                 | Camera::Unknown => {}
             }
-            if seg.clipped > 0.12 {
-                flags.push("blown".to_owned());
+            if seg.clipped > t.blown {
+                raise("blown", "clipped", seg.clipped, t.blown);
             }
-            if seg.moving < 0.0008 {
-                flags.push("no-action".to_owned());
+            if seg.moving < t.no_action {
+                raise("no-action", "moving", seg.moving, t.no_action);
             }
-            if seg.end - seg.start < 1.0 {
-                flags.push("short".to_owned());
+            if seg.end - seg.start < t.short {
+                raise("short", "length", seg.end - seg.start, t.short);
             }
+            let flags: Vec<String> = why.iter().map(|w| w.flag.clone()).collect();
             let subject = if seg.flame > 0.003 && seg.flame >= seg.led {
                 "fire"
             } else if seg.led > 0.003 {
@@ -193,14 +426,7 @@ fn score(clips: &[ClipIndex]) -> (f32, Vec<Scored>) {
             } else {
                 "none"
             };
-            // Exposure: best with highlights between 0.5 and 0.95.
-            let expo = if seg.p95 < 0.5 {
-                (seg.p95 / 0.5).powf(1.5)
-            } else if seg.clipped > 0.06 {
-                (1.0 - (seg.clipped - 0.06) * 4.0).max(0.2)
-            } else {
-                1.0
-            };
+            let expo = exposure_q(seg.lit, seg.lit_frac, seg.clipped);
             let focus = rel_sharp.clamp(0.0, 1.4) / 1.4;
             let steady = match seg.camera {
                 Camera::Static | Camera::ZoomIn | Camera::ZoomOut => 1.0,
@@ -218,6 +444,7 @@ fn score(clips: &[ClipIndex]) -> (f32, Vec<Scored>) {
                 subject: subject.to_owned(),
                 q,
                 flags,
+                why,
                 caption: None,
             });
         }
@@ -245,14 +472,17 @@ pub(crate) fn run(source: &Path, work: &Path, jobs: usize, force: bool) -> Resul
             .map(|p| clip_index(p, &cache, force))
             .collect::<Result<Vec<_>>>()
     })?;
-    let (sharp_ref, mut segments) = score(&clips);
+    let thresholds = Thresholds::for_work(work);
+    let (sharp_ref, mut segments) = score(&clips, &thresholds);
     if let Ok(old) = Index::load(work) {
         for seg in &mut segments {
-            if let Some(prev) = old
-                .segments
-                .iter()
-                .find(|o| o.id == seg.id && o.seg == seg.seg)
-            {
+            // Same segment: same id and time range (the measurements may
+            // have moved on with a new analysis version; the picture did not).
+            if let Some(prev) = old.segments.iter().find(|o| {
+                o.id == seg.id
+                    && (o.seg.start - seg.seg.start).abs() < 1e-3
+                    && (o.seg.end - seg.seg.end).abs() < 1e-3
+            }) {
                 seg.caption.clone_from(&prev.caption);
             }
         }
@@ -262,6 +492,8 @@ pub(crate) fn run(source: &Path, work: &Path, jobs: usize, force: bool) -> Resul
         sharp_ref,
         clips,
         segments,
+        thresholds,
+        work: Some(work.to_path_buf()),
     };
     index.save(work)?;
     Ok(index)
@@ -287,9 +519,23 @@ pub(crate) fn shotlog(index: &Index) -> String {
     );
     let _ = writeln!(
         s,
-        "Each line: `id` time · camera · exposure (mean/p95 luma) · focus (1.0 = this shoot's median) · \
-         fire / LED share of frame · moving light · action centre x ± drift · quality 0-1 · flags.\n\
+        "Each line: `id` time · camera · exposure (mean/p95 luma, then mean luma of the lit region and how much \
+         of the frame it covers) · focus (1.0 = this shoot's median) · fire / LED share of frame · moving light · \
+         biggest burst (fire/LED onset) @ best-moment time · action centre x ± drift · quality 0-1 · flags \
+         (measured value vs threshold).\n\
          Captions (from the vision model) follow on the next line when present.\n"
+    );
+    let t = &index.thresholds;
+    let _ = writeln!(
+        s,
+        "Thresholds: dark lit < {:.2}, lit p95 < {:.2} or lit share < {} · soft focus < {:.2} · \
+         blown clipped > {} · no-action moving < {}.\n",
+        t.dark,
+        t.highlights,
+        pct(t.min_lit),
+        t.soft,
+        pct(t.blown),
+        pct(t.no_action)
     );
     for clip in &index.clips {
         let p = &clip.probe;
@@ -315,22 +561,45 @@ pub(crate) fn shotlog(index: &Index) -> String {
             let flags = if seg.flags.is_empty() {
                 String::new()
             } else {
-                format!(" · **{}**", seg.flags.join(" "))
+                let reasons: Vec<String> = seg
+                    .why
+                    .iter()
+                    .filter(|w| w.flag != "short" && w.flag != "whip")
+                    .map(FlagWhy::text)
+                    .collect();
+                if reasons.is_empty() {
+                    format!(" · **{}**", seg.flags.join(" "))
+                } else {
+                    format!(" · **{}** ({})", seg.flags.join(" "), reasons.join(", "))
+                }
+            };
+            let peak = if g.moments.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " · burst {} @{:.2} ({} moments)",
+                    pct(g.burst),
+                    g.peak_t,
+                    g.moments.len()
+                )
             };
             let _ = writeln!(
                 s,
-                "- `{}` {:.1}-{:.1} · {} · exp {:.2}/{:.2} · focus {:.2} · {} · fire {} · led {} · move {} · cx {:.2}±{:.2} · q {:.2}{}",
+                "- `{}` {:.1}-{:.1} · {} · exp {:.2}/{:.2} lit {:.2} over {} · focus {:.2} · {} · fire {} · led {} · move {}{} · cx {:.2}±{:.2} · q {:.2}{}",
                 seg.id,
                 g.start,
                 g.end,
                 cam,
                 g.luma,
                 g.p95,
+                g.lit,
+                pct(g.lit_frac),
                 g.sharp / index.sharp_ref,
                 seg.subject,
                 pct(g.flame),
                 pct(g.led),
                 pct(g.moving),
+                peak,
                 g.cx,
                 g.cx_spread / 2.0,
                 seg.q,
@@ -343,4 +612,145 @@ pub(crate) fn shotlog(index: &Index) -> String {
         s.push('\n');
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Thresholds, score};
+    use crate::analyze::ClipIndex;
+    use crate::analyze::segments::{Camera, Segment};
+    use crate::media::Probe;
+
+    #[test]
+    fn thresholds_are_read_key_by_key() -> anyhow::Result<()> {
+        let (t, warnings) = Thresholds::parse(
+            r#"
+footage = "x"
+[pages.thresholds]
+dark = 0.2
+soft = 0.5
+[thresholds]
+dark = 0.1
+blown = "lots"
+min_lit = 0
+"#,
+        );
+        assert!((t.dark - 0.1).abs() < 1e-6, "[thresholds] wins: {t:?}");
+        assert!(
+            (t.soft - 0.5).abs() < 1e-6,
+            "[pages.thresholds] is read: {t:?}"
+        );
+        assert!(t.min_lit.abs() < 1e-6, "an integer is a number: {t:?}");
+        assert!(
+            (t.blown - Thresholds::default().blown).abs() < 1e-6,
+            "a bad value keeps the default: {t:?}"
+        );
+        assert_eq!(
+            warnings.len(),
+            1,
+            "one warning for the bad value: {warnings:?}"
+        );
+        let (none, _) = Thresholds::parse("");
+        assert_eq!(none, Thresholds::default(), "no table, defaults");
+        Ok(())
+    }
+
+    /// A one-segment clip with the given lit-region numbers.
+    fn clip(id: &str, luma: f32, p95: f32, lit: f32, lit_frac: f32) -> ClipIndex {
+        let seg = Segment {
+            start: 0.0,
+            end: 4.0,
+            camera: Camera::Static,
+            after_cut: false,
+            luma,
+            p95,
+            clipped: 0.0,
+            sharp: 1.0,
+            flame: 0.02,
+            led: 0.0,
+            white: 0.0,
+            moving: 0.01,
+            cx: 0.5,
+            cx_spread: 0.1,
+            cy: 0.5,
+            zoom_factor: 1.0,
+            pan: 0.0,
+            jitter: 0.0,
+            lit,
+            lit_frac,
+            lit_p95: 0.9,
+            burst: 0.0,
+            peak_t: 2.0,
+            moments: Vec::new(),
+            sig: Default::default(),
+        };
+        ClipIndex {
+            id: id.into(),
+            path: String::new(),
+            stamp: (0, 0),
+            probe: Probe {
+                duration: 4.0,
+                width: 1920,
+                height: 1080,
+                fps: [24, 1],
+                vcodec: String::new(),
+                has_audio: false,
+            },
+            samples: Vec::new(),
+            segments: vec![seg],
+            hist: Vec::new(),
+            version: crate::analyze::ANALYSIS_VERSION,
+        }
+    }
+
+    #[test]
+    fn a_fire_spinner_on_black_is_not_dark() -> anyhow::Result<()> {
+        let clips = [
+            // Frame mean 0.02 and p95 0.05 (the old rule called it dark),
+            // but the 3 % that is lit is bright.
+            clip("spinner", 0.02, 0.05, 0.45, 0.03),
+            // Murky: lots of the frame just above the floor.
+            clip("murk", 0.09, 0.14, 0.11, 0.6),
+            // Black with a pinprick.
+            clip("black", 0.005, 0.01, 0.5, 0.0005),
+        ];
+        let (_, scored) = score(&clips, &Thresholds::default());
+        let flags = |id: &str| {
+            scored
+                .iter()
+                .find(|s| s.clip == id)
+                .map(|s| s.flags.clone())
+                .unwrap_or_default()
+        };
+        assert!(
+            !flags("spinner").contains(&"dark".to_owned()),
+            "spinner: {:?}",
+            flags("spinner")
+        );
+        assert!(flags("murk").contains(&"dark".to_owned()), "murk is dark");
+        assert!(flags("black").contains(&"dark".to_owned()), "black is dark");
+        let murk = scored
+            .iter()
+            .find(|s| s.clip == "murk")
+            .and_then(|s| s.why.iter().find(|w| w.flag == "dark"))
+            .ok_or_else(|| anyhow::anyhow!("no reason recorded"))?;
+        assert!(
+            murk.measure == "lit" && (murk.threshold - 0.18).abs() < 1e-6,
+            "the flag carries value and threshold: {murk:?}"
+        );
+        assert_eq!(murk.text(), "lit 0.11 < 0.18", "printable");
+        // A stricter night setting flags the spinner too.
+        let strict = Thresholds {
+            min_lit: 0.05,
+            ..Thresholds::default()
+        };
+        let (_, scored) = score(&clips, &strict);
+        assert!(
+            scored
+                .iter()
+                .any(|s| s.clip == "spinner" && s.flags.contains(&"dark".to_owned())),
+            "thresholds are honoured"
+        );
+        Ok(())
+    }
 }

@@ -14,6 +14,7 @@
 //! without watching it ends up in the returned [`ClipIndex`].
 
 pub(crate) mod features;
+pub(crate) mod moments;
 pub(crate) mod motion;
 pub(crate) mod segments;
 
@@ -31,6 +32,11 @@ const DECODE_W: usize = 480;
 
 /// How many samples back the moving-light comparison looks (0.5 s).
 const FLUX_LAG: usize = 3;
+
+/// Version of the per-sample measurements. A cached clip analysed by an
+/// older version is analysed again, since its samples lack fields the
+/// scoring now reads (lit region, mid-tones, bursts, signatures).
+pub(crate) const ANALYSIS_VERSION: u32 = 2;
 
 /// One analysis sample.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -69,6 +75,32 @@ pub(crate) struct Sample {
     pub(crate) motion_ok: bool,
     /// Colour change from the previous sample, 0..1.
     pub(crate) change: f32,
+    /// Mean luma of the lit region (pixels above
+    /// [`features::LIT_FLOOR`]): the night exposure measure.
+    #[serde(default)]
+    pub(crate) lit: f32,
+    /// Fraction of the frame that is lit.
+    #[serde(default)]
+    pub(crate) lit_frac: f32,
+    /// 95th-percentile luma of the lit region.
+    #[serde(default)]
+    pub(crate) lit_p95: f32,
+    /// Mean red of the mid-tones (not black, not highlight, not emitter).
+    #[serde(default)]
+    pub(crate) mid_r: f32,
+    /// Mean green of the mid-tones.
+    #[serde(default)]
+    pub(crate) mid_g: f32,
+    /// Mean blue of the mid-tones.
+    #[serde(default)]
+    pub(crate) mid_b: f32,
+    /// Fraction of the frame in the mid-tones.
+    #[serde(default)]
+    pub(crate) mid_frac: f32,
+    /// Onset of fire / LED area and moving light over the last ~0.3 s,
+    /// as a fraction of the frame (see [`moments`]).
+    #[serde(default)]
+    pub(crate) burst: f32,
 }
 
 /// Everything known about one clip.
@@ -88,6 +120,10 @@ pub(crate) struct ClipIndex {
     pub(crate) segments: Vec<segments::Segment>,
     /// Coarse colour signature of the whole clip.
     pub(crate) hist: Vec<f32>,
+    /// [`ANALYSIS_VERSION`] the samples were measured with (0: before
+    /// versioning).
+    #[serde(default)]
+    pub(crate) version: u32,
 }
 
 /// Shifts a binary mask by whole pixels, dilating by one so small jitter
@@ -144,6 +180,9 @@ pub(crate) fn analyze_clip(path: &Path, stamp: (u64, u64)) -> Result<ClipIndex> 
     let mut history: Vec<(Vec<u8>, f32, f32)> = Vec::new(); // (emitters, tx, ty) per sample
     let mut prev: Option<features::FrameFeatures> = None;
     let mut clip_hist = [0.0_f32; 32];
+    // Per-sample colour histogram and emitter grid, for segment signatures.
+    let mut hists: Vec<[f32; 32]> = Vec::new();
+    let mut grids: Vec<[f32; 16]> = Vec::new();
     let mut i = 0_usize;
     while let Some(frame) = reader.next_frame()? {
         let f = features::measure(&frame);
@@ -216,7 +255,17 @@ pub(crate) fn analyze_clip(path: &Path, stamp: (u64, u64)) -> Result<ClipIndex> 
             },
             motion_ok: m.reliable || prev.is_none(),
             change,
+            lit: f.lit,
+            lit_frac: f.lit_frac,
+            lit_p95: f.lit_p95,
+            mid_r: f.mid[0],
+            mid_g: f.mid[1],
+            mid_b: f.mid[2],
+            mid_frac: f.mid_frac,
+            burst: 0.0,
         });
+        hists.push(f.hist);
+        grids.push(f.grid);
         history.push((
             f.emitters.clone(),
             if m.reliable { m.tx } else { 0.0 },
@@ -230,7 +279,9 @@ pub(crate) fn analyze_clip(path: &Path, stamp: (u64, u64)) -> Result<ClipIndex> 
     }
     let n = samples.len().max(1) as f32;
     let hist = clip_hist.iter().map(|v| v / n).collect();
-    let segments = segments::segment(&samples);
+    moments::bursts(&mut samples);
+    let mut segments = segments::segment(&samples);
+    segments::sign(&mut segments, &samples, &hists, &grids);
     let id = path
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
@@ -243,6 +294,7 @@ pub(crate) fn analyze_clip(path: &Path, stamp: (u64, u64)) -> Result<ClipIndex> 
         samples,
         segments,
         hist,
+        version: ANALYSIS_VERSION,
     })
 }
 
