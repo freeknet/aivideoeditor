@@ -579,13 +579,14 @@ mod tests {
         app.pages.night.start.prompt = "Cut a 60 s recap".to_owned();
         app.pages.night.arriving = Some(work.clone());
         app.apply(&ctx, Action::OpenProject(work));
-        app.chat_open = false;
+        app.layout
+            .set_open(crate::gui::ui::layout::Region::Chat, false);
         run(&ctx, &mut app, 2);
         // The chat may already have taken the message into its composer
         // (egui can run a second pass in the same frame); `ChatInbox` is
         // the only thing here that opens the chat panel.
         assert!(
-            app.chat_open,
+            app.layout.is_open(crate::gui::ui::layout::Region::Chat),
             "the request went to the chat (inbox {:?})",
             app.chat_inbox
         );
