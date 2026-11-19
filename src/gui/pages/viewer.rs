@@ -28,7 +28,7 @@ use std::path::Path;
 use super::PageCtx;
 use crate::gui::app::Action;
 use crate::gui::player::{self, Framing, Player, Source, clock, transport};
-use crate::gui::ui::theme;
+use crate::gui::ui::{keymap, theme};
 use crate::refs::{Reference, Target};
 
 /// The output aspect the viewer frames for.
@@ -215,12 +215,12 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
     };
     transport::bar(ctx.player, ui, &style);
     if ctx.keys_free(ui) {
-        ctx.player.handle_keys(ui);
+        ctx.player.handle_keys(ui, ctx.keymap);
+        let preset = ctx.keymap;
         let (alt_r, info) = ui.input(|i| {
-            let m = i.modifiers;
             (
-                m.alt && !m.command && i.key_pressed(egui::Key::R),
-                m.command && m.shift && i.key_pressed(egui::Key::I),
+                keymap::pressed(i, "mention-range", preset),
+                keymap::pressed(i, "info-overlay", preset),
             )
         });
         if alt_r && let Some(reference) = reference_here(ctx.player) {

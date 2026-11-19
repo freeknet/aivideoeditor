@@ -443,7 +443,7 @@ fn clips(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
         );
         ctx.player.transport(ui);
         if ctx.keys_free(ui) {
-            ctx.player.handle_keys(ui);
+            ctx.player.handle_keys(ui, ctx.keymap);
         }
     }
 }

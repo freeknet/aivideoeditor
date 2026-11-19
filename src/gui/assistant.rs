@@ -818,7 +818,8 @@ fn settings(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
             ui.add_space(SPACE_XS);
             ui.label(RichText::new("Local model server").strong());
             ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut state.url_draft).desired_width(ui.available_width() - 60.0));
+                ui.add(egui::TextEdit::singleline(&mut state.url_draft).desired_width(ui.available_width() - 60.0))
+                    .accessible_name("Local model server");
                 if ui.button("Save").clicked() {
                     prefs.local_url = Some(state.url_draft.trim().to_owned());
                     state.error = prefs.save().err().map(|e| format!("{e:#}"));
@@ -1231,7 +1232,9 @@ fn composer(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                         state.error = prefs.save().err().map(|e| format!("{e:#}"));
                     }
                 }
-            });
+            })
+            .response
+            .accessible_name("Model");
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if let Some(turn) = &state.turn {
                 if widgets::button(ui, theme, "Stop", widgets::Emphasis::Secondary).clicked() {

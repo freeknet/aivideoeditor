@@ -30,7 +30,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use super::PageCtx;
 use crate::commands::Cmd;
-use crate::gui::ui::{modal, theme, widgets};
+use crate::gui::ui::{keymap, modal, theme, widgets};
 use crate::recipe::{self, Recipe};
 
 /// A plan's check, cached by file modification time.
@@ -568,8 +568,8 @@ fn render_bar(
     } else {
         format!("Render {n} selected")
     };
-    let shortcut =
-        ctx.keys_free(ui) && ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Enter));
+    let preset = ctx.keymap;
+    let shortcut = ctx.keys_free(ui) && ui.input(|i| keymap::pressed(i, "deliver-render", preset));
     let clicked = ui
         .add_enabled_ui(n > 0, |ui| {
             widgets::button(ui, theme, &label, widgets::Emphasis::Primary)

@@ -474,6 +474,7 @@ fn recipe_table(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
                             .desired_width(200.0)
                             .hint_text(recipe::DEFAULT_FILENAME),
                     )
+                    .accessible_name("File names")
                     .changed();
                 ui.label(
                     egui::RichText::new("{night} {id} {aspect} {version} {date}")
@@ -551,6 +552,7 @@ fn deliverable_row(
                 .desired_width(80.0)
                 .min_size(egui::vec2(80.0, 0.0)),
         )
+        .accessible_name(format!("Deliverable {} id", i + 1))
         .changed();
     egui::ComboBox::from_id_salt(("recipe-aspect", i))
         .width(64.0)
@@ -561,7 +563,9 @@ fn deliverable_row(
                     .selectable_value(&mut d.aspect, aspect, recipe::aspect_key(aspect))
                     .changed();
             }
-        });
+        })
+        .response
+        .accessible_name(format!("Deliverable {} shape", i + 1));
     changed |= ui
         .add(
             egui::DragValue::new(&mut d.seconds)
@@ -569,6 +573,7 @@ fn deliverable_row(
                 .speed(0.5)
                 .suffix(" s"),
         )
+        .accessible_name(format!("Deliverable {} length", i + 1))
         .changed();
     let shown = d
         .end_card
@@ -586,7 +591,9 @@ fn deliverable_row(
                     .selectable_value(&mut d.end_card, Some(key.clone()), key)
                     .changed();
             }
-        });
+        })
+        .response
+        .accessible_name(format!("Deliverable {} end card", i + 1));
     let mut template = d.filename.clone().unwrap_or_default();
     let response = ui.add(
         egui::TextEdit::singleline(&mut template)
@@ -594,6 +601,7 @@ fn deliverable_row(
             .min_size(egui::vec2(140.0, 0.0))
             .hint_text(egui::RichText::new("recipe default").color(theme::rgb(theme.text_faint))),
     );
+    let response = response.accessible_name(format!("Deliverable {} file name", i + 1));
     if response.changed() {
         d.filename = Some(template).filter(|t| !t.trim().is_empty());
         changed = true;
