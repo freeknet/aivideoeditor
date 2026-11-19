@@ -305,6 +305,8 @@ struct Shown<'a> {
     rev: u64,
     /// Whether the viewer is playing this plan.
     ours: bool,
+    /// The keyboard preset in force.
+    preset: crate::gui::ui::keymap::Preset,
 }
 
 impl Shown<'_> {
@@ -683,6 +685,7 @@ impl State {
 pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
     let keys_free = ctx.keys_free(ui);
     let hovered = ui.ui_contains_pointer();
+    let preset = ctx.keymap;
     let PageCtx {
         theme: palette,
         project,
@@ -767,6 +770,7 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
         editable: state.viewing.is_none() && !state.locked,
         cut,
         ours,
+        preset,
         rev: state.rev,
         name,
         plan: shown_plan,
@@ -1484,7 +1488,7 @@ fn keys(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &egui::Ui, hovere
         if ui.input(|i| i.key_pressed(Key::Z) && i.modifiers.shift && !i.modifiers.command) {
             state.view.fit = true;
         }
-        if ui.input(|i| i.key_pressed(Key::C) && i.modifiers.shift && !i.modifiers.command) {
+        if ui.input(|i| crate::gui::ui::keymap::pressed(i, "plan-compare", s.preset)) {
             match compare::default_choice(state, s.project) {
                 Some((label, plan)) => compare::open(state, label, plan),
                 None => state.status = "nothing to compare with yet".to_owned(),

@@ -277,6 +277,10 @@ pub(crate) fn analyze_clip(path: &Path, stamp: (u64, u64)) -> Result<ClipIndex> 
         prev = Some(f);
         i += 1;
     }
+    // A file ffmpeg cannot read (garbage, a header with no video, a
+    // truncation before the first frame) ends the stream at once: say so
+    // instead of indexing an empty clip.
+    anyhow::ensure!(!samples.is_empty(), "no frames decoded");
     let n = samples.len().max(1) as f32;
     let hist = clip_hist.iter().map(|v| v / n).collect();
     moments::bursts(&mut samples);

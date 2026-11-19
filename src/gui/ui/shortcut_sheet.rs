@@ -52,6 +52,7 @@ pub fn draw(app: &App, ctx: &egui::Context, actions: &mut Vec<Action>) {
                                 keymap::Scope::Timeline,
                                 keymap::Scope::Browser,
                                 keymap::Scope::Chat,
+                                keymap::Scope::Export,
                             ] {
                                 scope(right, app, scope_);
                                 right.add_space(SPACE_MD);

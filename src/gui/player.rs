@@ -43,6 +43,7 @@ use std::time::{Duration, Instant};
 use self::clock::Seg;
 use self::video::{Probes, VideoStream};
 use super::thumbs::{Thumbs, cover_uv};
+use super::ui::keymap::{self, Preset};
 
 /// What the viewer is showing.
 #[derive(Clone, Debug, PartialEq)]
@@ -945,32 +946,21 @@ impl Player {
         frame
     }
 
-    /// Handles the shared transport keys: Space play/pause, J/K/L shuttle
-    /// (repeat J or L to go faster), ←/→ one frame, Shift+←/→ one second,
-    /// I / O marks, Alt+X clear marks, `/` play the marked range, Ctrl+L
-    /// loop. Call only when the page may read keys (`PageCtx::keys_free`).
-    pub(crate) fn handle_keys(&mut self, ui: &egui::Ui) {
+    /// Handles the shared transport keys under `preset` (the viewer rows of
+    /// `keymap::COMMANDS`; ave: Space play/pause, J/K/L shuttle (repeat J or
+    /// L to go faster), ←/→ one frame, Shift+←/→ one second, I / O marks,
+    /// Alt+X clear marks, `/` play the marked range, Ctrl+L loop). Call only
+    /// when the page may read keys (`PageCtx::keys_free`).
+    pub(crate) fn handle_keys(&mut self, ui: &egui::Ui, preset: Preset) {
+        let keys = ui.input(|i| Keys::read(i, preset));
+        self.apply_keys(&keys);
+    }
+
+    /// Runs what [`Self::handle_keys`] read.
+    fn apply_keys(&mut self, keys: &Keys) {
         if matches!(self.source, Source::Empty) {
             return;
         }
-        let keys = ui.input(|i| {
-            let m = i.modifiers;
-            let plain = !m.command && !m.alt;
-            Keys {
-                space: plain && i.key_pressed(egui::Key::Space),
-                j: plain && !m.shift && i.key_pressed(egui::Key::J),
-                k: plain && !m.shift && i.key_pressed(egui::Key::K),
-                l: plain && !m.shift && i.key_pressed(egui::Key::L),
-                left: plain && i.key_pressed(egui::Key::ArrowLeft),
-                right: plain && i.key_pressed(egui::Key::ArrowRight),
-                shift: m.shift,
-                mark_in: plain && !m.shift && i.key_pressed(egui::Key::I),
-                mark_out: plain && !m.shift && i.key_pressed(egui::Key::O),
-                clear: m.alt && !m.command && i.key_pressed(egui::Key::X),
-                range: plain && i.key_pressed(egui::Key::Slash),
-                looping: m.command && !m.shift && i.key_pressed(egui::Key::L),
-            }
-        });
         if keys.space {
             self.set_rate(1.0);
             self.toggle();
@@ -987,14 +977,14 @@ impl Player {
                 self.play();
             }
         }
+        if keys.second_back || keys.second_forward {
+            let dir = if keys.second_back { -1.0 } else { 1.0 };
+            self.pause();
+            self.seek(self.pos + dir);
+        }
         if keys.left || keys.right {
             let dir = if keys.left { -1.0 } else { 1.0 };
-            if keys.shift {
-                self.pause();
-                self.seek(self.pos + dir);
-            } else {
-                self.step_frames(dir);
-            }
+            self.step_frames(dir);
         }
         if keys.mark_in {
             self.mark_in();
@@ -1021,6 +1011,7 @@ impl Player {
 }
 
 /// The keys [`Player::handle_keys`] reads, in one input pass.
+#[derive(Debug, Default, PartialEq, Eq)]
 struct Keys {
     space: bool,
     j: bool,
@@ -1028,12 +1019,35 @@ struct Keys {
     l: bool,
     left: bool,
     right: bool,
-    shift: bool,
+    second_back: bool,
+    second_forward: bool,
     mark_in: bool,
     mark_out: bool,
     clear: bool,
     range: bool,
     looping: bool,
+}
+
+impl Keys {
+    /// This frame's transport presses under `preset`, by command id.
+    fn read(input: &egui::InputState, preset: Preset) -> Self {
+        let on = |id| keymap::pressed(input, id, preset);
+        Self {
+            space: on("play"),
+            j: on("shuttle-back"),
+            k: on("shuttle-stop"),
+            l: on("shuttle-forward"),
+            left: on("frame-back"),
+            right: on("frame-forward"),
+            second_back: on("second-back"),
+            second_forward: on("second-forward"),
+            mark_in: on("mark-in"),
+            mark_out: on("mark-out"),
+            clear: on("clear-in-out"),
+            range: on("play-range"),
+            looping: on("loop"),
+        }
+    }
 }
 
 /// The segments a source plays.
@@ -1243,6 +1257,77 @@ mod tests {
         assert!((r.height() - 900.0).abs() < 1e-3, "full height");
         assert!((r.width() - 506.25).abs() < 1e-3, "narrow width");
         assert!((r.center().x - 800.0).abs() < 1e-3, "centred");
+        Ok(())
+    }
+
+    /// One frame's input holding a single key press.
+    fn press(key: egui::Key, modifiers: egui::Modifiers) -> egui::InputState {
+        let mut input = egui::InputState::default();
+        input.events = vec![egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }];
+        input
+    }
+
+    #[test]
+    fn the_preset_decides_which_key_clears_the_marks() -> anyhow::Result<()> {
+        use super::{Keys, Preset};
+        let alt_x = press(egui::Key::X, egui::Modifiers::ALT);
+        let ctrl_shift_x = press(
+            egui::Key::X,
+            egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+        );
+        assert!(
+            Keys::read(&alt_x, Preset::Ave).clear,
+            "ave clears with Alt+X"
+        );
+        assert!(
+            !Keys::read(&ctrl_shift_x, Preset::Ave).clear,
+            "Ctrl+Shift+X is not ave's"
+        );
+        assert!(
+            Keys::read(&ctrl_shift_x, Preset::Premiere).clear,
+            "Premiere clears with Ctrl+Shift+X"
+        );
+        assert!(
+            !Keys::read(&alt_x, Preset::Premiere).clear,
+            "Alt+X does nothing under Premiere"
+        );
+
+        let mut p = Player::default();
+        p.open_clip(std::path::Path::new("a.mov"), 0.0, 10.0, 0.5);
+        p.apply_keys(&Keys::read(
+            &press(egui::Key::I, egui::Modifiers::NONE),
+            Preset::Premiere,
+        ));
+        assert!(p.marks().0.is_some(), "I marks in under every preset");
+        p.apply_keys(&Keys::read(&alt_x, Preset::Premiere));
+        assert!(p.marks().0.is_some(), "Alt+X left the mark under Premiere");
+        p.apply_keys(&Keys::read(&ctrl_shift_x, Preset::Premiere));
+        assert_eq!(p.marks(), (None, None), "Ctrl+Shift+X cleared it");
+        Ok(())
+    }
+
+    #[test]
+    fn shift_arrows_jump_a_second_and_plain_arrows_a_frame() -> anyhow::Result<()> {
+        use super::{Keys, Preset};
+        let shifted = Keys::read(
+            &press(egui::Key::ArrowRight, egui::Modifiers::SHIFT),
+            Preset::Ave,
+        );
+        assert!(
+            shifted.second_forward && !shifted.right,
+            "Shift+Right is a second, not a frame"
+        );
+        let plain = Keys::read(
+            &press(egui::Key::ArrowRight, egui::Modifiers::NONE),
+            Preset::Ave,
+        );
+        assert!(plain.right && !plain.second_forward, "Right is a frame");
         Ok(())
     }
 }

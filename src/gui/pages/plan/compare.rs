@@ -782,6 +782,13 @@ pub(super) fn view(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut U
             }
             let id = egui::Id::unique("plan_compare_shot").with((side_text, k));
             let resp = ui.interact(block.intersect(lane_rect), id, Sense::click());
+            let name = format!(
+                "{side_text} shot {} {}{}",
+                k + 1,
+                shot.clip,
+                mark.map_or(String::new(), |m| format!(" ({})", m.label()))
+            );
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
             if resp.clicked() {
                 clicked_shot = Some((lane.side, k));
             }
@@ -938,7 +945,8 @@ pub(super) fn view(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut U
 pub(super) fn keys(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &Ui) {
     use egui::Key;
     let plain = |key: Key| ui.input(|i| i.key_pressed(key) && i.modifiers.is_none());
-    let shift_c = ui.input(|i| i.key_pressed(Key::C) && i.modifiers.shift && !i.modifiers.command);
+    let fired = |id: &str| ui.input(|i| crate::gui::ui::keymap::pressed(i, id, s.preset));
+    let shift_c = fired("plan-compare");
     if plain(Key::Escape) || shift_c {
         state.compare = None;
         return;
@@ -951,7 +959,7 @@ pub(super) fn keys(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &Ui) {
         Side::A => (Side::A, s.cut.clone()),
         Side::B => (Side::B, b_cut.clone()),
     };
-    if plain(Key::B) {
+    if fired("plan-compare-side") {
         let origin_a = s.map.beat_time(s.plan.start_bar, 0);
         let origin_b = s.map.beat_time(c.plan.start_bar, 0);
         let t0 = origin_a.min(origin_b);

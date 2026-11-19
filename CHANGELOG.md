@@ -19,6 +19,11 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   plan or a saved version on one beat grid, highlights the shots that differ, lists
   them as added / removed / replaced / moved / changed with both shots' notes, plays
   A or B in the viewer (`B`), and "Adopt B" saves B as a new version of the open plan.
+- People, Music, Viewer (transport and player) and Export read their keys from the
+  command table under the chosen preset (ave / Premiere Pro / Final Cut Pro), and the
+  shortcut sheet lists them: Premiere clears marks with Ctrl+Shift+X, plays In to Out
+  with Ctrl+Shift+Space and merges people with Ctrl+G (its Ctrl+M is Export); Premiere
+  and Final Cut mark a music drop with M; Final Cut zooms the waveform with Cmd+= / Cmd+-.
 - Chat panel runs on Claude Code (the default when `claude` is on PATH): one headless
   `claude -p` stream-json session per conversation with `ave mcp` as its only tool
   server (no shell, no file edits, no user settings or MCP servers), resumed across
@@ -153,6 +158,14 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- `ave index` no longer stops the night at one unreadable clip: a clip that fails
+  (ffmpeg error, no frames, garbage file) is skipped with a warning, recorded in
+  `index.json` (`skipped`, with the reason) and listed at the top of `shotlog.md`;
+  the command prints `N clips, M segments, K skipped` and fails only when every clip
+  does. The processing page shows the skip count on a finished index step.
+- Every input has an accessible name (the recipe editor's deliverable rows, the chat's
+  model picker and local-server field, People's dialogs, Music's tempo and range
+  fields), and the screenshot example fails on any unnamed widget again.
 - Drafted crops are rounded inward so a two-decimal `cx` never leaves the frame,
   and windows never run past the end of the file.
 - GUI timeline: plans on the beat grid (ruler in seconds and bars, V1 shots with

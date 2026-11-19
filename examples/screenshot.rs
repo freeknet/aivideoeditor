@@ -67,9 +67,9 @@ fn main() -> anyhow::Result<()> {
     for (name, actions) in shots {
         let mut harness = egui_kittest::Harness::builder()
             .with_size(egui::vec2(width, height))
-            // The recipe editor's inputs still lack accessible names; the
-            // screenshot is for looking, the a11y pass is tracked separately.
-            .with_accessibility_check(false)
+            // Every input must be reachable by name; `run_steps` does not
+            // run the check, so it is also called before each render below.
+            .with_accessibility_check(true)
             .build_ui_state(
                 |ui, app: &mut Option<App>| {
                     let app = app.get_or_insert_with(|| {
@@ -98,6 +98,14 @@ fn main() -> anyhow::Result<()> {
         }
         if name == COMPARE {
             open_compare(&mut harness)?;
+        }
+        let unnamed = harness.unnamed_widgets();
+        if !unnamed.is_empty() {
+            anyhow::bail!(
+                "{name}: {} widget(s) lack an accessible name:\n{}",
+                unnamed.len(),
+                unnamed.join("\n")
+            );
         }
         let image = harness
             .render()
