@@ -118,16 +118,3 @@ pub(crate) fn no_project(ctx: &mut PageCtx<'_>, ui: &mut egui::Ui) {
         ctx.actions.push(Action::PickProject);
     }
 }
-
-/// A page that has not been built yet.
-pub(crate) fn placeholder(ctx: &mut PageCtx<'_>, ui: &mut egui::Ui, title: &str, what: &str) {
-    egui::Frame::new()
-        .inner_margin(theme::margin(theme::SPACE_XL))
-        .show(ui, |ui| {
-            if ctx.project.is_none() {
-                no_project(ctx, ui);
-                return;
-            }
-            heading(ctx, ui, title, what);
-        });
-}
