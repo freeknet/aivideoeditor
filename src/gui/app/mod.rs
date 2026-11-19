@@ -345,6 +345,7 @@ impl App {
                 if !self.refs.contains(&reference) {
                     self.refs.push(reference);
                 }
+                self.chat_open = true;
             }
             Action::ClearRefs => self.refs.clear(),
             Action::ReloadProject => {
