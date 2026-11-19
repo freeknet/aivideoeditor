@@ -29,7 +29,7 @@
 //! as one batch ([`comments`]). While the assistant commits an edit it
 //! holds `plans/.lock-<name>` and the timeline goes read-only. A
 //! storyboard lane ([`storyboard`]) shows the plan as cards with their
-//! notes, grouped by song section. "Compare" in the tab strip
+//! notes, grouped by song section. "Compare plans" in the tab strip
 //! ([`compare`]) stacks the plan over another plan or a saved version on
 //! one beat grid and lists what differs, shot by shot.
 //!
@@ -1700,7 +1700,7 @@ mod tests {
         use egui_kittest::kittest::Queryable;
         let (_dir, work) = night()?;
         let mut h = harness(work.clone());
-        h.query_by_label("Compare")
+        h.query_by_label("Compare plans")
             .ok_or_else(|| anyhow::anyhow!("no Compare menu in the tab strip"))?
             .click();
         h.run_steps(3);

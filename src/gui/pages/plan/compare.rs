@@ -11,7 +11,7 @@
 //! The compare view (Frame.io's "Compare Versions", for plans).
 //!
 //! **A** is the open plan as the timeline shows it; **B** is another plan
-//! file or a saved version of this one, picked from the "Compare" menu in
+//! file or a saved version of this one, picked from the "Compare plans" menu in
 //! the tab strip (`Shift+C` takes the previous version, or the next plan
 //! when there is no history). The view is read-only.
 //!
@@ -369,7 +369,7 @@ pub(super) fn menu(state: &mut State, project: &Project, ui: &mut Ui) {
     };
     let mut pick: Option<(String, anyhow::Result<Plan>)> = None;
     let mut close = false;
-    ui.menu_button("Compare", |ui| {
+    ui.menu_button("Compare plans", |ui| {
         ui.set_min_width(260.0);
         if state.compare.is_some() && ui.button("Close compare").clicked() {
             close = true;
