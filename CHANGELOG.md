@@ -27,3 +27,13 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   index under configurable rules, and a checker for hand-edited plans.
 - `ave render` / `ave otio`: one-graph ffmpeg render with a 720p preview, and
   OpenTimelineIO export.
+- GUI People tab: performer cards (frames cropped on the action, clip/segment counts,
+  props) plus Unassigned; inline rename, merge (Ctrl+M), split (Ctrl+Shift+M), drag or
+  "Move to ▸" segments between people (partial clips become `clip@from-to` ranges),
+  "Assign range…", a Y/N/S confirm queue ranked by caption likeness, undo/redo, and
+  "Reference in chat ▸" / "Avoid this person in plans". Every edit saves `people.toml`
+  atomically with its descriptive comments regenerated.
+- GUI inspector: everything about the selection: shot-log numbers, each flag with the
+  threshold that set it, the full caption, who, which plan shots use it, the clip's
+  segment strip; plan shot fields and beat position; bar energy and drops; a person's
+  frames, entries and shots; a compact list for several items.
