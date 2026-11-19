@@ -36,7 +36,7 @@ use crate::plan::{Aspect, Plan, Rules, Shot};
 
 /// What a slot wants to show.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Want {
+pub(crate) enum Want {
     /// The first shot: a performer, calm but striking.
     Hook,
     /// The breakdown: calm, non-fire if possible.
@@ -51,6 +51,32 @@ enum Want {
     Other,
     /// The finale.
     Finale,
+}
+
+impl Want {
+    /// Every slot kind.
+    pub(crate) const ALL: [Self; 7] = [
+        Self::Hook,
+        Self::Calm,
+        Self::Build,
+        Self::Hero,
+        Self::Fire,
+        Self::Other,
+        Self::Finale,
+    ];
+
+    /// The lowercase word a draft note starts with (`hero · fire close …`).
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Hook => "hook",
+            Self::Calm => "calm",
+            Self::Build => "build",
+            Self::Hero => "hero",
+            Self::Fire => "fire",
+            Self::Other => "other",
+            Self::Finale => "finale",
+        }
+    }
 }
 
 /// One slot of the grid.
@@ -135,15 +161,23 @@ fn steady(c: Camera) -> f32 {
 
 /// A placeable window.
 #[derive(Clone, Debug)]
-struct Candidate {
-    clip: String,
-    seg_id: String,
-    t_in: f32,
-    cx: f32,
-    score: f32,
-    kind: &'static str,
-    framing: String,
-    flame: f32,
+pub(crate) struct Candidate {
+    /// Source clip id.
+    pub(crate) clip: String,
+    /// The segment the window starts in.
+    pub(crate) seg_id: String,
+    /// In-point, seconds.
+    pub(crate) t_in: f32,
+    /// Crop centre for the aspect.
+    pub(crate) cx: f32,
+    /// Quality × steadiness × caption moment (slot-independent).
+    pub(crate) score: f32,
+    /// What it shows: fire, led, silks, dj, venue, other.
+    pub(crate) kind: &'static str,
+    /// Caption framing (wide, medium, close), may be empty.
+    pub(crate) framing: String,
+    /// Mean flame share over the window.
+    pub(crate) flame: f32,
 }
 
 /// The grid of slots for a short edit.
@@ -209,7 +243,7 @@ fn grid(map: &MusicMap, lead: usize, after: usize, drop_bar: usize) -> Vec<Slot>
 }
 
 /// How well a candidate suits a slot (multiplier, 0 = not at all).
-fn fit(want: Want, c: &Candidate) -> f32 {
+pub(crate) fn fit(want: Want, c: &Candidate) -> f32 {
     let fire = c.kind == "fire";
     match want {
         Want::Hook => match c.kind {
@@ -266,7 +300,7 @@ fn fit(want: Want, c: &Candidate) -> f32 {
 
 /// All windows of `dur` seconds that avoid rejected segments, one per
 /// start segment, scored.
-fn candidates(index: &Index, rules: &Rules, aspect: Aspect, dur: f32) -> Vec<Candidate> {
+pub(crate) fn candidates(index: &Index, rules: &Rules, aspect: Aspect, dur: f32) -> Vec<Candidate> {
     let crop = aspect.crop_frac();
     let mut out = Vec::new();
     for clip in &index.clips {
@@ -388,7 +422,7 @@ fn candidates(index: &Index, rules: &Rules, aspect: Aspect, dur: f32) -> Vec<Can
 }
 
 /// Whether `c` may go in slot `k` given what is placed already.
-fn allowed(
+pub(crate) fn allowed(
     c: &Candidate,
     k: usize,
     placed: &[Option<Shot>],
