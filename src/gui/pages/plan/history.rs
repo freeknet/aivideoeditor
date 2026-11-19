@@ -202,6 +202,7 @@ mod tests {
                 note: "hero".into(),
             }],
             finish: Default::default(),
+            comments: Vec::new(),
         }
     }
 

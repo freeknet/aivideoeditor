@@ -325,6 +325,43 @@ pub(crate) struct Plan {
     /// The cuts, in order.
     #[serde(rename = "shot")]
     pub(crate) shots: Vec<Shot>,
+    /// Review comments pinned to moments of the cut (`[[comment]]`).
+    #[serde(default, rename = "comment", skip_serializing_if = "Vec::is_empty")]
+    pub(crate) comments: Vec<Comment>,
+}
+
+/// A review comment: a note pinned to a moment of the cut, the way an
+/// editor leaves a feedback marker. It belongs to the plan, not to a shot,
+/// so it stays at its time when the shots under it change.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct Comment {
+    /// Seconds from the plan's start bar.
+    pub(crate) time: f32,
+    /// What to change, in the reviewer's words.
+    #[serde(default)]
+    pub(crate) note: String,
+    /// Marker colour: `green` (default), `blue`, `yellow` or `red`.
+    #[serde(default = "green")]
+    pub(crate) color: String,
+    /// Who left it: `you` or `assistant`.
+    #[serde(default = "you")]
+    pub(crate) author: String,
+    /// Dealt with: kept for the record, not sent to chat.
+    #[serde(default)]
+    pub(crate) resolved: bool,
+}
+
+/// The colours a comment marker may take, default first.
+pub(crate) const COMMENT_COLORS: [&str; 4] = ["green", "blue", "yellow", "red"];
+
+/// Serde default for a comment's colour.
+fn green() -> String {
+    COMMENT_COLORS[0].to_owned()
+}
+
+/// Serde default for a comment's author.
+fn you() -> String {
+    "you".to_owned()
 }
 
 impl Plan {
@@ -769,6 +806,7 @@ beats = 4
             rules: Rules::default(),
             finish: super::Finish::default(),
             shots: vec![shot("A", 10.0), shot("B", 10.0), shot("A", 60.0)],
+            comments: Vec::new(),
         };
         let people = crate::people::People::default();
         let problems = super::check(&plan, &tiny_index(), &tiny_map(), &people);
@@ -824,6 +862,7 @@ beats = 4
             rules: Rules::default(),
             finish: super::Finish::default(),
             shots: vec![shot("A"), shot("B")],
+            comments: Vec::new(),
         }
     }
 
