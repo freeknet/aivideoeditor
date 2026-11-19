@@ -1,56 +1,69 @@
 // ============================================================================
 // Module:       cli (integration test)
-// Description:  End-to-end checks of the command line, through the same
-//               entry point the binary calls.
+// Description:  End-to-end checks of the headless subcommands, through the
+//               same entry point the binary calls.
 //
-// Dependencies: aivideoeditor (the library), anyhow
+// Dependencies: aivideoeditor (the library), anyhow, clap, tempfile
 // ============================================================================
 
-//! End-to-end checks of the command line.
+//! End-to-end checks of the headless command line.
 //!
-//! These call [`aivideoeditor::run`] with an argument list and an in-memory
-//! buffer instead of spawning the compiled binary, so they need no shell,
-//! no path to an executable, and no scraping of a real terminal.
+//! These parse an argument list and call [`aivideoeditor::run_command`]
+//! with an in-memory buffer, so they need no window, no shell and no path
+//! to a compiled executable.
 
-use std::process::ExitCode;
+use aivideoeditor::cli::Cli;
+use clap::Parser as _;
 
-/// Exit code 0, named for the assertions below.
-const SUCCESS: ExitCode = ExitCode::SUCCESS;
+/// Parses `args` after the program name.
+fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
+    Cli::try_parse_from(std::iter::once("ave").chain(args.iter().copied()))
+}
 
-/// Runs the program with `args` and returns its exit code and stdout.
-fn run(args: &[&str]) -> anyhow::Result<(ExitCode, String)> {
+#[test]
+fn a_bare_run_opens_the_window_rather_than_a_command() -> anyhow::Result<()> {
+    let cli = parse(&[])?;
+    assert!(!cli.is_headless(), "no subcommand means the GUI");
+    Ok(())
+}
+
+#[test]
+fn show_without_an_index_explains_itself() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let work = dir.path().to_string_lossy().into_owned();
+    let cli = parse(&["show", "--work", &work])?;
     let mut out = Vec::new();
-    let code = aivideoeditor::run(args.iter().copied(), &mut out)?;
-    Ok((code, String::from_utf8(out)?))
-}
-
-#[test]
-fn the_default_action_greets() -> anyhow::Result<()> {
-    let (code, out) = run(&["aivideoeditor"])?;
-    assert_eq!(code, SUCCESS, "a bare run succeeds");
-    assert!(out.ends_with("!\n"), "one line: {out:?}");
+    let result = aivideoeditor::run_command(cli, &mut out);
+    let message = format!(
+        "{:#}",
+        result
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("expected an error"))?
+    );
+    assert!(
+        message.contains("ave index"),
+        "points at the fix: {message}"
+    );
     Ok(())
 }
 
 #[test]
-fn a_name_is_greeted() -> anyhow::Result<()> {
-    let (code, out) = run(&["aivideoeditor", "--name", "Ferris"])?;
-    assert_eq!(code, SUCCESS, "a valid flag succeeds");
-    assert!(out.contains("Ferris"), "--name is used: {out:?}");
-    Ok(())
-}
-
-#[test]
-fn an_unknown_flag_is_a_usage_error() -> anyhow::Result<()> {
-    let (code, out) = run(&["aivideoeditor", "--no-such-flag"])?;
-    assert_eq!(code, ExitCode::from(2), "usage errors exit 2");
-    assert!(out.is_empty(), "nothing ran: {out:?}");
+fn an_unknown_subcommand_is_a_usage_error() -> anyhow::Result<()> {
+    let error = parse(&["frobnicate"])
+        .err()
+        .ok_or_else(|| anyhow::anyhow!("expected an error"))?;
+    assert!(error.use_stderr(), "usage errors go to stderr");
     Ok(())
 }
 
 #[test]
 fn version_is_not_an_error() -> anyhow::Result<()> {
-    let (code, _) = run(&["aivideoeditor", "--version"])?;
-    assert_eq!(code, SUCCESS, "--version exits 0");
+    let error = parse(&["--version"])
+        .err()
+        .ok_or_else(|| anyhow::anyhow!("clap reports --version as an early exit"))?;
+    assert!(
+        !error.use_stderr(),
+        "--version prints to stdout and exits 0"
+    );
     Ok(())
 }

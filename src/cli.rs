@@ -1,74 +1,86 @@
 // ============================================================================
 // Module:       cli
-// Description:  The command line and what each command does.
+// Description:  The command line: window switches for the desktop app, and the
+//               pipeline subcommands that run headless instead.
 //
-// Dependencies: clap (derive) when selected; std::io for output
+// Dependencies: clap (derive); crate::commands
 // ============================================================================
 
-//! The command line, and the commands it dispatches to.
+//! The command line.
 //!
-//! Commands write to the `out` they are handed instead of reaching for
-//! standard output themselves. The binary passes the real stdout; tests
-//! pass a `Vec<u8>` and read back exactly what a user would have seen.
-//!
-//! Keep the surface small. Every flag added here is a flag that has to
-//! keep working, so each one should earn its place by being the only way
-//! to reach something.
+//! `ave` with no subcommand opens the window; the switches below only adjust
+//! it. `ave index …`, `ave plan …` and the other pipeline subcommands run in
+//! the terminal without a window, so the same binary serves batch scripts,
+//! agents and the GUI (see [`crate::commands`]).
 
-use std::io::Write;
-
-/// Who the default action greets when nobody is named.
-const DEFAULT_NAME: &str = "world";
-
-/// The word the default action greets with when no preference is saved.
-const DEFAULT_GREETING: &str = "Hello";
-
-/// The command line.
-///
-/// `about` comes from the `description` in `Cargo.toml`, so `--help` and
-/// the published crate metadata cannot drift apart.
-#[derive(clap::Parser, Debug)]
-#[command(name = "aivideoeditor", version, about)]
-pub(crate) struct Cli {
-    /// Who to greet. Overrides the saved preference for this run.
-    #[arg(long, value_name = "NAME")]
-    pub(crate) name: Option<String>,
+/// The parsed command line.
+#[derive(clap::Parser, Debug, Default, PartialEq)]
+#[command(name = "ave", version, about = crate::TAGLINE)]
+pub struct Cli {
+    /// Select this theme for the session (and save it as the preference).
+    #[arg(long, value_name = "ID")]
+    pub theme: Option<String>,
+    /// Set the UI in this installed font family, by name.
+    #[arg(long, value_name = "FAMILY")]
+    pub font: Option<String>,
+    /// Start from the built-in defaults and overwrite the saved preferences
+    /// on exit: the escape hatch for a config that made the app unusable.
+    #[arg(long)]
+    pub reset: bool,
+    /// Open this work folder (a night's `_ave` folder) on start.
+    #[arg(long, value_name = "DIR")]
+    pub open: Option<std::path::PathBuf>,
+    /// A pipeline step to run headless instead of opening the window.
+    #[command(subcommand)]
+    pub(crate) command: Option<crate::commands::Cmd>,
 }
 
-/// Parses `args`, or prints why it could not and yields the exit code.
-///
-/// Help and `--version` are "errors" to clap but successes to the user,
-/// so they exit 0; anything clap refused exits 2.
-pub(crate) fn parse<I, T>(args: I) -> Result<Cli, std::process::ExitCode>
-where
-    I: IntoIterator<Item = T>,
-    T: Into<std::ffi::OsString> + Clone,
-{
+impl Cli {
+    /// Whether a headless subcommand was given (no window should open).
+    #[must_use]
+    pub fn is_headless(&self) -> bool {
+        self.command.is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
     use clap::Parser as _;
-    Cli::try_parse_from(args).map_err(|error| {
-        // Printing is best effort: if the terminal is gone there is no one
-        // left to tell, and the exit code still carries the outcome.
-        let _ = error.print();
-        if error.use_stderr() {
-            std::process::ExitCode::from(2)
-        } else {
-            std::process::ExitCode::SUCCESS
-        }
-    })
-}
 
-/// Runs the command `options` selects.
-pub(crate) fn execute(options: Cli, out: &mut impl Write) -> anyhow::Result<()> {
-    greet(out, options.name.as_deref())
-}
+    /// Parses `args` after a program name.
+    fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
+        Cli::try_parse_from(std::iter::once("ave").chain(args.iter().copied()))
+    }
 
-/// The default action: a greeting, so a fresh scaffold visibly does
-/// something. Replace it with whatever the program is for.
-pub(crate) fn greet(out: &mut impl Write, name: Option<&str>) -> anyhow::Result<()> {
-    let saved = crate::config::load();
-    let greeting = saved.greeting.as_deref().unwrap_or(DEFAULT_GREETING);
-    let name = name.or(saved.name.as_deref()).unwrap_or(DEFAULT_NAME);
-    log::debug!("greeting {name} with {greeting:?}");
-    writeln!(out, "{greeting}, {name}!")?;
-    Ok(())
+    #[test]
+    fn the_bare_invocation_parses_to_the_defaults() -> anyhow::Result<()> {
+        let cli = parse(&[]).map_err(|error| anyhow::anyhow!("{error}"))?;
+        assert_eq!(cli, Cli::default(), "double-clicked from Explorer");
+        assert!(!cli.is_headless(), "no subcommand opens the window");
+        Ok(())
+    }
+
+    #[test]
+    fn an_unknown_flag_is_rejected_rather_than_ignored() {
+        // A typo'd flag that is silently ignored appears not to work.
+        assert!(parse(&["--nope"]).is_err(), "unknown flags are errors");
+    }
+
+    #[test]
+    fn a_subcommand_runs_headless() -> anyhow::Result<()> {
+        let cli = parse(&["show", "--work", "x"]).map_err(|error| anyhow::anyhow!("{error}"))?;
+        assert!(cli.is_headless(), "a pipeline step needs no window");
+        Ok(())
+    }
+
+    #[test]
+    fn window_switches_are_taken() -> anyhow::Result<()> {
+        let cli = parse(&["--font", "Inter", "--theme", "nebula", "--reset"])
+            .map_err(|error| anyhow::anyhow!("{error}"))?;
+        assert_eq!(cli.font.as_deref(), Some("Inter"), "font");
+        assert_eq!(cli.theme.as_deref(), Some("nebula"), "theme");
+        assert!(cli.reset, "--reset is a flag");
+        Ok(())
+    }
 }

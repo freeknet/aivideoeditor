@@ -1,59 +1,74 @@
 // ============================================================================
 // Module:       config
-// Description:  Saved preferences: a forgiving TOML parse, and a write that
-//               can never leave a half-written file behind.
+// Description:  Persisted preferences, loaded once at startup and saved on a
+//               normal quit, parsed forgivingly field by field.
 //
-// Dependencies: serde, toml, dirs
+// Dependencies: serde + toml (the on-disk format), dirs (the location)
 // ============================================================================
 
-//! Saved preferences, in `<config dir>/aivideoeditor/config.toml`.
+//! The preferences that survive a restart.
 //!
-//! ## Every field is an `Option`
+//! All of it is convenience state: a missing, partial or unreadable file
+//! means "use the defaults", never a hard failure.
 //!
-//! A field the user never set stays `None` and is never written, so the
-//! file holds only choices someone actually made. Changing a default in a
-//! later release then reaches everyone who did not override it, instead of
-//! being pinned forever by a value the program wrote on their behalf.
+//! ## Parsed one field at a time
 //!
-//! ## The parse forgives per field
+//! [`parse`] pulls each field out of a `toml::Table` individually rather
+//! than deserializing the whole struct at once. Whole-struct
+//! deserialization fails on the first mistyped value, and the caller can
+//! only fall back to the defaults — so one bad field would silently throw
+//! away every other preference. Per field, a bad value costs that one
+//! preference and the next save writes a valid file again.
 //!
-//! This is deliberately not one `toml::from_str::<Config>`. That fails the
-//! whole file when one value has the wrong type, and the user loses every
-//! preference over a single typo. [`parse`] reads the file as a table and
-//! then each field on its own: a bad field costs only that field, and a
-//! file that is not TOML at all costs nothing but the defaults.
+//! ## Written atomically
 //!
-//! ## The write is atomic
-//!
-//! [`save_to`] writes a temporary file beside the target, flushes it to
-//! disk, and renames it over the original. A crash or a full disk midway
-//! leaves the previous file intact rather than a truncated one that parses
-//! to nothing.
+//! [`save`] writes a temporary file beside the target, flushes it, and
+//! renames it over the old one, so a crash mid-write leaves the previous
+//! config intact rather than a half-written one that parses to nothing.
 
-use std::path::{Path, PathBuf};
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
-/// The saved preferences. `None` means "use the built-in default".
-#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+/// Everything the app remembers between runs.
+///
+/// Every field is `Option`, and `None` means "the app decides". That lets a
+/// default change in a later release and reach users who never touched the
+/// setting, while respecting the choice of anyone who did.
+#[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq)]
 pub struct Config {
-    /// The word the greeting opens with, such as `Hello`.
+    /// A theme `id`. An id that no longer exists falls back to the default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub greeting: Option<String>,
-    /// Who to greet when no `--name` is given.
+    pub theme: Option<String>,
+    /// The UI typeface, by family name, looked up among installed fonts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
+    pub font: Option<String>,
+    /// Which page was open, by its stable name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<String>,
+    /// Whether the sidebar shows only icons.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sidebar_collapsed: Option<bool>,
+    /// Whether animations are switched off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reduce_motion: Option<bool>,
+    /// The window's inner size in logical points, as `[width, height]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_size: Option<[f32; 2]>,
+    /// The night that was open, reopened on start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_project: Option<String>,
+    /// Recently opened nights, newest first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recent_projects: Option<Vec<String>>,
 }
 
-/// Where the config file lives, or `None` on a system with no per-user
-/// config directory (a stripped-down container, for one).
+/// Where the config file lives: `<config dir>/aivideoeditor/config.toml`.
 #[must_use]
 pub fn config_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|dir| dir.join("aivideoeditor").join("config.toml"))
+    dirs::config_dir().map(|dir| dir.join(crate::APP_ID).join("config.toml"))
 }
 
-/// Loads the saved config, or the defaults if there is nothing readable.
-///
-/// A missing or unreadable file is the normal first-run case, not an
-/// error worth stopping for.
+/// Loads the config, or the defaults if there is nothing readable.
 #[must_use]
 pub fn load() -> Config {
     config_path()
@@ -62,14 +77,13 @@ pub fn load() -> Config {
         .unwrap_or_default()
 }
 
-/// Parses a config, forgiving per field. See the module docs for why.
+/// Parses a config, forgiving per field. See the module docs.
 #[must_use]
 pub fn parse(text: &str) -> Config {
     let Ok(table) = text.parse::<toml::Table>() else {
         return Config::default();
     };
-    /// Reads one field, yielding `None` for anything that does not
-    /// deserialize rather than failing the whole parse.
+    /// Reads one field, `None` for anything that does not deserialize.
     fn field<T: serde::de::DeserializeOwned>(table: &toml::Table, key: &str) -> Option<T> {
         table
             .get(key)
@@ -77,117 +91,114 @@ pub fn parse(text: &str) -> Config {
             .and_then(|value| value.try_into().ok())
     }
     Config {
-        greeting: field(&table, "greeting"),
-        name: field(&table, "name"),
+        theme: field(&table, "theme"),
+        font: field(&table, "font"),
+        page: field(&table, "page"),
+        sidebar_collapsed: field(&table, "sidebar_collapsed"),
+        reduce_motion: field(&table, "reduce_motion"),
+        window_size: field::<[f32; 2]>(&table, "window_size")
+            .filter(|[width, height]| width.is_finite() && height.is_finite()),
+        last_project: field(&table, "last_project"),
+        recent_projects: field(&table, "recent_projects"),
     }
 }
 
-/// Saves the config to [`config_path`].
+/// Writes the config to [`config_path`], atomically. See the module docs.
 ///
 /// # Errors
 ///
-/// Returns an error when there is no config directory or the write fails.
-/// Failures are returned rather than swallowed: "your preferences were not
-/// saved" is the caller's to surface.
+/// Returned rather than swallowed, so the caller can say the preferences
+/// were not saved: no config directory, or an I/O failure.
 pub fn save(config: &Config) -> std::io::Result<()> {
     let path = config_path()
-        .ok_or_else(|| std::io::Error::other("no configuration directory could be determined"))?;
-    save_to(config, &path)
+        .ok_or_else(|| std::io::Error::other("no configuration directory could be found"))?;
+    write(config, &path)
 }
 
-/// Writes the config to `path` atomically: a temporary file beside it,
-/// flushed, then renamed over the original.
-///
-/// # Errors
-///
-/// Returns an error when the directory cannot be created or the file
-/// cannot be written or renamed. The temporary file is removed on failure.
-pub fn save_to(config: &Config, path: &Path) -> std::io::Result<()> {
-    let Some(parent) = path.parent() else {
-        return Err(std::io::Error::other(format!(
-            "{} has no parent directory",
-            path.display()
-        )));
-    };
-    if !parent.as_os_str().is_empty() {
+/// Writes `config` to `path` through a temporary file and a rename.
+fn write(config: &Config, path: &std::path::Path) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-
     let text = toml::to_string_pretty(config).map_err(std::io::Error::other)?;
-    // The process id keeps two instances saving at once from writing the
-    // same temporary file.
     let temporary = path.with_extension(format!("toml.{}.tmp", std::process::id()));
-    let written =
-        write_durably(&temporary, text.as_bytes()).and_then(|()| std::fs::rename(&temporary, path));
-    if written.is_err() {
-        // Do not leave the temporary behind to be mistaken for a config
-        // later; the failure itself is already the error being reported.
-        let _ = std::fs::remove_file(&temporary);
+    {
+        use std::io::Write as _;
+        let mut file = std::fs::File::create(&temporary)?;
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
     }
-    written
-}
-
-/// Writes `bytes` to a new file at `path` and waits for them to reach the
-/// disk, so the rename that follows never publishes an empty file.
-fn write_durably(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write as _;
-    let mut file = std::fs::File::create(path)?;
-    file.write_all(bytes)?;
-    file.sync_all()
+    // `rename` replaces an existing file on every platform std supports.
+    std::fs::rename(&temporary, path).inspect_err(|_| {
+        // Do not leave the temporary behind to be mistaken for a config.
+        let _ = std::fs::remove_file(&temporary);
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::Config;
-    use super::{parse, save_to};
+    use super::*;
 
     #[test]
-    fn an_empty_or_broken_file_yields_the_defaults() -> anyhow::Result<()> {
-        assert_eq!(parse(""), Config::default(), "an empty file");
-        assert_eq!(
-            parse("}{ not toml <<<"),
-            Config::default(),
-            "a file that is not TOML at all is all defaults"
-        );
-        Ok(())
+    fn an_absent_or_garbled_config_yields_the_defaults() {
+        assert_eq!(parse(""), Config::default());
+        assert_eq!(parse("}{ not toml <<<"), Config::default());
     }
 
     #[test]
-    fn one_bad_field_costs_only_that_field() -> anyhow::Result<()> {
-        let config = parse("greeting = \"Howdy\"\nname = 42\n");
-        assert_eq!(
-            config.greeting.as_deref(),
-            Some("Howdy"),
-            "a valid field must survive a bad neighbour"
+    fn one_bad_field_costs_only_that_field() {
+        let config = parse(
+            r#"
+            theme = "nebula"
+            sidebar_collapsed = "yes please"
+            window_size = [1280.0, 800.0]
+            "#,
         );
-        assert_eq!(config.name, None, "a mistyped field is dropped");
-        Ok(())
+        assert_eq!(config.theme.as_deref(), Some("nebula"), "before survives");
+        assert_eq!(config.window_size, Some([1280.0, 800.0]), "after survives");
+        assert_eq!(config.sidebar_collapsed, None, "the bad field is dropped");
     }
 
     #[test]
-    fn saving_replaces_the_file_and_round_trips() -> anyhow::Result<()> {
-        let dir = tempfile::tempdir()?;
-        let path = dir.path().join("nested").join("config.toml");
-        save_to(&Config::default(), &path)?;
-        let config = Config {
-            greeting: Some("Howdy".to_owned()),
-            name: Some("Ferris".to_owned()),
+    fn a_config_round_trips() -> anyhow::Result<()> {
+        let original = Config {
+            theme: Some("midnight".to_string()),
+            font: Some("Inter".to_string()),
+            page: Some("review".to_string()),
+            sidebar_collapsed: Some(true),
+            reduce_motion: Some(false),
+            window_size: Some([1440.0, 900.0]),
+            last_project: Some("C:/nights/x/_ave".to_string()),
+            recent_projects: Some(vec!["C:/nights/x/_ave".to_string()]),
         };
-        save_to(&config, &path)?;
-        assert_eq!(
-            parse(&std::fs::read_to_string(&path)?),
-            config,
-            "what was saved must load back unchanged"
-        );
-        let leftovers = std::fs::read_dir(dir.path().join("nested"))?.count();
-        assert_eq!(leftovers, 1, "no temporary file may be left");
+        let text = toml::to_string_pretty(&original)?;
+        assert_eq!(parse(&text), original, "what was written must read back");
         Ok(())
     }
 
     #[test]
-    fn unset_fields_are_not_written() -> anyhow::Result<()> {
+    fn an_untouched_config_writes_nothing() -> anyhow::Result<()> {
         let text = toml::to_string_pretty(&Config::default())?;
-        assert!(text.trim().is_empty(), "defaults are not pinned: {text:?}");
+        assert!(text.trim().is_empty(), "got {text:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn a_save_replaces_the_previous_file_and_leaves_no_temporary() -> anyhow::Result<()> {
+        let dir = std::env::temp_dir().join(format!("aivideoeditor-config-{}", std::process::id()));
+        let path = dir.join("config.toml");
+        for theme in ["first", "second"] {
+            let config = Config {
+                theme: Some(theme.to_string()),
+                ..Config::default()
+            };
+            write(&config, &path)?;
+        }
+        let read = parse(&std::fs::read_to_string(&path)?);
+        let leftovers = std::fs::read_dir(&dir)?.count();
+        std::fs::remove_dir_all(&dir)?;
+        assert_eq!(read.theme.as_deref(), Some("second"), "the save replaced");
+        assert_eq!(leftovers, 1, "only the config itself is left behind");
         Ok(())
     }
 }

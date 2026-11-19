@@ -29,6 +29,21 @@ cargo deny check                                # licences, advisories, sources
 All of these are clean on `main` and enforced by CI
 (`.github/workflows/ci.yml`). A warning is a build failure there.
 
+## Editing video with `ave` (for agents)
+
+**Do not judge footage by looking at frames or contact sheets.** You can't
+watch video and you're bad at reading thumbnails; that's why this tool exists.
+Read `<work>/shotlog.md`, plan from it, and when a judgment is missing, add a
+signal to the index (a measurement in `analyze/`, a caption field in
+`caption.rs`) instead of opening images. Whether an edit is better than the
+human one is the human's call: render it and hand it over.
+
+The loop: `index` → `caption` → `beats` → `people` (review the draft
+as text, rename, add `clip@from-to` ranges) → `plan` → read the plan and the
+shot-log lines of the segments it used → edit the TOML → `check` → `render` →
+`otio`. Plans are the storyboard: every shot carries a `note` saying why it is
+there. Never render a plan that fails `check` without saying so.
+
 ## Commit only what you changed
 
 **This repository may be worked on by more than one agent at a time.**

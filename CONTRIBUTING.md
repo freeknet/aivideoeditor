@@ -58,6 +58,21 @@ cargo test --all-features
 CI runs all three on Windows and on Linux, plus `cargo deny check`. A
 warning is a build failure there.
 
+### What a Linux run proves
+
+The app ships for Windows, and the platform layer under `src/win/` only
+compiles there. Off Windows, type-check it without linking:
+
+```bash
+rustup target add x86_64-pc-windows-msvc
+cargo clippy --all-targets --all-features --target x86_64-pc-windows-msvc -- -D warnings
+```
+
+That catches a broken `extern` block or an egui API that moved. It cannot
+run a test, and it cannot show you the window: **anything visible still
+needs a Windows run, and a visible change wants a screenshot in the pull
+request.**
+
 ## Rules the codebase enforces
 
 These are enforced by lints and tests, so a violation fails the build
@@ -78,6 +93,11 @@ version:
   `src/header_check.rs` walks `src/`, `tests/` and `examples/` and fails the
   build for a file missing one, checking `Module:` against the path the file
   actually sits at.
+- **Every `unsafe` block is a safe leaf wrapper.** One named, private, safe
+  function per FFI call; the `unsafe` block contains the call and nothing
+  else; a `// SAFETY:` comment stating the reasoning; an owning `Drop` type
+  wherever there is a matching close/free/destroy. Required unsafe lives
+  only under `src/win/`, and `src/unsafe_check.rs` enforces it.
 - **One toolchain.** `rust-toolchain.toml` pins it, every workflow's
   `toolchain:` line names the same version, and `tests/toolchain_pin.rs`
   fails the build if they drift.
@@ -141,5 +161,6 @@ move by hand, together, in their own commit.
 Against `main`, with a title that summarises the change and a body that
 says what and why. The template asks what you ran and on what; please
 answer it honestly.
+UI changes want a screenshot.
 
 Small, focused PRs are easier to review and land faster than large ones.

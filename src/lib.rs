@@ -1,56 +1,116 @@
 // ============================================================================
 // Module:       aivideoeditor (library crate root)
-// Description:  The whole application behind one testable entry point:
-//               argument parsing, logging setup, and command dispatch.
+// Description:  Module graph: the portable core, the Win32 layer, and the
+//               desktop front end built on top of both.
 //
-// Dependencies: anyhow; clap, configuration, HTTP and SQLite when selected
+// Dependencies: anyhow; see the individual modules. ffmpeg and llama.cpp at
+//               run time.
 // ============================================================================
 
 //! AI Video Editor: Index footage, plan beat-synced edits, render and export timelines.
 //!
-//! Everything the program does lives in this library, and `src/main.rs`
-//! only hands it the process arguments and standard output. That split is
-//! what makes the binary testable: `tests/cli.rs` calls [`run`] with its
-//! own argument list and an in-memory buffer, so the commands are checked
-//! without spawning a process, finding a compiled executable, or scraping
-//! a terminal.
+//! The crate is in three layers, and the split is what keeps it testable.
 //!
-//! [`run`] reports through its return value rather than exiting. A usage
-//! error is exit code 2 (the convention `clap` and most Unix tools share),
-//! help and version requests are success, and an operational failure is an
-//! `Err` whose context chain the binary prints on the way out.
+//! The **portable core** is plain Rust with no window in it: [`color`] is
+//! the colour maths, [`theme`] the palette and its readability rules,
+//! [`motion`] the easing curves and durations,
+//! [`icon`] the icon geometry,
+//! [`brand`] the application mark,
+//! [`config`] the preferences file,
+//! and [`cli`] the command line. Its tests run on any machine, without a
+//! GPU or a display.
+//!
+//! [`gui`] is the desktop front end. It draws with egui and nothing else,
+//! so the runtime that owns the window (`gui::run`) can change without the
+//! app noticing.
+//!
+//! `win` is the only place that talks to Win32. Every call is wrapped in a
+//! safe leaf function, so nothing outside it contains `unsafe`.
+//!
+//! The **engine** turns footage into an edit and needs no window either:
+//! `media` talks to ffmpeg, `analyze` and `index` measure every clip into a
+//! shot log, `caption` adds vision-model captions, `beats` maps the music,
+//! `people` says who is in which clip, `plan` / `draft` build and check the
+//! storyboard, and `render` / `otio` turn it into a video or a timeline.
+//! [`cli`] runs any engine step headless.
+//!
+//! See `docs/ARCHITECTURE.md` for the module map.
 
-mod cli;
+mod analyze;
+mod beats;
+pub mod brand;
+mod caption;
+pub mod cli;
+pub mod color;
+pub mod command_palette;
+mod commands;
 pub mod config;
+mod draft;
+pub mod gui;
+pub mod icon;
+mod index;
+mod jobs;
 mod logging;
+mod media;
+pub mod motion;
+mod otio;
+mod people;
+mod plan;
+mod project;
+pub mod refs;
+mod render;
+pub mod theme;
 
-/// Runs one invocation of the program and returns its exit code.
+#[cfg(windows)]
+pub mod win;
+
+/// The product name, as it appears in the window title and the about page.
+pub const NAME: &str = "AI Video Editor";
+
+/// The one-line description, for `--help` and the about page.
+pub const TAGLINE: &str = "Index footage, plan beat-synced edits, render and export timelines.";
+
+/// The colour the project was scaffolded with: the seed for the built-in
+/// theme's accent and for the mark's colours.
 ///
-/// `args` includes the program name as its first item, exactly as
-/// [`std::env::args_os`] yields it. Normal output goes to `out`; usage
-/// errors, help, and logs go where the terminal expects them.
+/// Parsed at compile time. A malformed value falls back to cyan here and
+/// fails `the_accent_seed_parses`, rather than painting black.
+pub const ACCENT: color::Rgb = match color::Rgb::from_hex("#ff3fb4") {
+    Some(accent) => accent,
+    None => color::Rgb::new(0x00, 0xe5, 0xff),
+};
+
+/// The application id: config directory, single-instance mutex, tray host.
+pub const APP_ID: &str = "aivideoeditor";
+
+/// Runs the headless subcommand in `cli`, writing its report to `out`.
 ///
 /// # Errors
 ///
-/// Returns an error when a command fails (an unwritable `out`, or a
-/// failure in the command itself). Refused arguments are not an error:
-/// they print a usage message and return exit code 2.
-pub fn run<I, T, W>(args: I, out: &mut W) -> anyhow::Result<std::process::ExitCode>
-where
-    I: IntoIterator<Item = T>,
-    T: Into<std::ffi::OsString> + Clone,
-    W: std::io::Write,
-{
+/// When there is no subcommand, or the command fails.
+pub fn run_command<W: std::io::Write>(cli: Cli, out: &mut W) -> anyhow::Result<()> {
     logging::init();
-    let options = match cli::parse(args) {
-        Ok(options) => options,
-        Err(code) => return Ok(code),
+    let Some(command) = cli.command else {
+        anyhow::bail!("no subcommand given");
     };
-    cli::execute(options, out)?;
-    Ok(std::process::ExitCode::SUCCESS)
+    commands::execute(command, out)
 }
 
-// Test-only guard modules, when enabled, go last: rustfmt sorts adjacent
-// `mod` lines, and these must not interleave with the ones above.
+use cli::Cli;
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_accent_seed_parses() {
+        assert_eq!(
+            super::color::Rgb::from_hex("#ff3fb4"),
+            Some(super::ACCENT),
+            "the scaffolded accent must be a #rrggbb colour"
+        );
+    }
+}
+
 #[cfg(test)]
 mod header_check;
+#[cfg(test)]
+mod unsafe_check;

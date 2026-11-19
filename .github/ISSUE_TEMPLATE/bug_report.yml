@@ -19,7 +19,7 @@ body:
       placeholder: |
         - OS: (e.g. Windows 11 23H2, Ubuntu 24.04)
         - Install: release archive, or `cargo build --release`
-        - Version: aivideoeditor 0.1.0 (`aivideoeditor --version`), or the commit hash if you built from source
+        - Version: aivideoeditor 0.1.0 (`ave --version`), or the commit hash if you built from source
     validations:
       required: true
 
@@ -54,7 +54,7 @@ body:
     id: logs
     attributes:
       label: Relevant output
-      description: Error text, a backtrace, or log output.
+      description: Error text, or a screenshot of the window. A screenshot is usually the fastest way to convey a layout or theming problem.
       render: text
 
   - type: textarea

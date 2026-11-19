@@ -13,3 +13,17 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ### Added
 
 - Project scaffolded with create-rust-app.
+- `ave index`: per-clip analysis over ffmpeg (exposure, focus, fire / LED / white
+  emitters, motion-compensated moving light, camera pan and zoom by block matching,
+  colour cuts), segmentation by camera behaviour, shoot-relative scores and flags,
+  cached per clip; writes `index.json` and a text `shotlog.md`.
+- `ave caption`: schema-constrained captions from a local Qwen3-VL on llama.cpp
+  (starts the server when `AVE_LLAMA_DIR` / `AVE_VLM_MODEL` / `AVE_VLM_MMPROJ` are set),
+  saved every 24 segments.
+- `ave beats`: tempo, dynamic-programming beat tracking with the grid shifted onto
+  measured kick onsets, bars, and drop candidates.
+- `ave people`: drafts `people.toml` from caption descriptions and recording times.
+- `ave plan` / `ave check`: TOML storyboard plans on the beat grid, drafted from the
+  index under configurable rules, and a checker for hand-edited plans.
+- `ave render` / `ave otio`: one-graph ffmpeg render with a 720p preview, and
+  OpenTimelineIO export.

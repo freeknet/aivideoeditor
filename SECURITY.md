@@ -22,6 +22,9 @@ What *is* in scope:
 - **Untrusted input.** Files, arguments, environment variables and anything
   read from disk or the network are attacker-influenced; a crash, hang or
   unbounded allocation reachable from them is a real finding.
+- **Misuse of an `unsafe` block.** The platform surface is hand-wrapped in
+  `src/win/`; a handle leak, a missing bounds check, or a struct layout that
+  disagrees with what the system writes all belong here.
 - **The config file.** A config file that can make the app do something
   other than change its own settings.
 - **The release pipeline.** Release archives carry build-provenance and SBOM

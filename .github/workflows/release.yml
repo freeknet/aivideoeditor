@@ -131,8 +131,12 @@ jobs:
           staging="dist/${name}"
           mkdir -p "$staging"
 
-          cp "target/${TARGET}/release/aivideoeditor.exe" "$staging/"
+          cp "target/${TARGET}/release/ave.exe" "$staging/"
           cp README.md LICENSE* "$staging/"
+          # The theme catalog travels with the binary. It is compiled in,
+          # so the app runs without it, but it is also the worked example
+          # anyone writing a theme starts from.
+          cp assets/themes.toml "$staging/"
 
           cd dist
           7z a -tzip "${name}.zip" "$name" >/dev/null
