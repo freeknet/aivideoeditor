@@ -60,6 +60,10 @@ macro_rules! page_ctx {
 pub fn draw(app: &mut App, ui: &mut Ui, actions: &mut Vec<Action>, blocked: bool) {
     top_bar(app, ui, actions);
     super::chrome::status_bar(app, ui);
+    // Home's pipeline queue and Export's render queue advance every frame,
+    // whether or not their page is on screen.
+    crate::gui::pages::night::tick(&mut app.jobs, &mut app.pages.night);
+    crate::gui::pages::deliver::tick(&mut app.jobs, &mut app.pages.deliver, ui.ctx());
 
     if app.home || app.project.is_none() {
         egui::CentralPanel::default()
