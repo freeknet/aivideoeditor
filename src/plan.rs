@@ -506,7 +506,7 @@ beats = 4
                     low: 1.0,
                 })
                 .collect(),
-            drops: Vec::new(),
+            ..crate::beats::MusicMap::default()
         }
     }
 

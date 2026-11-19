@@ -518,7 +518,7 @@ mod tests {
                     low: 1.0,
                 })
                 .collect(),
-            drops: Vec::new(),
+            ..MusicMap::default()
         };
         let slots = grid(&map, 4, 12, 16);
         let beats: usize = slots.iter().map(|s| s.beats).sum();
