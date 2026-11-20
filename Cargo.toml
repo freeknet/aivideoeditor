@@ -24,12 +24,12 @@ image = { version = "0.25", default-features = false, features = ["jpeg"] }
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
 toml = "1.2"
-base64 = "0.22"
+base64 = "0.23"
 cpal = "0.18"
 crossbeam-channel = "0.5"
 env_logger = "0.11"
 rayon = "1"
-rfd = "0.15"
+rfd = "0.18"
 rustfft = "6"
 serde_json = "1"
 # native-tls: Schannel on Windows, so no C crypto build (ring) in the
