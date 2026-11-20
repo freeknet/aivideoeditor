@@ -6,7 +6,10 @@ How the desktop app is put together, and the rules that let several people
 Read with: `CLAUDE.md` (house rules, enforced by the build),
 `docs/research/01-problem-and-competitors.md` (what problem we solve),
 `docs/research/02-ui-and-workflow.md` §9 (the screen-by-screen spec),
-`docs/research/03-techniques.md` (engine upgrades).
+`docs/research/03-techniques.md` (engine upgrades),
+**`docs/DESIGN.md` (the design system: tokens, fonts, Lucide icons, which
+widget to use for what, and the rules every page follows — `panel_header`
+first, icons not glyphs, no hint lines, `empty_state`)**.
 
 ## The problem we are solving
 
@@ -101,8 +104,10 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui);
   for docked panes inside the page; manage your own `ScrollArea`.
 - No night open → call `super::no_project(ctx, ui)` and return.
 - Single-key shortcuts only when `ctx.keys_free(ui)` (no modal, no focused text field).
-- Colours from `ctx.theme` via `crate::gui::ui::theme::rgb`, spacing from `theme::SPACE_*`,
-  controls from `crate::gui::ui::widgets` (button, card, card_grid, switch, meter, title, muted).
+- Colours from `ctx.theme` via `crate::gui::ui::theme::rgb` and the ink helpers, spacing from
+  `theme::SPACE_*`, icons from `crate::gui::ui::icons`, controls from `crate::gui::ui::widgets`
+  (`panel_header`, `icon_btn`, `button_with`, `tab_strip`, `segmented`, `pill`, `kbd`,
+  `empty_state`, `text_field`, `menu_item`, …). See `docs/DESIGN.md`.
 - Persist page options in `project.settings.pages["<page>"]` (a `toml::Table`) and
   `project.save_settings()`; app-wide preferences go in `Config` (integration).
 

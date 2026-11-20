@@ -12,6 +12,18 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- A design system matched to Selects' dark workspace (`docs/DESIGN.md`): its exact
+  tokens (neutral surfaces, white-10 % hairlines, ink overlays, neutral selection,
+  lime key, 6/8/10/12/14 px radii, 4 px grid, 10/11/12/14 px type), the Mona Sans
+  (three weights), Roboto Mono, Inter and Lucide fonts bundled with their licences
+  (`assets/fonts/NOTICE`), named Lucide icons (`gui::ui::icons`), and components every
+  panel can use (`panel_header`, `icon_btn`, `button_with`, `tab_strip`, `segmented`,
+  `pill`, `kbd`, `empty_state`, `text_field`, `menu_item`, `glass_button`). Default egui
+  widgets follow it too. The shell uses it: a 52 px top bar with a centred search pill
+  and Lucide buttons, edge-to-edge panels with one hairline between them and a focus
+  outline on the panel last clicked, 40 px panel headers, a 44 px icon rail for the
+  folded chat and glass buttons over the viewer for a folded browser or inspector.
+
 - Timeline playback ends like the render: after the last shot the viewer holds the
   plan's end card for the render's span (`card_bar` to `end_bar`, `Plan::card_span`)
   over the music, and V1 draws it as a block there. Plan compare (A/B): "Compare" in

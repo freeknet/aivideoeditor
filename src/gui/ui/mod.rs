@@ -29,6 +29,7 @@
 pub mod chrome;
 pub mod command_palette;
 pub mod icon;
+pub mod icons;
 pub mod keymap;
 pub mod layout;
 pub mod modal;

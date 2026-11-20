@@ -208,7 +208,8 @@ impl Palette {
             if fill.prefers_light_text() {
                 Rgb::new(255, 255, 255)
             } else {
-                Rgb::new(16, 16, 20)
+                // Selects' `key-foreground`: neutral-900.
+                Rgb::new(23, 23, 23)
             }
         };
         // Towards *text* rather than `forward`: a black scrollbar handle on
@@ -234,9 +235,12 @@ impl Palette {
             accent,
             accent_hover: accent.lerp(forward, 0.18),
             accent_soft: accent.lerp(panel, 0.74),
-            // A tint, not the accent: a selected item still shows its muted
-            // text, which has to stay readable on top of the fill.
-            selection: accent.lerp(panel, 0.80),
+            // Selection is a translucent ink fill, not a colour (Selects'
+            // selected tab and toggle: ink at 12 %, `#333333` over the
+            // signature panel); the key colour is kept for mentions, focus
+            // outlines, the playhead and switches. A selected item still
+            // shows its muted text, which stays readable on the fill.
+            selection: panel.lerp(text, 0.12),
             selection_text: text,
             control,
             control_hover: control.lerp(text, 0.28),
@@ -348,19 +352,27 @@ fn signature_spec(accent: Rgb) -> ThemeSpec {
         id: "signature".to_string(),
         name: "Signature".to_string(),
         mode: Mode::Dark,
-        // Tailwind's neutral ramp, as Selects uses it: no colour cast in the
-        // chrome, so the footage carries the colour. `panel` is neutral-900,
-        // `app` neutral-950, and the border is white at 10 % over the panel.
+        // Selects' dark tokens (its Tailwind v4 theme), on the neutral ramp:
+        // no colour cast in the chrome, so the footage carries the colour.
+        //
+        // - `app` is the window behind the panels (Selects' `#0a0a0a`).
+        // - `panel` is `background` / `card`: neutral-900.
+        // - `raised` is `popover` / `muted` / `secondary`: neutral-800.
+        // - `hover` stands in for `accent` (neutral-700, `#404040`). At
+        //   exactly `#404040` muted text on it falls under 4.5:1, so the
+        //   surface is a step short; hover *fills* are ink overlays
+        //   (`gui::ui::theme::accent_fill`), which land on `#404040` over a
+        //   panel without being a surface muted text has to read on.
+        // - `border` is white at 10 % over the panel.
         app: "#0a0a0a".to_string(),
         panel: "#171717".to_string(),
-        raised: "#1f1f1f".to_string(),
-        hover: "#2a2a2a".to_string(),
+        raised: "#262626".to_string(),
+        hover: "#3a3a3a".to_string(),
         border: "#2e2e2e".to_string(),
         accent: accent.to_hex(),
         text: "#fafafa".to_string(),
-        // A shade above neutral-400 (#a3a3a3): at that exact grey, muted
-        // text on the lime-tinted selection falls just short of 4.5:1.
-        text_muted: "#a8a8a8".to_string(),
+        // neutral-400, Selects' `muted-foreground`.
+        text_muted: "#a3a3a3".to_string(),
         danger: "#ef4444".to_string(),
         warning: "#f59e0b".to_string(),
         success: "#22c55e".to_string(),

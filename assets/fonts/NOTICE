@@ -1,0 +1,36 @@
+Fonts bundled with ave
+======================
+
+Every file in this directory is compiled into the binary by
+src/gui/font.rs (include_bytes!). None is a crate, so cargo-deny does not
+see them; this file is the record of where each came from and under which
+licence, and each licence's full text ships beside the font it covers.
+
+Mona Sans (MonaSans-Regular.ttf, MonaSans-Medium.ttf, MonaSans-SemiBold.ttf)
+  Source:   https://github.com/github/mona-sans, release v2.0.27,
+            mona-sans-static-v2.0.27.zip, fonts/static/ttf/
+  Licence:  SIL Open Font License 1.1, MonaSans-OFL.txt
+  Use:      the UI face; Medium for headers, SemiBold for buttons.
+
+Roboto Mono (RobotoMono-Regular.ttf)
+  Source:   https://github.com/googlefonts/RobotoMono, commit
+            7bf0b33178844cc7d0c9915b746ece1be7f46bea, fonts/ttf/
+  Licence:  SIL Open Font License 1.1, RobotoMono-OFL.txt
+  Use:      monospace: timecode, tokens, code.
+
+Lucide (Lucide.ttf)
+  Source:   npm package lucide-static 1.60.0, font/lucide.ttf
+            (https://unpkg.com/lucide-static@1.60.0/font/lucide.ttf);
+            codepoints from font/codepoints.json of the same version.
+  Licence:  ISC, with the icons derived from Feather under MIT;
+            both texts in Lucide-LICENSE.txt.
+  Use:      every icon in the app (src/gui/ui/icons.rs).
+
+Inter (Inter-Regular.ttf)
+  Source:   https://github.com/rsms/inter, release v4.1
+  Licence:  SIL Open Font License 1.1, OFL.txt
+  Use:      fallback text face behind Mona Sans.
+
+The OFL allows bundling a font inside software provided the licence
+travels with it and the font is not sold on its own. ISC and MIT require
+only that the copyright and permission notices travel with it.

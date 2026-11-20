@@ -1,51 +1,89 @@
 // ============================================================================
 // Module:       gui::font
-// Description:  Installs the bundled UI face (Inter), or a typeface named in
-//               the config from the machine's own font directories.
+// Description:  Installs the bundled faces (Mona Sans for the UI in three
+//               weights, Roboto Mono for timecode, Lucide for icons, Inter
+//               underneath), or a typeface named in the config.
 //
 // Dependencies: egui (FontDefinitions); std::fs for the font directories;
-//               assets/fonts/Inter-Regular.ttf (SIL OFL 1.1)
+//               assets/fonts/*.ttf (SIL OFL 1.1 and ISC, see assets/fonts/NOTICE)
 // ============================================================================
 
-//! The UI typeface.
+//! The UI typefaces.
 //!
-//! The window draws in **Inter** (`assets/fonts/Inter-Regular.ttf`, from
-//! the project's own GitHub release, v4.1), compiled in with
-//! `include_bytes!`. It is under the SIL Open Font License 1.1, whose text
-//! ships beside it as `assets/fonts/OFL.txt`; the OFL allows bundling a
-//! font inside software as long as the licence travels with it and the font
-//! is not sold on its own. Inter is what Selects uses for its numbers and is
-//! drawn for small sizes on screens, which is where an editor's dense 12 px
-//! chrome lives.
+//! The window draws in the faces Selects draws in, compiled in with
+//! `include_bytes!` from `assets/fonts/` (licences beside them, listed in
+//! `assets/fonts/NOTICE`):
 //!
-//! A face *installed on the machine* can still be put in front of it, by
-//! name, through the config's `font` key: reading an installed font is what
-//! every other application on the machine does.
+//! | Face | Use | Licence |
+//! |---|---|---|
+//! | **Mona Sans** Regular, Medium, SemiBold (v2.0.27) | every label; Medium for headers, SemiBold for buttons | SIL OFL 1.1 |
+//! | **Roboto Mono** Regular | timecode, tokens, code ([`egui::FontFamily::Monospace`]) | SIL OFL 1.1 |
+//! | **Lucide** (`lucide-static` 1.60.0) | icons, by codepoint (`gui::ui::icons`) | ISC (some glyphs MIT, from Feather) |
+//! | **Inter** Regular (v4.1) | fallback for anything Mona Sans lacks | SIL OFL 1.1 |
 //!
-//! ## The bundled faces stay underneath
+//! The OFL allows bundling a font inside software as long as the licence
+//! travels with it and the font is not sold on its own; ISC and MIT ask
+//! only that the notice travels with it.
 //!
-//! The named face is *prepended* to the proportional family rather than
-//! replacing it. Many faces cover Latin and little else; replacing the
-//! family would silently drop Greek, Cyrillic and every glyph a user's own
-//! text might contain. Prepending means the named face is asked first and
-//! the bundled one answers for everything it lacks.
+//! ## Weights are families
 //!
-//! ## Failure is silence, on purpose
+//! egui has no font weights: a [`egui::FontId`] is a size and a family.
+//! So each weight is registered as its own named family, [`MEDIUM`] and
+//! [`SEMIBOLD`], each with the regular chain behind it as fallback. Ask for
+//! one through [`weight`], never by building `FontFamily::Name` yourself:
+//! egui panics on a family it does not know, and fonts installed by
+//! [`setup`] only arrive at the start of the *next* frame, so the first
+//! frame must fall back to the regular face. [`weight`] does.
 //!
-//! A family that is not installed, or is spelled the way a font menu spells
-//! it rather than the way the file is named, leaves the app in its bundled
-//! face. That is a normal outcome, not an error worth showing anybody.
+//! Lucide sits in every chain behind the text faces, so an icon codepoint
+//! in an ordinary label draws as the icon; [`ICONS`] is the family with
+//! Lucide first, for drawing an icon on its own.
+//!
+//! ## A face from the machine
+//!
+//! A face *installed on the machine* can still be put in front, by name,
+//! through the config's `font` key. It is *prepended* to the proportional
+//! family rather than replacing it: many faces cover Latin and little else,
+//! and the bundled faces answer for everything it lacks. A family that is
+//! not installed leaves the app in its bundled face; that is a normal
+//! outcome, not an error worth showing anybody.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-/// The name the loaded face is registered under.
+/// The name the configured face is registered under.
 const KEY: &str = "configured-ui-face";
 
-/// The bundled UI face: Inter Regular, SIL OFL 1.1 (see the module docs).
+/// Mona Sans Regular: the UI face (SIL OFL 1.1).
+const MONA: &[u8] = include_bytes!("../../assets/fonts/MonaSans-Regular.ttf");
+
+/// Mona Sans Medium: panel headers and titles (SIL OFL 1.1).
+const MONA_MEDIUM: &[u8] = include_bytes!("../../assets/fonts/MonaSans-Medium.ttf");
+
+/// Mona Sans SemiBold: buttons, as Selects sets them (SIL OFL 1.1).
+const MONA_SEMIBOLD: &[u8] = include_bytes!("../../assets/fonts/MonaSans-SemiBold.ttf");
+
+/// Roboto Mono Regular: timecode and tokens (SIL OFL 1.1).
+const ROBOTO_MONO: &[u8] = include_bytes!("../../assets/fonts/RobotoMono-Regular.ttf");
+
+/// The Lucide icon font, `lucide-static` 1.60.0 (ISC).
+const LUCIDE: &[u8] = include_bytes!("../../assets/fonts/Lucide.ttf");
+
+/// Inter Regular: the fallback text face (SIL OFL 1.1).
 const INTER: &[u8] = include_bytes!("../../assets/fonts/Inter-Regular.ttf");
 
-/// The name the bundled face is registered under.
-const INTER_KEY: &str = "inter";
+/// The family for panel headers and titles: Mona Sans Medium.
+pub const MEDIUM: &str = "mona-medium";
+
+/// The family for buttons: Mona Sans SemiBold.
+pub const SEMIBOLD: &str = "mona-semibold";
+
+/// The family with Lucide first, for drawing an icon on its own.
+pub const ICONS: &str = "lucide";
+
+/// The family for timecode and numbers: Inter first (Selects'
+/// `font-tabular`).
+pub const TABULAR: &str = "inter-tabular";
 
 /// Files tried, in order, for symbols the bundled faces lack (✕ ▶ ⏸ ✔ ★ …):
 /// Segoe UI Symbol on Windows, Noto / DejaVu on Linux, Apple Symbols on macOS.
@@ -59,36 +97,109 @@ const SYMBOL_FALLBACKS: [&str; 4] = [
 /// The name the symbol fallback is registered under.
 const SYMBOLS: &str = "symbol-fallback";
 
-/// Installs the fonts: Inter in front of egui's own faces, `family` (when
-/// given and found) in front of Inter, and a system symbol face behind
-/// them all, so a symbol in a label draws instead of showing an empty box.
+/// A font id in the named weight `family` ([`MEDIUM`], [`SEMIBOLD`] or
+/// [`ICONS`]) at `size`, or the regular proportional face while the
+/// bundled faces are not installed yet (the first frame; see the module
+/// docs). Never panics on an unknown family.
+#[must_use]
+pub fn weight(ctx: &egui::Context, family: &str, size: f32) -> egui::FontId {
+    let named = egui::FontFamily::Name(family.into());
+    let known = ctx.fonts(|fonts| fonts.definitions().families.contains_key(&named));
+    if known {
+        egui::FontId::new(size, named)
+    } else {
+        egui::FontId::proportional(size)
+    }
+}
+
+/// Installs the fonts: Mona Sans, Inter and Lucide in front of egui's own
+/// faces; `family` (when given and found) in front of those; Roboto Mono
+/// for monospace; the weights and the icon family by name; and a system
+/// symbol face behind them all, so a symbol in a label draws instead of
+/// showing an empty box.
 ///
 /// Returns the file `family` was loaded from, if it was.
 pub fn setup(ctx: &egui::Context, family: Option<&str>) -> Option<PathBuf> {
     let mut fonts = egui::FontDefinitions::default();
-    fonts.font_data.insert(
-        INTER_KEY.to_owned(),
-        std::sync::Arc::new(egui::FontData::from_static(INTER)),
+    let mut add = |key: &str, data: egui::FontData| {
+        fonts.font_data.insert(key.to_owned(), Arc::new(data));
+    };
+    add("mona", egui::FontData::from_static(MONA));
+    add(MEDIUM, egui::FontData::from_static(MONA_MEDIUM));
+    add(SEMIBOLD, egui::FontData::from_static(MONA_SEMIBOLD));
+    add("roboto-mono", egui::FontData::from_static(ROBOTO_MONO));
+    add("inter", egui::FontData::from_static(INTER));
+    add(
+        ICONS,
+        egui::FontData::from_static(LUCIDE).tweak(egui::FontTweak {
+            // Lucide's glyphs sit on the em square, a little high of the
+            // text faces' x-height centre: nudged so an icon centres on a
+            // label beside it.
+            y_offset_factor: 0.06,
+            ..Default::default()
+        }),
     );
-    fonts
-        .families
-        .entry(egui::FontFamily::Proportional)
-        .or_default()
-        .insert(0, INTER_KEY.to_owned());
     let face = family.and_then(locate);
     if let Some(path) = &face
         && let Ok(bytes) = std::fs::read(path)
     {
-        fonts.font_data.insert(
-            KEY.to_owned(),
-            std::sync::Arc::new(egui::FontData::from_owned(bytes)),
-        );
-        fonts
-            .families
-            .entry(egui::FontFamily::Proportional)
-            .or_default()
-            .insert(0, KEY.to_owned());
+        add(KEY, egui::FontData::from_owned(bytes));
     }
+    let configured: Vec<String> = face.iter().map(|_| KEY.to_owned()).collect();
+
+    // egui's own faces stay at the back of each chain: they cover Greek,
+    // Cyrillic and emoji the bundled faces do not.
+    let egui_proportional = fonts
+        .families
+        .get(&egui::FontFamily::Proportional)
+        .cloned()
+        .unwrap_or_default();
+    let egui_monospace = fonts
+        .families
+        .get(&egui::FontFamily::Monospace)
+        .cloned()
+        .unwrap_or_default();
+    let chain = |front: &[&str]| -> Vec<String> {
+        configured
+            .iter()
+            .cloned()
+            .chain(front.iter().map(|key| (*key).to_owned()))
+            .chain(["inter".to_owned(), ICONS.to_owned()])
+            .chain(egui_proportional.iter().cloned())
+            .collect()
+    };
+    let families = [
+        (egui::FontFamily::Proportional, chain(&["mona"])),
+        (egui::FontFamily::Name(MEDIUM.into()), chain(&[MEDIUM])),
+        (egui::FontFamily::Name(SEMIBOLD.into()), chain(&[SEMIBOLD])),
+        (
+            egui::FontFamily::Name(TABULAR.into()),
+            chain(&["inter", "mona"]),
+        ),
+        (
+            egui::FontFamily::Name(ICONS.into()),
+            std::iter::once(ICONS.to_owned())
+                .chain(chain(&["mona"]))
+                .collect(),
+        ),
+        (
+            egui::FontFamily::Monospace,
+            std::iter::once("roboto-mono".to_owned())
+                .chain([ICONS.to_owned()])
+                .chain(egui_monospace)
+                .collect(),
+        ),
+    ];
+    for (name, list) in families {
+        // Each face once, at its first (highest) place in the chain.
+        let mut seen = std::collections::HashSet::new();
+        let list: Vec<String> = list
+            .into_iter()
+            .filter(|key| seen.insert(key.clone()))
+            .collect();
+        fonts.families.insert(name, list);
+    }
+
     // Every fallback found, in order: one file rarely has every symbol.
     let mut seen = std::collections::HashSet::new();
     let symbols: Vec<Vec<u8>> = directories()
@@ -103,12 +214,11 @@ pub fn setup(ctx: &egui::Context, family: Option<&str>) -> Option<PathBuf> {
         .collect();
     for (i, bytes) in symbols.into_iter().enumerate() {
         let key = format!("{SYMBOLS}-{i}");
-        fonts.font_data.insert(
-            key.clone(),
-            std::sync::Arc::new(egui::FontData::from_owned(bytes)),
-        );
-        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-            fonts.families.entry(family).or_default().push(key.clone());
+        fonts
+            .font_data
+            .insert(key.clone(), Arc::new(egui::FontData::from_owned(bytes)));
+        for list in fonts.families.values_mut() {
+            list.push(key.clone());
         }
     }
     ctx.set_fonts(fonts);
@@ -221,16 +331,59 @@ fn pick<'a>(files: &'a [PathBuf], family: &str) -> Option<&'a PathBuf> {
 mod tests {
     use super::*;
 
+    /// Runs one frame of `ctx`, discarding its output (textures included,
+    /// which epaint insists are handled).
+    fn run_frame(ctx: &egui::Context, run: impl FnMut(&mut egui::Ui)) {
+        let mut output = ctx.run_ui(egui::RawInput::default(), run);
+        output.textures_delta.clear();
+    }
+
     fn files(names: &[&str]) -> Vec<PathBuf> {
         names.iter().map(PathBuf::from).collect()
     }
 
     #[test]
-    fn the_bundled_face_is_a_truetype_font() {
+    fn every_bundled_face_is_a_truetype_font() {
+        for (name, bytes) in [
+            ("Inter-Regular", INTER),
+            ("MonaSans-Regular", MONA),
+            ("MonaSans-Medium", MONA_MEDIUM),
+            ("MonaSans-SemiBold", MONA_SEMIBOLD),
+            ("RobotoMono-Regular", ROBOTO_MONO),
+            ("Lucide", LUCIDE),
+        ] {
+            assert_eq!(
+                bytes.get(..4),
+                Some(&[0x00, 0x01, 0x00, 0x00][..]),
+                "assets/fonts/{name}.ttf must be a TrueType file"
+            );
+        }
+    }
+
+    #[test]
+    fn a_weight_falls_back_to_regular_until_the_faces_are_installed() {
+        let ctx = egui::Context::default();
+        let mut before = None;
+        run_frame(&ctx, |ui| {
+            before = Some(weight(ui.ctx(), MEDIUM, 12.0));
+            let _ = setup(ui.ctx(), None);
+        });
         assert_eq!(
-            INTER.get(..4),
-            Some(&[0x00, 0x01, 0x00, 0x00][..]),
-            "assets/fonts/Inter-Regular.ttf must be a TrueType file"
+            before,
+            Some(egui::FontId::proportional(12.0)),
+            "the first frame has no named families yet"
+        );
+        let mut after = None;
+        run_frame(&ctx, |ui| {
+            after = Some(weight(ui.ctx(), MEDIUM, 12.0));
+        });
+        assert_eq!(
+            after,
+            Some(egui::FontId::new(
+                12.0,
+                egui::FontFamily::Name(MEDIUM.into())
+            )),
+            "the next frame has them"
         );
     }
 
