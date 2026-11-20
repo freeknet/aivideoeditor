@@ -6,15 +6,7 @@ all-features = true
 
 [advisories]
 yanked = "warn"
-ignore = [
-    # zbus's zvariant / zvariant_derive / zbus_names, marked unmaintained.
-    # Reached only through rfd -> ashpd (the Linux XDG file-dialog portal);
-    # unused on Windows, where the app ships. Clears when rfd/ashpd move to
-    # a maintained D-Bus crate, or when we drop rfd's portal backend.
-    { id = "RUSTSEC-2026-0370", reason = "zvariant via rfd/ashpd, Linux portal only" },
-    { id = "RUSTSEC-2026-0371", reason = "zbus_names via rfd/ashpd, Linux portal only" },
-    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive via rfd/ashpd, Linux portal only" },
-]
+ignore = []
 
 [licenses]
 allow = [
