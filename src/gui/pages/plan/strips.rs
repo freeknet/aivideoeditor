@@ -1,23 +1,29 @@
 // ============================================================================
 // Module:       gui::pages::plan::strips
 // Description:  The rows under the tracks: the selected shot (note, framing,
-//               alternatives button), the alternatives strip, the check bar,
-//               and the banner shown while viewing an old version.
+//               alternatives), the alternatives strip, the check bar, and the
+//               banner shown while viewing an old version.
 //
-// Dependencies: egui; crate::gui::pages::plan
+// Dependencies: egui; crate::gui::pages::plan, crate::gui::ui::{icons,
+//               theme, widgets}
 // ============================================================================
 
 //! The rows under the tracks.
+//!
+//! Each is a flat row with a hairline above it, as Selects separates the
+//! parts of a panel. Nothing here is a hint line: what a key does is in the
+//! control's tooltip and on the shortcut sheet.
 
 use std::collections::BTreeSet;
 
 use egui::{
-    Align, Align2, Color32, CornerRadius, FontId, Layout, Rect, Sense, Stroke, Ui, UiBuilder, pos2,
+    Align, Align2, Color32, CornerRadius, Layout, Rect, Sense, Stroke, Ui, UiBuilder, Vec2, pos2,
     vec2,
 };
 
 use super::{Drag, Io, Shown, State, edit};
-use crate::gui::ui::theme;
+use crate::gui::ui::{icons, theme, widgets};
+use crate::refs::{Reference, Target};
 
 /// Lays out `add` left to right inside `rect`.
 fn row<R>(ui: &mut Ui, rect: Rect, add: impl FnOnce(&mut Ui) -> R) -> R {
@@ -25,9 +31,18 @@ fn row<R>(ui: &mut Ui, rect: Rect, add: impl FnOnce(&mut Ui) -> R) -> R {
         UiBuilder::new()
             .max_rect(rect)
             .layout(Layout::left_to_right(Align::Center)),
-        add,
+        |ui| {
+            ui.spacing_mut().item_spacing.x = theme::SPACE_SM;
+            add(ui)
+        },
     )
     .inner
+}
+
+/// The hairline along the top of a row.
+fn top_line(ui: &Ui, s: &Shown<'_>, rect: Rect) {
+    ui.painter()
+        .hline(rect.x_range(), rect.top() + 0.5, theme::ink_line(s.theme));
 }
 
 /// The banner over the tracks while an old version is on show.
@@ -40,19 +55,30 @@ pub(super) fn viewing_banner(
     change: &str,
 ) {
     let t = s.theme;
-    egui::Frame::new()
-        .fill(theme::translucent(t.warning, 40))
-        .stroke(Stroke::new(1.0, theme::translucent(t.warning, 140)))
-        .corner_radius(CornerRadius::same(4))
-        .inner_margin(egui::Margin::symmetric(8, 3))
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(format!("Viewing v{n} · {saved} · {change} — read-only"))
-                        .size(11.5)
-                        .color(theme::rgb(t.text)),
-                );
-                if ui.button("Restore this version").clicked()
+    super::banner(
+        ui,
+        theme::translucent(t.warning, 26),
+        icons::HISTORY,
+        theme::rgb(t.warning),
+        |ui| {
+            ui.label(
+                egui::RichText::new(format!("Viewing v{n} · {saved} · {change} · read-only"))
+                    .font(theme::font(theme::BODY_SIZE))
+                    .color(theme::rgb(t.text)),
+            );
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = theme::SPACE_XS;
+                if widgets::ghost_button(ui, t, "Back to current").clicked() {
+                    state.viewing = None;
+                }
+                if widgets::button_with(
+                    ui,
+                    t,
+                    widgets::ButtonKind::Outline,
+                    Some(icons::ROTATE_CCW),
+                    "Restore this version",
+                )
+                .clicked()
                     && let Some(v) = state.viewing.take()
                 {
                     let plan = v.plan;
@@ -61,14 +87,13 @@ pub(super) fn viewing_banner(
                         true
                     });
                 }
-                if ui.button("Back to current").clicked() {
-                    state.viewing = None;
-                }
             });
-        });
+        },
+    );
 }
 
-/// The row under the tracks: what is selected, its note, its framing.
+/// The row under the tracks while shots are selected: the shot, its note
+/// and framing, and what can be done with it.
 pub(super) fn selection_bar(
     state: &mut State,
     s: &Shown<'_>,
@@ -77,23 +102,55 @@ pub(super) fn selection_bar(
     rect: Rect,
 ) {
     let t = s.theme;
-    ui.painter()
-        .rect_filled(rect, CornerRadius::same(3), theme::rgb(t.raised));
-    let inner = rect.shrink2(vec2(6.0, 2.0));
+    top_line(ui, s, rect);
+    let inner = rect.shrink2(vec2(theme::SPACE_SM, theme::SPACE_XS));
     let muted = theme::rgb(t.text_muted);
+    let actions_w = theme::CONTROL_HEIGHT * 2.0 + 2.0 + theme::SPACE_SM;
+    let actions = Rect::from_min_max(pos2(inner.right() - actions_w, inner.top()), inner.max);
+    // Reference in chat and lift, for one shot or many.
+    row(ui, actions, |ui| {
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            let lift = ui
+                .add_enabled_ui(s.editable && s.plan.shots.len() > s.sel.len(), |ui| {
+                    widgets::icon_btn(
+                        ui,
+                        t,
+                        icons::TRASH,
+                        "Lift (beats go to the shot before)",
+                        "Del",
+                    )
+                })
+                .inner;
+            if lift.clicked() {
+                super::lift_selected(state, s, io);
+            }
+            if widgets::icon_btn(ui, t, icons::AT_SIGN, "Reference in chat", "").clicked() {
+                for &k in &s.sel {
+                    io.actions
+                        .push(crate::gui::app::Action::AddRef(Reference::new(
+                            Target::Shot {
+                                plan: s.name.clone(),
+                                index: k + 1,
+                            },
+                        )));
+                }
+            }
+        });
+    });
     let Some(k) = s.single() else {
-        let text = if s.sel.is_empty() {
-            "Click a shot · Shift/Ctrl add · drag to reorder · drag an edit to roll · Alt-drag to slip · A alternatives · Del lift · R reference in chat".to_owned()
-        } else {
-            let list: Vec<String> = s.sel.iter().map(|k| (k + 1).to_string()).collect();
-            format!(
-                "{} shots selected ({}) · R references them in chat · Del lifts them",
-                s.sel.len(),
-                list.join(", ")
-            )
-        };
+        let list: Vec<String> = s.sel.iter().map(|k| (k + 1).to_string()).collect();
         row(ui, inner, |ui| {
-            ui.label(egui::RichText::new(text).size(11.0).color(muted));
+            ui.label(
+                egui::RichText::new(format!("{} shots selected", s.sel.len()))
+                    .font(theme::medium(ui.ctx(), theme::BODY_SIZE))
+                    .color(theme::rgb(t.text)),
+            );
+            ui.label(
+                egui::RichText::new(list.join(", "))
+                    .font(theme::tabular(ui.ctx(), theme::BODY_SIZE))
+                    .color(muted),
+            );
         });
         return;
     };
@@ -102,27 +159,30 @@ pub(super) fn selection_bar(
     };
     let dur = s.timing.get(k).map_or(0.0, |x| x.1);
     let frame_w = (inner.height() - 4.0) * 16.0 / 9.0;
-    let alt_w = 118.0;
+    let alt_w = 120.0;
     let text_rect = Rect::from_min_max(
         inner.min,
-        pos2(inner.right() - frame_w - alt_w - 16.0, inner.bottom()),
+        pos2(
+            actions.left() - frame_w - alt_w - theme::SPACE_SM * 3.0,
+            inner.bottom(),
+        ),
     );
     row(ui, text_rect, |ui| {
         ui.label(
-            egui::RichText::new(format!("#{}", k + 1))
-                .strong()
-                .color(theme::rgb(t.accent)),
+            egui::RichText::new(format!("Shot {}", k + 1))
+                .font(theme::medium(ui.ctx(), theme::BODY_SIZE))
+                .color(theme::rgb(t.text)),
         );
         ui.label(
             egui::RichText::new(format!(
-                "{} @ {:.2}s · {}b {dur:.2}s",
+                "{} @ {:.2}s · {} beats · {dur:.2}s",
                 shot.clip, shot.t_in, shot.beats
             ))
-            .size(11.5)
-            .color(theme::rgb(t.text)),
+            .font(theme::tabular(ui.ctx(), theme::BODY_SIZE))
+            .color(muted),
         );
         if !shot.who.is_empty() {
-            ui.label(egui::RichText::new(&shot.who).size(11.0).color(muted));
+            widgets::pill(ui, t, &shot.who, widgets::Tone::Neutral);
         }
         // The note: the reason the shot is there.
         let buf = match &mut state.note_edit {
@@ -135,13 +195,18 @@ pub(super) fn selection_bar(
                 }
             }
         };
-        let resp = ui.add_enabled(
-            s.editable,
-            egui::TextEdit::singleline(buf)
-                .hint_text("why this shot is here")
-                .font(FontId::proportional(11.5))
-                .desired_width(ui.available_width()),
+        let field = Rect::from_min_size(
+            pos2(
+                ui.cursor().left(),
+                inner.center().y - theme::CONTROL_HEIGHT / 2.0,
+            ),
+            vec2(ui.available_width().max(60.0), theme::CONTROL_HEIGHT),
         );
+        let resp = ui
+            .add_enabled_ui(s.editable, |ui| {
+                widgets::field_frame(ui, t, field, buf, "Why this shot is here", Some(icons::PEN))
+            })
+            .inner;
         if !resp.has_focus() && *buf != shot.note {
             if resp.lost_focus() {
                 let note = buf.clone();
@@ -159,19 +224,36 @@ pub(super) fn selection_bar(
 
     // Framing: the crop for the plan's aspect over the source frame.
     let fr = Rect::from_min_size(
-        pos2(inner.right() - frame_w - alt_w - 8.0, inner.top() + 2.0),
+        pos2(
+            actions.left() - frame_w - alt_w - theme::SPACE_SM * 2.0,
+            inner.top() + 2.0,
+        ),
         vec2(frame_w, inner.height() - 4.0),
     );
     framing(state, s, io, ui, fr, k);
     let ab = Rect::from_min_size(
-        pos2(inner.right() - alt_w, inner.top() + 1.0),
-        vec2(alt_w, inner.height() - 2.0),
+        pos2(actions.left() - alt_w - theme::SPACE_SM, inner.top()),
+        vec2(alt_w, inner.height()),
     );
     row(ui, ab, |ui| {
-        if ui
-            .add_enabled(s.editable, egui::Button::new("Alternatives  A"))
-            .on_hover_text("Rank footage that fits this slot without breaking a rule")
-            .clicked()
+        let resp = ui
+            .add_enabled_ui(s.editable, |ui| {
+                widgets::button_with(
+                    ui,
+                    t,
+                    widgets::ButtonKind::Outline,
+                    Some(icons::SPARKLES),
+                    "Alternatives",
+                )
+            })
+            .inner;
+        if widgets::tip(
+            resp,
+            t,
+            "Rank footage that fits this slot without breaking a rule",
+            "A",
+        )
+        .clicked()
         {
             super::open_alternatives(state, s, k);
         }
@@ -191,11 +273,14 @@ fn framing(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut Ui, rect:
             &path,
             f64::from(shot.t_in),
             0.5,
-            theme::rgb(t.hover),
+            theme::rgb(t.raised),
         );
     } else {
-        ui.painter()
-            .rect_filled(rect, CornerRadius::same(2), theme::rgb(t.hover));
+        ui.painter().rect_filled(
+            rect,
+            CornerRadius::same(theme::RADIUS_XS),
+            theme::rgb(t.raised),
+        );
     }
     let crop = s.plan.aspect.crop_frac();
     let resp = ui
@@ -236,7 +321,7 @@ fn framing(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut Ui, rect:
         p.rect_stroke(
             window,
             CornerRadius::ZERO,
-            Stroke::new(1.5, theme::rgb(t.accent)),
+            Stroke::new(1.5, theme::rgb(t.text)),
             egui::StrokeKind::Inside,
         );
         if s.editable {
@@ -292,14 +377,11 @@ pub(super) fn alternatives(
     let Some(alts) = state.alts.as_ref() else {
         return;
     };
-    ui.painter().rect(
-        rect,
-        CornerRadius::same(3),
-        theme::rgb(t.panel),
-        Stroke::new(1.0, theme::rgb(t.border)),
-        egui::StrokeKind::Inside,
+    top_line(ui, s, rect);
+    let head = Rect::from_min_size(
+        rect.min + vec2(theme::SPACE_SM, 2.0),
+        vec2(rect.width() - theme::SPACE_SM * 2.0, theme::CONTROL_HEIGHT),
     );
-    let head = Rect::from_min_size(rect.min + vec2(6.0, 2.0), vec2(rect.width() - 12.0, 16.0));
     let want = s
         .project
         .index
@@ -309,22 +391,19 @@ pub(super) fn alternatives(
     let beats = s.plan.shots.get(slot).map_or(0, |sh| sh.beats);
     let mut close = false;
     row(ui, head, |ui| {
+        icons::icon(ui, icons::SPARKLES, icons::SMALL, theme::rgb(t.text_muted));
         ui.label(
-            egui::RichText::new(format!(
-                "ALTERNATIVES FOR SHOT {} · {want} · {beats} beats",
-                slot + 1
-            ))
-            .size(10.0)
-            .strong()
-            .color(theme::rgb(t.text_muted)),
+            egui::RichText::new(format!("Alternatives for shot {}", slot + 1))
+                .font(theme::medium(ui.ctx(), theme::BODY_SIZE))
+                .color(theme::rgb(t.text)),
         );
         ui.label(
-            egui::RichText::new("1–8 or click swaps · Esc closes")
-                .size(10.0)
-                .color(theme::rgb(t.text_faint)),
+            egui::RichText::new(format!("{want} · {beats} beats"))
+                .font(theme::font(theme::BODY_SIZE))
+                .color(theme::rgb(t.text_muted)),
         );
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui.small_button("Close").clicked() {
+            if widgets::icon_btn(ui, t, icons::X, "Close alternatives", "Esc").clicked() {
                 close = true;
             }
         });
@@ -335,15 +414,16 @@ pub(super) fn alternatives(
     }
     let items = alts.items.clone();
     let body = Rect::from_min_max(
-        pos2(rect.left() + 4.0, head.bottom() + 2.0),
-        rect.max - vec2(4.0, 4.0),
+        pos2(rect.left() + theme::SPACE_SM, head.bottom() + 2.0),
+        rect.max - vec2(theme::SPACE_SM, theme::SPACE_SM),
     );
     if items.is_empty() {
         row(ui, body, |ui| {
             ui.label(
-                egui::RichText::new("Nothing else fits this slot without breaking a rule. Loosen the rules or free up a clip.")
-                    .size(11.0)
-                    .color(theme::rgb(t.text_muted)),
+                egui::RichText::new(
+                    "Nothing else fits this slot without breaking a rule. Loosen the rules or free up a clip.",
+                )
+                .color(theme::rgb(t.text_muted)),
             );
         });
         return;
@@ -356,20 +436,25 @@ pub(super) fn alternatives(
             .id_salt("plan_alts")
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = theme::SPACE_XS;
                     for (n, alt) in items.iter().enumerate() {
-                        let (card, resp) = ui
-                            .allocate_exact_size(vec2(200.0, body.height() - 2.0), Sense::click());
+                        let (card, resp) =
+                            ui.allocate_exact_size(vec2(220.0, body.height()), Sense::click());
                         let hovered = resp.hovered();
                         ui.painter().rect(
                             card,
-                            CornerRadius::same(3),
-                            theme::rgb(if hovered { t.hover } else { t.raised }),
-                            Stroke::new(1.0, theme::rgb(if hovered { t.accent } else { t.border })),
+                            CornerRadius::same(theme::RADIUS_MD),
+                            if hovered {
+                                theme::ink(t, theme::INK_08)
+                            } else {
+                                theme::ink(t, theme::INK_03)
+                            },
+                            theme::ink_line(t),
                             egui::StrokeKind::Inside,
                         );
-                        let th_h = card.height() - 6.0;
+                        let th_h = card.height() - 8.0;
                         let th = Rect::from_min_size(
-                            card.min + vec2(3.0, 3.0),
+                            card.min + vec2(4.0, 4.0),
                             vec2((th_h * ratio).min(80.0), th_h),
                         );
                         if let Some(path) = s.clip_path(&alt.clip) {
@@ -379,43 +464,43 @@ pub(super) fn alternatives(
                                 &path,
                                 f64::from(alt.t_in),
                                 alt.cx,
-                                theme::rgb(t.hover),
+                                theme::rgb(t.raised),
                             );
                         }
-                        let badge = Rect::from_min_size(th.min, vec2(14.0, 14.0));
+                        let badge = Rect::from_min_size(th.min + vec2(3.0, 3.0), vec2(16.0, 16.0));
                         ui.painter().rect_filled(
                             badge,
-                            CornerRadius::same(2),
-                            theme::rgb(t.accent),
+                            CornerRadius::same(theme::RADIUS),
+                            theme::popover_fill(t),
                         );
                         ui.painter().text(
                             badge.center(),
                             Align2::CENTER_CENTER,
                             (n + 1).to_string(),
-                            FontId::monospace(10.0),
-                            theme::rgb(t.text_on_accent),
+                            theme::tabular(ui.ctx(), theme::TINY_SIZE),
+                            theme::rgb(t.text),
                         );
                         let tr = Rect::from_min_max(
-                            pos2(th.right() + 5.0, card.top() + 3.0),
-                            card.max - vec2(3.0, 3.0),
+                            pos2(th.right() + theme::SPACE_SM, card.top() + 6.0),
+                            card.max - vec2(6.0, 4.0),
                         );
                         let p = ui.painter().with_clip_rect(tr);
                         p.text(
                             tr.min,
                             Align2::LEFT_TOP,
                             format!("{} @ {:.1}s", alt.clip, alt.t_in),
-                            FontId::proportional(11.0),
+                            theme::medium(ui.ctx(), theme::BODY_SIZE),
                             theme::rgb(t.text),
                         );
                         let galley = ui.painter().layout(
                             alt.reason.clone(),
-                            FontId::proportional(9.5),
+                            theme::font(theme::SMALL_SIZE),
                             theme::rgb(t.text_muted),
                             tr.width(),
                         );
-                        p.galley(tr.min + vec2(0.0, 15.0), galley, theme::rgb(t.text_muted));
-                        let resp = resp.on_hover_text(format!(
-                            "{}\n{}{}\nClick to swap in · double-click previews",
+                        p.galley(tr.min + vec2(0.0, 18.0), galley, theme::rgb(t.text_muted));
+                        let tip = format!(
+                            "{}\n{}{}",
                             alt.seg,
                             alt.reason,
                             if alt.who.is_empty() {
@@ -423,7 +508,13 @@ pub(super) fn alternatives(
                             } else {
                                 format!("\n{}", alt.who)
                             }
-                        ));
+                        );
+                        let resp = widgets::tip(
+                            resp,
+                            t,
+                            &format!("{tip}\nClick swaps it in; double-click previews"),
+                            &(n + 1).to_string(),
+                        );
                         if resp.double_clicked() {
                             if let Some(path) = s.clip_path(&alt.clip) {
                                 io.player.open_clip(
@@ -446,7 +537,61 @@ pub(super) fn alternatives(
     }
 }
 
-/// The check bar: counts, the first problem, and the full list.
+/// A count with its icon on a tinted pill: `tone` when there are any,
+/// neutral at zero.
+fn count_pill(
+    ui: &mut Ui,
+    s: &Shown<'_>,
+    glyph: char,
+    n: usize,
+    color: Color32,
+    tip: &str,
+) -> egui::Response {
+    let t = s.theme;
+    let (fill, ink) = if n > 0 {
+        (color.gamma_multiply(0.15), color)
+    } else {
+        (theme::ink(t, theme::INK_05), theme::rgb(t.text_muted))
+    };
+    let galley = ui.painter().layout_no_wrap(
+        n.to_string(),
+        theme::tabular(ui.ctx(), theme::BODY_SIZE),
+        ink,
+    );
+    let size = vec2(
+        theme::SPACE_SM + icons::SMALL + theme::SPACE_XS + galley.size().x + theme::SPACE_SM,
+        theme::COMPACT_HEIGHT,
+    );
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::hover());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, format!("{n} {tip}")));
+    let p = ui.painter();
+    p.rect_filled(rect, CornerRadius::same(theme::RADIUS), fill);
+    icons::paint(
+        p,
+        Rect::from_min_size(
+            pos2(
+                rect.left() + theme::SPACE_SM,
+                rect.center().y - icons::SMALL / 2.0,
+            ),
+            Vec2::splat(icons::SMALL),
+        ),
+        glyph,
+        icons::SMALL,
+        ink,
+    );
+    p.galley(
+        pos2(
+            rect.left() + theme::SPACE_SM + icons::SMALL + theme::SPACE_XS,
+            rect.center().y - galley.size().y / 2.0,
+        ),
+        galley,
+        ink,
+    );
+    widgets::tip(resp, t, tip, "")
+}
+
+/// The check bar: counts as pills, then "ready to render" or the first
+/// problem and the full list.
 pub(super) fn check_bar(
     state: &mut State,
     s: &Shown<'_>,
@@ -455,142 +600,114 @@ pub(super) fn check_bar(
     rect: Rect,
 ) {
     let t = s.theme;
-    ui.painter()
-        .rect_filled(rect, CornerRadius::same(3), theme::rgb(t.panel));
+    top_line(ui, s, rect);
     let errors = state.problems.iter().filter(|p| super::is_error(p)).count();
     let warnings = state.problems.len() - errors;
     let clean = (0..s.plan.shots.len())
         .filter(|k| !s.issues.contains_key(k))
         .count();
     let mut jump = None;
-    row(ui, rect.shrink2(vec2(6.0, 1.0)), |ui| {
+    row(ui, rect.shrink2(vec2(theme::SPACE_SM, 0.0)), |ui| {
         if s.project.index.is_none() {
+            icons::icon(ui, icons::INFO, icons::SMALL, theme::rgb(t.text_muted));
             ui.label(
                 egui::RichText::new("No shot log: the plan cannot be checked.")
-                    .size(11.0)
                     .color(theme::rgb(t.text_muted)),
             );
             return;
         }
-        let count = |ui: &mut Ui, glyph: &str, n: usize, color: Color32, what: &str| {
-            let (r, _) = ui.allocate_exact_size(vec2(11.0, 11.0), Sense::hover());
-            let (c, st) = (r.center(), Stroke::new(1.6, color));
-            let p = ui.painter();
-            match glyph {
-                "ok" => {
-                    p.line_segment([c + vec2(-4.0, 0.0), c + vec2(-1.0, 3.5)], st);
-                    p.line_segment([c + vec2(-1.0, 3.5), c + vec2(4.5, -4.0)], st);
-                }
-                "warn" => {
-                    p.add(egui::Shape::closed_line(
-                        vec![c + vec2(0.0, -5.0), c + vec2(5.0, 4.5), c + vec2(-5.0, 4.5)],
-                        Stroke::new(1.3, color),
-                    ));
-                    p.vline(c.x, (c.y - 1.5)..=(c.y + 1.5), Stroke::new(1.3, color));
-                }
-                _ => {
-                    p.line_segment([c + vec2(-4.0, -4.0), c + vec2(4.0, 4.0)], st);
-                    p.line_segment([c + vec2(-4.0, 4.0), c + vec2(4.0, -4.0)], st);
-                }
-            }
-            ui.label(
-                egui::RichText::new(n.to_string())
-                    .size(11.5)
-                    .strong()
-                    .color(color),
-            )
-            .on_hover_text(what);
-        };
-        count(
+        ui.spacing_mut().item_spacing.x = theme::SPACE_XS;
+        count_pill(
             ui,
-            "ok",
+            s,
+            icons::CIRCLE_CHECK,
             clean,
             theme::rgb(t.success),
-            "shots that pass every rule",
+            "shots pass every rule",
         );
-        count(
+        count_pill(
             ui,
-            "warn",
+            s,
+            icons::TRIANGLE_ALERT,
             warnings,
-            if warnings > 0 {
-                theme::rgb(t.warning)
-            } else {
-                theme::rgb(t.text_faint)
-            },
+            theme::rgb(t.warning),
             "content rules bent (repeats, flags, captions)",
         );
-        count(
+        count_pill(
             ui,
-            "err",
+            s,
+            icons::CIRCLE_X,
             errors,
-            if errors > 0 {
-                theme::rgb(t.danger)
-            } else {
-                theme::rgb(t.text_faint)
-            },
+            theme::rgb(t.danger),
             "structural errors (timing, ranges, crop, drop)",
         );
+        ui.add_space(theme::SPACE_XS);
         if state.problems.is_empty() {
             ui.label(
-                egui::RichText::new("ready to render")
-                    .size(11.0)
+                egui::RichText::new("Ready to render")
+                    .font(theme::font(theme::BODY_SIZE))
                     .color(theme::rgb(t.text_muted)),
             );
             return;
         }
-        ui.menu_button(egui::RichText::new("Problems").size(11.0), |ui| {
-            ui.set_min_width(420.0);
-            egui::ScrollArea::vertical()
-                .max_height(260.0)
-                .show(ui, |ui| {
-                    for p in &state.problems {
-                        let color = if super::is_error(p) {
-                            t.danger
-                        } else {
-                            t.warning
-                        };
-                        let where_ = if p.shot == 0 {
-                            "plan".to_owned()
-                        } else {
-                            format!("shot {}", p.shot)
-                        };
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    egui::RichText::new(format!("{where_}: {}", p.message))
-                                        .size(11.0)
-                                        .color(theme::rgb(color)),
-                                )
-                                .frame(false),
+        let list = widgets::button_with(
+            ui,
+            t,
+            widgets::ButtonKind::Ghost,
+            Some(icons::LIST),
+            "Problems",
+        );
+        let list = widgets::tip(list, t, "Every problem the check finds", "");
+        let _ = egui::Popup::menu(&list)
+            .width(460.0)
+            .gap(theme::SPACE_XS)
+            .show(|ui| {
+                egui::ScrollArea::vertical()
+                    .max_height(280.0)
+                    .show(ui, |ui| {
+                        for p in &state.problems {
+                            let glyph = if super::is_error(p) {
+                                icons::CIRCLE_X
+                            } else {
+                                icons::TRIANGLE_ALERT
+                            };
+                            let where_ = if p.shot == 0 {
+                                "plan".to_owned()
+                            } else {
+                                format!("shot {}", p.shot)
+                            };
+                            if widgets::menu_item(
+                                ui,
+                                t,
+                                Some(glyph),
+                                &format!("{where_}: {}", p.message),
+                                "",
+                                false,
                             )
                             .clicked()
-                        {
-                            jump = Some(p.shot);
-                            ui.close();
+                            {
+                                jump = Some(p.shot);
+                                ui.close();
+                            }
                         }
-                    }
-                });
-        });
+                    });
+            });
         if let Some(first) = state.problems.first() {
             let where_ = if first.shot == 0 {
                 "plan".to_owned()
             } else {
                 format!("shot {}", first.shot)
             };
-            let text = format!("{where_}: {}", first.message);
-            if ui
-                .add(
-                    egui::Label::new(
-                        egui::RichText::new(text)
-                            .size(11.0)
-                            .color(theme::rgb(t.text_muted)),
-                    )
-                    .truncate()
-                    .sense(Sense::click()),
+            let resp = ui.add(
+                egui::Label::new(
+                    egui::RichText::new(format!("{where_}: {}", first.message))
+                        .font(theme::font(theme::BODY_SIZE))
+                        .color(theme::rgb(t.text_muted)),
                 )
-                .on_hover_text("Select that shot")
-                .clicked()
-            {
+                .truncate()
+                .sense(Sense::click()),
+            );
+            if widgets::tip(resp, t, "Select that shot", "").clicked() {
                 jump = Some(first.shot);
             }
         }

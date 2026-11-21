@@ -137,6 +137,8 @@ pub const COMPARE: char = '\u{e553}';
 pub const GRID: char = '\u{e0e9}';
 /// `hand`: the hand tool.
 pub const HAND: char = '\u{e1d7}';
+/// `headphones`: solo a track.
+pub const HEADPHONES: char = '\u{e0f1}';
 /// `heart`.
 pub const HEART: char = '\u{e0f2}';
 /// `history`: versions, recent.

@@ -24,6 +24,18 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   outline on the panel last clicked, 40 px panel headers, a 44 px icon rail for the
   folded chat and glass buttons over the viewer for a folded browser or inspector.
 
+- The timeline restyled to Selects' canvas: plan tabs, compare, storyboard, comments,
+  versions, aspect, undo and redo in one 40 px header; a 35 px ruler with `MM:SS`
+  clock labels and a marker lane (bars, drop and end-card pins, comment pins); a 96 px
+  track-header column with eye / mute / solo icons; shots as filmstrip clips coloured
+  by subject from Selects' clip-label palette, with a lime (focused) or white
+  selection outline and a striped band on shots the check fails; the music as an
+  audio clip with bars growing from the bottom and red clip marks; Selects' playhead,
+  in/out shading for the selection, a thin scroll thumb whose ends zoom, fit / − / +
+  buttons, and a floating tool island (selection, slip, zoom and hand tools). The hint
+  line is gone (hints live in tooltips) and the check bar shows Lucide count pills.
+  Compare, storyboard and comments use the same tokens.
+
 - Timeline playback ends like the render: after the last shot the viewer holds the
   plan's end card for the render's span (`card_bar` to `end_bar`, `Plan::card_span`)
   over the music, and V1 draws it as a block there. Plan compare (A/B): "Compare" in

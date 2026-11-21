@@ -34,10 +34,10 @@
 
 use std::collections::BTreeMap;
 
-use egui::{Align2, Color32, CornerRadius, FontId, Rect, Sense, Stroke, Ui, pos2, vec2};
+use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, Ui, pos2, vec2};
 
-use super::{Cut, Io, Shown, State, history, sequence};
-use crate::gui::ui::theme;
+use super::{Cut, Io, Shown, State, history, sequence, timeline};
+use crate::gui::ui::{icons, theme, widgets};
 use crate::plan::{Plan, Shot};
 use crate::project::Project;
 use crate::theme::Palette;
@@ -47,12 +47,14 @@ use crate::theme::Palette;
 const SAME_MOMENT: f32 = 1.0;
 /// Widest the diff list gets.
 const LIST_W: f32 = 380.0;
-/// Width of the lane labels.
-const LABEL_W: f32 = 82.0;
-/// Height of the bar ruler over the lanes.
-const RULER_H: f32 = 18.0;
 /// Height of the toolbar row.
-const BAR_H: f32 = 26.0;
+const BAR_H: f32 = 40.0;
+/// Space between the two lanes.
+const LANE_GAP: f32 = 4.0;
+/// Room for the kind badge in a diff row.
+const KIND_W: f32 = 76.0;
+/// Room for the slot (`B12`) in a diff row.
+const SLOT_W: f32 = 36.0;
 
 /// One side of a compare.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -120,7 +122,7 @@ impl Kind {
             Self::Added => theme::rgb(t.success),
             Self::Removed => theme::rgb(t.danger),
             Self::Replaced => theme::rgb(t.warning),
-            Self::Moved => theme::rgb(t.accent),
+            Self::Moved => timeline::marker("blue").0,
             Self::Changed => theme::rgb(t.text_muted),
         }
     }
@@ -362,72 +364,136 @@ pub(super) fn default_choice(state: &State, project: &Project) -> Option<(String
         })
 }
 
-/// The "Compare" menu in the tab strip.
-pub(super) fn menu(state: &mut State, project: &Project, ui: &mut Ui) {
-    let Some(name) = state.name.clone() else {
-        return;
-    };
-    let mut pick: Option<(String, anyhow::Result<Plan>)> = None;
-    let mut close = false;
-    ui.menu_button("Compare plans", |ui| {
-        ui.set_min_width(260.0);
-        if state.compare.is_some() && ui.button("Close compare").clicked() {
-            close = true;
-            ui.close();
-        }
-        let latest = state.versions.last().map(|v| v.n);
-        let older: Vec<&history::Version> = state
-            .versions
-            .iter()
-            .rev()
-            .filter(|v| Some(v.n) != latest)
-            .collect();
-        ui.label(
-            egui::RichText::new(format!("Versions of {name}"))
-                .size(11.0)
-                .weak(),
-        );
-        if older.is_empty() {
-            ui.label(egui::RichText::new("no earlier versions").size(11.0).weak());
-        }
-        for v in older {
-            let text = format!(
-                "v{} · {} · {}",
-                v.n,
-                v.saved.trim_end_matches(" UTC"),
-                if v.change.is_empty() {
-                    "save"
-                } else {
-                    &v.change
-                }
-            );
-            if ui.button(text).clicked() {
-                pick = Some((format!("{name} v{}", v.n), history::load(v)));
-                ui.close();
-            }
-        }
-        ui.separator();
-        ui.label(egui::RichText::new("Other plans").size(11.0).weak());
-        for stem in super::tabs::stems(project) {
-            if stem == name {
-                continue;
-            }
-            if ui.button(format!("Plan {stem}")).clicked() {
-                let plan = Plan::load(&history::live_path(&project.work, &stem));
-                pick = Some((stem, plan));
-                ui.close();
-            }
-        }
+/// What the "Compare plans" menu offers, read before it is drawn.
+#[derive(Clone, Debug)]
+pub(super) struct MenuInfo {
+    /// The open plan.
+    name: String,
+    /// Its versions, oldest first.
+    versions: Vec<history::Version>,
+    /// A compare is on show.
+    open: bool,
+    /// Every plan of the night.
+    stems: Vec<String>,
+}
+
+/// What was picked in the menu.
+#[derive(Clone, Debug)]
+pub(super) enum Pick {
+    /// End the compare.
+    Close,
+    /// Compare with a saved version of the open plan.
+    Version(history::Version),
+    /// Compare with another plan.
+    Plan(String),
+}
+
+/// What the menu needs, when a plan is open.
+pub(super) fn menu_info(state: &State, project: &Project) -> Option<MenuInfo> {
+    Some(MenuInfo {
+        name: state.name.clone()?,
+        versions: state.versions.clone(),
+        open: state.compare.is_some(),
+        stems: super::tabs::stems(project),
     })
-    .response
-    .on_hover_text("Compare this plan with a saved version or another plan (Shift+C)");
-    if close {
-        state.compare = None;
-    }
-    match pick {
-        Some((label, Ok(plan))) => open(state, label, plan),
-        Some((label, Err(e))) => state.status = format!("{label}: {e:#}"),
-        None => {}
+}
+
+/// The "Compare plans" button in the timeline's header and its menu.
+pub(super) fn menu(ui: &mut Ui, t: &Palette, info: &MenuInfo) -> Option<Pick> {
+    let resp = widgets::icon_toggle(ui, t, icons::COMPARE, "Compare plans", "Shift+C", info.open);
+    let mut pick = None;
+    let _ = egui::Popup::menu(&resp)
+        .width(300.0)
+        .gap(theme::SPACE_XS)
+        .show(|ui| {
+            if info.open {
+                if widgets::menu_item(ui, t, Some(icons::X), "Close compare", "Esc", false)
+                    .clicked()
+                {
+                    pick = Some(Pick::Close);
+                    ui.close();
+                }
+                widgets::menu_separator(ui, t);
+            }
+            let latest = info.versions.last().map(|v| v.n);
+            let older: Vec<&history::Version> = info
+                .versions
+                .iter()
+                .rev()
+                .filter(|v| Some(v.n) != latest)
+                .collect();
+            ui.horizontal(|ui| {
+                ui.add_space(theme::SPACE_SM);
+                widgets::menu_heading(ui, t, &format!("Versions of {}", info.name));
+            });
+            if older.is_empty() {
+                ui.horizontal(|ui| {
+                    ui.add_space(theme::SPACE_SM);
+                    ui.label(egui::RichText::new("No earlier versions").color(theme::ink(t, 102)));
+                });
+            }
+            egui::ScrollArea::vertical()
+                .id_salt("plan_compare_versions")
+                .max_height(240.0)
+                .show(ui, |ui| {
+                    for v in older {
+                        let text = format!(
+                            "v{} · {} · {}",
+                            v.n,
+                            v.saved.trim_end_matches(" UTC"),
+                            if v.change.is_empty() {
+                                "save"
+                            } else {
+                                &v.change
+                            }
+                        );
+                        if widgets::menu_item(ui, t, Some(icons::HISTORY), &text, "", false)
+                            .clicked()
+                        {
+                            pick = Some(Pick::Version(v.clone()));
+                            ui.close();
+                        }
+                    }
+                });
+            widgets::menu_separator(ui, t);
+            ui.horizontal(|ui| {
+                ui.add_space(theme::SPACE_SM);
+                widgets::menu_heading(ui, t, "Other plans");
+            });
+            for stem in &info.stems {
+                if *stem == info.name {
+                    continue;
+                }
+                if widgets::menu_item(ui, t, Some(icons::FILM), &format!("Plan {stem}"), "", false)
+                    .clicked()
+                {
+                    pick = Some(Pick::Plan(stem.clone()));
+                    ui.close();
+                }
+            }
+        });
+    pick
+}
+
+/// Acts on what was picked in the menu.
+pub(super) fn take(state: &mut State, project: &Project, pick: Pick) {
+    let loaded = match pick {
+        Pick::Close => {
+            state.compare = None;
+            return;
+        }
+        Pick::Version(v) => {
+            let name = state.name.clone().unwrap_or_default();
+            (format!("{name} v{}", v.n), history::load(&v))
+        }
+        Pick::Plan(stem) => {
+            let plan = Plan::load(&history::live_path(&project.work, &stem));
+            (stem, plan)
+        }
+    };
+    match loaded {
+        (label, Ok(plan)) => open(state, label, plan),
+        (label, Err(e)) => state.status = format!("{label}: {e:#}"),
     }
 }
 
@@ -548,38 +614,33 @@ pub(super) fn view(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut U
         .fold(0.1_f32, f32::max);
 
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, CornerRadius::ZERO, theme::rgb(t.app));
+    painter.rect_filled(rect, CornerRadius::ZERO, theme::rgb(t.panel));
 
     // Toolbar.
     let bar = Rect::from_min_size(rect.min, vec2(rect.width(), BAR_H));
+    painter.hline(bar.x_range(), bar.bottom() - 0.5, theme::ink_line(t));
     let mut do_adopt = false;
     let mut do_close = false;
     let mut switch_to = None;
     ui.scope_builder(
         egui::UiBuilder::new()
-            .max_rect(bar.shrink2(vec2(4.0, 2.0)))
+            .max_rect(bar.shrink2(vec2(theme::SPACE_SM, 0.0)))
             .layout(egui::Layout::left_to_right(egui::Align::Center)),
         |ui| {
-            ui.label(
-                egui::RichText::new("COMPARE")
-                    .size(10.5)
-                    .strong()
-                    .color(theme::rgb(t.text_muted)),
-            );
-            for (side, label) in [(Side::A, "Play A"), (Side::B, "Play B")] {
-                if ui
-                    .selectable_label(c.play == side, label)
-                    .on_hover_text("Play this side in the viewer, at the same point (B)")
-                    .clicked()
-                {
-                    switch_to = Some(side);
-                }
+            ui.spacing_mut().item_spacing.x = theme::SPACE_SM;
+            let mut play = c.play;
+            if widgets::segmented(
+                ui,
+                t,
+                &mut play,
+                &[(Side::A, "Play A"), (Side::B, "Play B")],
+            ) {
+                switch_to = Some(play);
             }
-            ui.separator();
             let n = changes.len() + whole_plan.len();
             ui.label(
                 egui::RichText::new(if n == 0 {
-                    "no differences".to_owned()
+                    "No differences".to_owned()
                 } else {
                     format!(
                         "{} shot difference{}",
@@ -587,32 +648,39 @@ pub(super) fn view(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut U
                         if changes.len() == 1 { "" } else { "s" }
                     )
                 })
-                .size(11.5)
+                .font(theme::medium(ui.ctx(), theme::BODY_SIZE))
                 .color(theme::rgb(t.text)),
             );
-            if !whole_plan.is_empty() {
-                ui.label(
-                    egui::RichText::new(whole_plan.join(" · "))
-                        .size(11.0)
-                        .color(theme::rgb(t.warning)),
-                );
+            for w in &whole_plan {
+                widgets::pill(ui, t, w, widgets::Tone::Warning);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .button("Close")
-                    .on_hover_text("Back to the timeline (Esc)")
-                    .clicked()
-                {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                if widgets::icon_btn(ui, t, icons::X, "Close compare", "Esc").clicked() {
                     do_close = true;
                 }
-                if ui
-                    .add_enabled(s.editable && n > 0, egui::Button::new("Adopt B"))
-                    .on_hover_text(format!(
+                ui.add_space(theme::SPACE_XS);
+                let adopt = ui
+                    .add_enabled_ui(s.editable && n > 0, |ui| {
+                        widgets::button_with(
+                            ui,
+                            t,
+                            widgets::ButtonKind::Primary,
+                            Some(icons::CHECK),
+                            "Adopt B",
+                        )
+                    })
+                    .inner;
+                let adopt = widgets::tip(
+                    adopt,
+                    t,
+                    &format!(
                         "Make {} the open plan {} (saved as a new version; Undo takes it back)",
                         c.label, s.name
-                    ))
-                    .clicked()
-                {
+                    ),
+                    "",
+                );
+                if adopt.clicked() {
                     do_adopt = true;
                 }
             });
@@ -620,151 +688,128 @@ pub(super) fn view(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut U
     );
 
     // Geometry: lanes on the left, the list on the right.
-    let body = Rect::from_min_max(pos2(rect.left(), bar.bottom() + 2.0), rect.max);
+    let body = Rect::from_min_max(pos2(rect.left(), bar.bottom()), rect.max);
     let list_w = LIST_W.min(body.width() * 0.42);
     let list = Rect::from_min_max(pos2(body.right() - list_w, body.top()), body.max);
-    let tracks = Rect::from_min_max(body.min, pos2(list.left() - 4.0, body.bottom()));
-    let lanes_left = tracks.left() + LABEL_W;
-    let lanes_w = (tracks.right() - lanes_left).max(10.0);
-    let pps = lanes_w / (span * 1.02);
-    let x = |sec: f32| lanes_left + sec * pps;
+    let tracks = Rect::from_min_max(body.min, pos2(list.left(), body.bottom()));
+    let lanes_left = tracks.left() + timeline::HEADER_W;
+    let lanes_w = (tracks.right() - lanes_left - theme::SPACE_LG).max(10.0);
+    let m = timeline::Map {
+        left: lanes_left,
+        scroll: 0.0,
+        pps: lanes_w / span,
+    };
+    let x = |sec: f32| m.x(sec);
     let ruler = Rect::from_min_max(
         pos2(lanes_left, tracks.top()),
-        pos2(tracks.right(), tracks.top() + RULER_H),
+        pos2(tracks.right(), tracks.top() + timeline::RULER_H),
     );
-    let lane_h = ((tracks.height() - RULER_H - 6.0) / 2.0).clamp(24.0, 110.0);
+    let lane_h = ((tracks.height() - timeline::RULER_H - theme::SPACE_XL - LANE_GAP) / 2.0)
+        .clamp(24.0, 96.0);
     let lane_rects = [0.0, 1.0].map(|k: f32| {
         Rect::from_min_size(
-            pos2(tracks.left(), ruler.bottom() + 2.0 + k * (lane_h + 2.0)),
+            pos2(
+                tracks.left(),
+                ruler.bottom() + theme::SPACE_MD + k * (lane_h + LANE_GAP),
+            ),
             vec2(tracks.width(), lane_h),
         )
     });
+    let grid_bottom = tracks.bottom();
+    let canvas = painter.with_clip_rect(Rect::from_min_max(
+        pos2(lanes_left, tracks.top()),
+        tracks.max,
+    ));
 
-    // Ruler and grid: the song's bars, shared by both lanes.
-    painter.rect_filled(ruler, CornerRadius::ZERO, theme::rgb(t.panel));
+    // Ruler: clock time from the earlier start, the song's bars under it.
+    timeline::paint_ticks(ui, &canvas, t, ruler, m);
     let first_bar = s.plan.start_bar.min(c.plan.start_bar);
     let last_bar = s.plan.end_bar.max(c.plan.end_bar);
-    let bar_px = s.map.period() * 4.0 * pps;
+    let bar_px = s.map.period() * 4.0 * m.pps;
     let every = [1usize, 2, 4, 8, 16]
         .into_iter()
-        .find(|n| bar_px * *n as f32 >= 28.0)
+        .find(|n| bar_px * *n as f32 >= 36.0)
         .unwrap_or(32);
-    let grid_bottom = lane_rects[1].bottom();
+    let bar_font = theme::tabular(ui.ctx(), theme::SMALL_SIZE);
     for bar_n in first_bar..=last_bar {
-        let bx = x(s.map.beat_time(bar_n, 0) - t0);
-        painter.vline(
+        let bx = x(s.map.beat_time(bar_n, 0) - t0).round() + 0.5;
+        canvas.vline(
             bx,
             ruler.bottom()..=grid_bottom,
-            Stroke::new(1.0, theme::translucent(t.border_strong, 120)),
+            Stroke::new(1.0, theme::ink(t, theme::INK_03)),
         );
         if (bar_n - first_bar) % every == 0 {
-            painter.text(
-                pos2(bx + 2.0, ruler.center().y),
-                Align2::LEFT_CENTER,
+            canvas.text(
+                pos2(bx + 3.0, ruler.top() + 17.0),
+                Align2::LEFT_TOP,
                 bar_n.to_string(),
-                FontId::monospace(9.5),
-                theme::rgb(t.text_muted),
+                bar_font.clone(),
+                theme::ink(t, 77),
             );
         }
     }
 
     // Lanes.
+    let outline = timeline::selection_color(ui, t);
     let mut clicked_shot: Option<(Side, usize)> = None;
     for (lane, lr) in lanes.iter().zip(lane_rects) {
-        let head = Rect::from_min_size(lr.min, vec2(LABEL_W - 4.0, lr.height()));
-        painter.rect_filled(head, CornerRadius::same(2), theme::rgb(t.panel));
         let side_text = match lane.side {
             Side::A => "A",
             Side::B => "B",
         };
+        let head = Rect::from_min_size(lr.min, vec2(timeline::HEADER_W, lr.height()));
+        let playing = c.play == lane.side;
         painter.text(
-            head.left_top() + vec2(6.0, 4.0),
-            Align2::LEFT_TOP,
+            pos2(head.left() + 17.0, head.center().y),
+            Align2::CENTER_CENTER,
             side_text,
-            FontId::proportional(13.0),
-            theme::rgb(if c.play == lane.side {
-                t.accent
-            } else {
-                t.text
-            }),
+            theme::tabular(ui.ctx(), theme::BODY_SIZE),
+            theme::rgb(if playing { t.text } else { t.text_muted }),
         );
-        painter.with_clip_rect(head).text(
-            head.left_top() + vec2(6.0, 22.0),
-            Align2::LEFT_TOP,
+        painter.with_clip_rect(head.shrink2(vec2(2.0, 0.0))).text(
+            pos2(head.left() + 30.0, head.center().y),
+            Align2::LEFT_CENTER,
             &lane.name,
-            FontId::proportional(10.0),
+            theme::font(theme::SMALL_SIZE),
             theme::rgb(t.text_muted),
         );
         let lane_rect = Rect::from_min_max(pos2(lanes_left, lr.top()), lr.max);
         let lp = painter.with_clip_rect(lane_rect);
         let ratio = super::aspect_ratio(lane.plan.aspect);
         for (k, (shot, &(start, dur))) in lane.plan.shots.iter().zip(&lane.timing).enumerate() {
-            let x0 = x(lane.offset + start);
-            let x1 = x(lane.offset + start + dur);
-            let block = Rect::from_min_max(
-                pos2(x0 + 0.5, lr.top() + 2.0),
-                pos2(x1 - 0.5, lr.bottom() - 2.0),
-            );
+            let x0 = x(lane.offset + start).floor();
+            let x1 = x(lane.offset + start + dur).floor() - 1.0;
+            let block = Rect::from_min_max(pos2(x0, lr.top()), pos2(x1.max(x0 + 1.0), lr.bottom()));
             let mark = lane.marks.get(&k).copied();
-            lp.rect_filled(block, CornerRadius::same(2), theme::rgb(t.raised));
-            let th_h = block.height() - 6.0;
-            let th = Rect::from_min_size(
-                block.min + vec2(2.0, 3.0),
-                vec2((th_h * ratio).min(block.width() - 4.0), th_h),
-            );
-            let mut text_left = block.left() + 4.0;
-            if th.width() >= 10.0 && th_h >= 14.0 {
-                if let Some(path) = s.clip_path(&shot.clip) {
-                    io.thumbs.paint(
-                        ui,
-                        th,
-                        &path,
-                        f64::from(shot.t_in),
-                        shot.cx,
-                        theme::rgb(t.hover),
-                    );
-                }
-                text_left = th.right() + 3.0;
-            }
-            let text = Rect::from_min_max(pos2(text_left, block.top() + 2.0), block.max);
-            if text.width() > 16.0 {
-                let tp = lp.with_clip_rect(text.intersect(lane_rect));
-                tp.text(
-                    text.min,
-                    Align2::LEFT_TOP,
-                    format!("{} {}", k + 1, shot.clip),
-                    FontId::proportional(10.5),
-                    theme::rgb(t.text),
+            let label = timeline::shot_label(s, shot);
+            timeline::paint_clip(&lp, block, label);
+            if let Some(path) = s.clip_path(&shot.clip) {
+                timeline::filmstrip(
+                    ui,
+                    io,
+                    block.shrink(1.0),
+                    lane_rect,
+                    &path,
+                    shot.t_in,
+                    shot.cx,
+                    ratio,
+                    m.pps,
                 );
-                if let Some(kind) = mark {
-                    tp.text(
-                        text.min + vec2(0.0, 14.0),
-                        Align2::LEFT_TOP,
-                        kind.label(),
-                        FontId::proportional(9.5),
-                        kind.color(t),
-                    );
-                }
             }
-            match mark {
-                Some(kind) => {
-                    lp.rect_filled(
-                        block,
-                        CornerRadius::same(2),
-                        kind.color(t).gamma_multiply(0.18),
-                    );
-                    lp.rect_stroke(
-                        block,
-                        CornerRadius::same(2),
-                        Stroke::new(2.0, kind.color(t)),
-                        egui::StrokeKind::Inside,
-                    );
-                }
-                None => {
-                    // Unchanged: pushed back so the differences read.
-                    lp.rect_filled(block, CornerRadius::same(2), Color32::from_black_alpha(90));
-                }
+            timeline::paint_clip_border(&lp, block, label);
+            if mark.is_none() {
+                // Unchanged: pushed back so the differences read.
+                lp.rect_filled(
+                    block,
+                    CornerRadius::same(4),
+                    theme::translucent(t.panel, 153),
+                );
             }
+            let name = match mark {
+                Some(kind) => format!("{}  {} · {}", k + 1, shot.clip, kind.label()),
+                None => format!("{}  {}", k + 1, shot.clip),
+            };
+            timeline::paint_name(&lp, block, lane_rect.left(), &name);
             let selected = c
                 .row
                 .and_then(|r| changes.get(r))
@@ -773,12 +818,9 @@ pub(super) fn view(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut U
                     Side::B => ch.b == Some(k),
                 });
             if selected {
-                lp.rect_stroke(
-                    block,
-                    CornerRadius::same(2),
-                    Stroke::new(1.5, theme::rgb(t.text)),
-                    egui::StrokeKind::Outside,
-                );
+                timeline::paint_selected(&lp, block, outline);
+            } else if let Some(kind) = mark {
+                timeline::paint_selected(&lp, block, kind.color(t));
             }
             let id = egui::Id::unique("plan_compare_shot").with((side_text, k));
             let resp = ui.interact(block.intersect(lane_rect), id, Sense::click());
@@ -794,13 +836,20 @@ pub(super) fn view(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut U
             }
             let tip_note = shot.note.clone();
             resp.on_hover_ui(|ui| {
-                ui.label(egui::RichText::new(describe(shot)).strong());
-                ui.label(format!("{} beats · {dur:.2}s", shot.beats));
+                ui.label(
+                    egui::RichText::new(describe(shot))
+                        .font(theme::medium(ui.ctx(), theme::BODY_SIZE))
+                        .color(theme::rgb(t.text)),
+                );
+                ui.label(
+                    egui::RichText::new(format!("{} beats · {dur:.2}s", shot.beats))
+                        .color(theme::rgb(t.text_muted)),
+                );
                 if let Some(kind) = mark {
                     ui.label(egui::RichText::new(kind.label()).color(kind.color(t)));
                 }
                 if !tip_note.is_empty() {
-                    ui.label(egui::RichText::new(tip_note).italics());
+                    ui.label(egui::RichText::new(tip_note).color(theme::rgb(t.text)));
                 }
             });
         }
@@ -808,92 +857,59 @@ pub(super) fn view(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut U
         let (c0, c1) = lane.card;
         if c1 > c0 {
             let block = Rect::from_min_max(
-                pos2(x(lane.offset + c0) + 0.5, lr.top() + 2.0),
-                pos2(x(lane.offset + c1) - 0.5, lr.bottom() - 2.0),
+                pos2(x(lane.offset + c0).floor(), lr.top()),
+                pos2(x(lane.offset + c1).floor() - 1.0, lr.bottom()),
             );
-            lp.rect_filled(block, CornerRadius::same(2), theme::rgb(t.hover));
-            lp.with_clip_rect(block.intersect(lane_rect)).text(
-                block.left_top() + vec2(4.0, 3.0),
-                Align2::LEFT_TOP,
-                "END CARD",
-                FontId::proportional(9.5),
-                theme::rgb(t.text_muted),
-            );
+            timeline::paint_clip(&lp, block, timeline::GRAPHIC_CLIP);
+            timeline::paint_clip_border(&lp, block, timeline::GRAPHIC_CLIP);
+            timeline::paint_name(&lp, block, lane_rect.left(), "End card");
         }
-        // The playhead, on the side the viewer plays.
+    }
+    // The playhead, on the side the viewer plays.
+    for lane in &lanes {
         if lane.cut.is_loaded(io.player) {
             let px = x(lane.offset + io.player.position() as f32);
-            painter.vline(
-                px,
-                ruler.top()..=grid_bottom,
-                Stroke::new(1.5, theme::rgb(t.accent)),
-            );
-            painter.text(
-                pos2(px, ruler.top()),
-                Align2::CENTER_TOP,
-                "▼",
-                FontId::proportional(9.0),
-                theme::rgb(t.accent),
-            );
+            timeline::paint_playhead(&canvas, px, ruler.top(), grid_bottom, theme::rgb(t.accent));
         }
     }
 
     // The diff list.
-    painter.rect_filled(list, CornerRadius::same(2), theme::rgb(t.panel));
+    painter.vline(list.left() + 0.5, list.y_range(), theme::ink_line(t));
     let mut clicked_row = None;
-    ui.scope_builder(egui::UiBuilder::new().max_rect(list.shrink(6.0)), |ui| {
-        ui.label(
-            egui::RichText::new(format!("A {}  →  B {}", s.name, c.label))
-                .size(11.0)
-                .strong()
-                .color(theme::rgb(t.text)),
-        );
-        egui::ScrollArea::vertical()
-            .id_salt("plan_compare_list")
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                if changes.is_empty() {
-                    ui.label(
-                        egui::RichText::new("Every shot is the same in both.")
-                            .size(11.0)
-                            .color(theme::rgb(t.text_muted)),
-                    );
-                }
-                for (r, ch) in changes.iter().enumerate() {
-                    let slot = match (ch.a, ch.b) {
-                        (_, Some(j)) => format!("B{}", j + 1),
-                        (Some(i), None) => format!("A{}", i + 1),
-                        (None, None) => String::new(),
-                    };
-                    let head = egui::RichText::new(format!(
-                        "{slot:<4} {:<8} {}",
-                        ch.kind.label(),
-                        ch.detail
-                    ))
-                    .size(11.0)
-                    .color(ch.kind.color(t));
-                    let resp = ui.selectable_label(c.row == Some(r), head);
-                    if resp.clicked() {
-                        clicked_row = Some(r);
+    ui.scope_builder(
+        egui::UiBuilder::new().max_rect(list.shrink2(vec2(theme::SPACE_SM, theme::SPACE_SM))),
+        |ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
+            ui.label(
+                egui::RichText::new(format!("A {}  →  B {}", s.name, c.label))
+                    .font(theme::medium(ui.ctx(), theme::BODY_SIZE))
+                    .color(theme::rgb(t.text)),
+            );
+            ui.add_space(theme::SPACE_XS);
+            egui::ScrollArea::vertical()
+                .id_salt("plan_compare_list")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    if changes.is_empty() {
+                        ui.label(
+                            egui::RichText::new("Every shot is the same in both.")
+                                .color(theme::rgb(t.text_muted)),
+                        );
                     }
-                    let note = |p: &Plan, k: Option<usize>| {
-                        k.and_then(|k| p.shots.get(k))
-                            .map(|sh| sh.note.clone())
-                            .filter(|n| !n.is_empty())
-                    };
-                    for (side, n) in [("A", note(&s.plan, ch.a)), ("B", note(&c.plan, ch.b))] {
-                        if let Some(n) = n {
-                            ui.label(
-                                egui::RichText::new(format!("   {side}: {n}"))
-                                    .size(10.0)
-                                    .italics()
-                                    .color(theme::rgb(t.text_faint)),
-                            );
+                    for (r, ch) in changes.iter().enumerate() {
+                        let note = |p: &Plan, k: Option<usize>| {
+                            k.and_then(|k| p.shots.get(k))
+                                .map(|sh| sh.note.clone())
+                                .filter(|n| !n.is_empty())
+                        };
+                        let notes = [("A", note(&s.plan, ch.a)), ("B", note(&c.plan, ch.b))];
+                        if diff_row(ui, t, ch, c.row == Some(r), &notes).clicked() {
+                            clicked_row = Some(r);
                         }
                     }
-                }
-            });
-    });
+                });
+        },
+    );
     ui.allocate_rect(rect, Sense::hover());
 
     // What the clicks do.
@@ -938,6 +954,105 @@ pub(super) fn view(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut U
     } else if do_adopt {
         adopt(state, s, io);
     }
+}
+
+/// One row of the diff list: the kind as a tinted badge, the slot and what
+/// changed, then each side's note; ink 8 % under the pointer, the selected
+/// fill when picked.
+fn diff_row(
+    ui: &mut Ui,
+    t: &Palette,
+    ch: &Change,
+    selected: bool,
+    notes: &[(&str, Option<String>); 2],
+) -> egui::Response {
+    let slot = match (ch.a, ch.b) {
+        (_, Some(j)) => format!("B{}", j + 1),
+        (Some(i), None) => format!("A{}", i + 1),
+        (None, None) => String::new(),
+    };
+    let width = ui.available_width();
+    let text_w = width - KIND_W - SLOT_W - theme::SPACE_SM * 2.0;
+    let detail = ui.painter().layout(
+        ch.detail.clone(),
+        theme::font(theme::BODY_SIZE),
+        theme::rgb(t.text),
+        text_w.max(40.0),
+    );
+    let note_galleys: Vec<_> = notes
+        .iter()
+        .filter_map(|(side, n)| {
+            n.as_ref().map(|n| {
+                ui.painter().layout(
+                    format!("{side}: {n}"),
+                    theme::font(theme::SMALL_SIZE),
+                    theme::rgb(t.text_muted),
+                    text_w.max(40.0),
+                )
+            })
+        })
+        .collect();
+    let height = theme::SPACE_SM
+        + detail.size().y.max(20.0)
+        + note_galleys.iter().map(|g| g.size().y + 2.0).sum::<f32>()
+        + theme::SPACE_SM;
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, height), Sense::click());
+    let mut label = format!("{slot} {} {}", ch.kind.label(), ch.detail);
+    for (side, n) in notes {
+        if let Some(n) = n {
+            label.push_str(&format!(" · {side}: {n}"));
+        }
+    }
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &label));
+    let painter = ui.painter();
+    if selected {
+        painter.rect_filled(
+            rect,
+            CornerRadius::same(theme::RADIUS_MD),
+            theme::selected_fill(t),
+        );
+    } else if resp.hovered() {
+        painter.rect_filled(
+            rect,
+            CornerRadius::same(theme::RADIUS_MD),
+            theme::ink_hover(t),
+        );
+    }
+    let top = rect.top() + theme::SPACE_SM;
+    let kind = ch.kind.color(t);
+    let badge = ui.painter().layout_no_wrap(
+        ch.kind.label().to_owned(),
+        theme::medium(ui.ctx(), theme::SMALL_SIZE),
+        kind,
+    );
+    let pill = Rect::from_min_size(
+        pos2(rect.left() + theme::SPACE_SM, top),
+        vec2(badge.size().x + theme::SPACE_SM + theme::SPACE_XS, 20.0),
+    );
+    painter.rect_filled(
+        pill,
+        CornerRadius::same(theme::RADIUS),
+        kind.gamma_multiply(0.15),
+    );
+    painter.galley(pill.center() - badge.size() / 2.0, badge, kind);
+    painter.text(
+        pos2(rect.left() + theme::SPACE_SM + KIND_W, top + 10.0),
+        Align2::LEFT_CENTER,
+        slot,
+        theme::tabular(ui.ctx(), theme::BODY_SIZE),
+        theme::rgb(t.text_muted),
+    );
+    let text_x = rect.left() + theme::SPACE_SM + KIND_W + SLOT_W;
+    let mut y = top + (20.0 - detail.size().y.min(20.0)) / 2.0;
+    let detail_h = detail.size().y.max(20.0);
+    painter.galley(pos2(text_x, y), detail, theme::rgb(t.text));
+    y = top + detail_h + 2.0;
+    for g in note_galleys {
+        let h = g.size().y;
+        painter.galley(pos2(text_x, y), g, theme::rgb(t.text_muted));
+        y += h + 2.0;
+    }
+    resp
 }
 
 /// The compare view's keys: `B` plays the other side, `Shift+C` / `Esc`
