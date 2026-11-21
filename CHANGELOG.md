@@ -24,6 +24,19 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   outline on the panel last clicked, 40 px panel headers, a 44 px icon rail for the
   folded chat and glass buttons over the viewer for a folded browser or inspector.
 
+- The browser's Shots, People and Music tabs restyled as Selects' Project panel: one
+  40 px borderless toolbar of Lucide icon buttons under the tab strip (search, a
+  filter popover holding the minimum score, stacks, hover scrub and card size, the
+  order as a ghost dropdown, smart searches; Tape / Compare / Survey as icon toggles
+  with their keys in the tooltips, folded into one menu when the pane is narrow; the
+  grid / list toggle). Shot cards are Selects' media cards: 16:9 thumbnails at most
+  160 px wide, glass duration, mark, rating and stack badges, the name in 12 px
+  Medium over one muted caption line, a 2 px selection outline (lime while the tab has
+  the keyboard, grey otherwise) and an ink hover; the measures moved to the hover card.
+  List rows are 28 px with a `#525252` selection. People and Music use the same
+  toolbar, cards, 28 px rows and empty states, with hint lines moved into tooltips.
+  New shared helpers: `widgets::dropdown_button` and `widgets::toolbar_row`.
+
 - Timeline playback ends like the render: after the last shot the viewer holds the
   plan's end card for the render's span (`card_bar` to `end_bar`, `Plan::card_span`)
   over the music, and V1 draws it as a block there. Plan compare (A/B): "Compare" in

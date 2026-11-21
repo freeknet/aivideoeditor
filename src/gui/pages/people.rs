@@ -21,7 +21,7 @@
 //! | `Ctrl+M` | merge the selected people into the first |
 //! | `Ctrl+Shift+M` | split the picked segments off as a new person |
 //! | drag segments (or a clip header) onto a card | move them to that person |
-//! | right-click | move to ▸, reference in chat ▸, avoid in plans |
+//! | right-click | move to, reference in chat, avoid in plans |
 //! | `Space` (pointer over the tab) | the confirm queue: `Y` / `N` / `S` |
 //! | `Ctrl+Z` / `Ctrl+Shift+Z` | undo / redo |
 //!
@@ -37,7 +37,7 @@ use egui::{Key, Modifiers, Ui};
 
 use super::PageCtx;
 use crate::gui::app::Action;
-use crate::gui::ui::{keymap, theme, widgets};
+use crate::gui::ui::{icons, keymap, theme, widgets};
 use crate::refs::{Modifier, Reference, Target};
 
 use model::{Group, Order};
@@ -150,6 +150,8 @@ pub(crate) struct State {
     queue: Option<Queue>,
     asked: Option<String>,
     status: String,
+    /// The search field is open in the toolbar.
+    searching: bool,
 }
 
 /// Draws the page into the browser.
@@ -228,68 +230,138 @@ fn keys(ctx: &PageCtx<'_>, state: &mut State, ui: &Ui, hot: bool, ops: &mut Vec<
     });
 }
 
-/// The strip above the grid: queue, range, undo, order, filter.
+/// Height of the toolbar under the tab strip: with the 4 px the workspace
+/// leaves under the strip, Selects' 40 px toolbar.
+const TOOLBAR_H: f32 = theme::PANEL_HEADER_HEIGHT - theme::SPACE_XS;
+
+/// The toolbar under the tab strip, Selects' Project toolbar: search and
+/// order on the left (the search field fills the row while it is open),
+/// confirm, assign and undo on the right.
 fn toolbar(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui, ops: &mut Vec<Op>) {
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = theme::SPACE_XS;
-        let queue_on = state.queue.is_some();
-        if ui
-            .selectable_label(queue_on, text("Confirm", SMALL, theme::rgb(ctx.theme.text)))
-            .on_hover_text("Confirm queue (Space): one doubtful clip at a time, Y / N / S")
-            .clicked()
-        {
-            ops.push(if queue_on {
-                Op::StopQueue
-            } else {
-                Op::StartQueue
-            });
-        }
-        if ui
-            .button(text("Assign range…", SMALL, theme::rgb(ctx.theme.text)))
-            .on_hover_text("Map clip@from-to to a person")
-            .clicked()
-        {
-            ops.push(Op::Open(range_dialog(ctx, state)));
-        }
-        let undo = state
-            .history
-            .last()
-            .map_or_else(|| "Nothing to undo".to_owned(), |l| format!("Undo {l}"));
-        if ui
-            .add_enabled(
-                state.history.last().is_some(),
-                egui::Button::new(text("↶", SMALL, theme::rgb(ctx.theme.text))),
-            )
-            .on_hover_text(format!("{undo} (Ctrl+Z)"))
-            .clicked()
-        {
-            ops.push(Op::Undo);
-        }
-        egui::ComboBox::from_id_salt("people-order")
-            .selected_text(text(state.order.label(), META, theme::rgb(ctx.theme.text)))
-            .width(84.0)
-            .show_ui(ui, |ui| {
-                for o in Order::ALL {
-                    ui.selectable_value(&mut state.order, o, o.label());
+    let palette = ctx.theme;
+    let preset = ctx.keymap;
+    let keys = |id: &str| {
+        keymap::command(id)
+            .map(|c| c.hint(preset))
+            .unwrap_or_default()
+    };
+    let (queue_keys, undo_keys) = (keys("people-queue"), keys("people-undo"));
+    let range = range_dialog(ctx, state);
+    widgets::toolbar_row(
+        ui,
+        TOOLBAR_H,
+        &mut (&mut *state, &mut *ops),
+        |ui, (state, _)| {
+            let searching = state.searching || !state.filter.is_empty();
+            if searching {
+                let width = (ui.available_width() - theme::CONTROL_HEIGHT - 2.0).max(40.0);
+                let (rect, _) = ui.allocate_exact_size(
+                    egui::vec2(width, theme::CONTROL_HEIGHT),
+                    egui::Sense::hover(),
+                );
+                let field = widgets::field_frame(
+                    ui,
+                    palette,
+                    rect,
+                    &mut state.filter,
+                    "Search people",
+                    Some(icons::SEARCH),
+                );
+                if state.searching
+                    && !field.has_focus()
+                    && !field.lost_focus()
+                    && state.filter.is_empty()
+                {
+                    field.request_focus();
                 }
-            })
-            .response
-            .on_hover_text("Order people by");
-        ui.add(
-            egui::TextEdit::singleline(&mut state.filter)
-                .hint_text("Filter people")
-                .font(theme::font(SMALL))
-                .desired_width(ui.available_width()),
-        );
-    });
-    if !state.status.is_empty() {
-        ui.label(text(
-            state.status.as_str(),
-            META,
-            theme::rgb(ctx.theme.text_muted),
-        ));
-    }
-    ui.add_space(theme::SPACE_XS);
+                if widgets::icon_btn(ui, palette, icons::X, "Close search", "Esc").clicked()
+                    || (field.lost_focus() && state.filter.is_empty())
+                {
+                    state.filter.clear();
+                    state.searching = false;
+                }
+                return;
+            }
+            if widgets::icon_btn(ui, palette, icons::SEARCH, "Search people", "").clicked() {
+                state.searching = true;
+            }
+            let id = ui.make_persistent_id("people-order");
+            let open = egui::Popup::is_id_open(ui.ctx(), id);
+            let response =
+                widgets::dropdown_button(ui, palette, state.order.label(), "Order people by", open);
+            let _ = egui::Popup::menu(&response)
+                .id(id)
+                .width(200.0)
+                .gap(theme::SPACE_XS)
+                .show(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.add_space(theme::SPACE_SM);
+                        widgets::menu_heading(ui, palette, "Order by");
+                    });
+                    for o in Order::ALL {
+                        if widgets::menu_item(ui, palette, None, o.label(), "", state.order == o)
+                            .clicked()
+                        {
+                            state.order = o;
+                        }
+                    }
+                });
+            if !state.status.is_empty() {
+                ui.add_space(theme::SPACE_XS);
+                ui.add(
+                    egui::Label::new(text(
+                        state.status.as_str(),
+                        META,
+                        theme::rgb(palette.text_muted),
+                    ))
+                    .truncate(),
+                );
+            }
+        },
+        |ui, (state, ops)| {
+            let undo = state
+                .history
+                .last()
+                .map_or_else(|| "Nothing to undo".to_owned(), |l| format!("Undo {l}"));
+            let can_undo = state.history.last().is_some();
+            let response = ui
+                .add_enabled_ui(can_undo, |ui| {
+                    widgets::icon_btn(ui, palette, icons::UNDO, &undo, &undo_keys)
+                })
+                .inner;
+            if response.clicked() {
+                ops.push(Op::Undo);
+            }
+            if widgets::icon_btn(
+                ui,
+                palette,
+                icons::TAG,
+                "Assign a clip range to a person (clip@from-to)",
+                "",
+            )
+            .clicked()
+            {
+                ops.push(Op::Open(range.clone()));
+            }
+            let queue_on = state.queue.is_some();
+            if widgets::icon_toggle(
+                ui,
+                palette,
+                icons::CIRCLE_CHECK,
+                "Confirm queue: one doubtful clip at a time, Y / N / S",
+                &queue_keys,
+                queue_on,
+            )
+            .clicked()
+            {
+                ops.push(if queue_on {
+                    Op::StopQueue
+                } else {
+                    Op::StartQueue
+                });
+            }
+        },
+    );
 }
 
 /// The grid and the detail pane, side by side or stacked.
@@ -303,23 +375,41 @@ fn body(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui, ops: &mut Vec<Op>
             .as_ref()
             .is_some_and(|i| i.segments.iter().any(|s| s.caption.is_some()))
     });
-    if empty && captioned {
-        widgets::muted(
+    let indexed = ctx.project.as_ref().is_some_and(|p| p.index.is_some());
+    if !indexed {
+        widgets::empty_state(
             ui,
             ctx.theme,
-            "No people.toml yet. Draft one from the captions, then rename and fix groups here.",
+            icons::USERS,
+            "No shot log yet",
+            "Index the footage to see who is in it.",
+            |_| {},
         );
-        if widgets::button(
+        return;
+    }
+    if empty && captioned {
+        let mut draft = false;
+        widgets::empty_state(
             ui,
             ctx.theme,
-            "Draft from captions",
-            widgets::Emphasis::Primary,
-        )
-        .clicked()
-        {
+            icons::USERS,
+            "No people yet",
+            "Draft them from the captions, then rename and fix the groups here.",
+            |ui| {
+                draft = widgets::button_with(
+                    ui,
+                    ctx.theme,
+                    widgets::ButtonKind::Key,
+                    Some(icons::WAND),
+                    "Draft from captions",
+                )
+                .clicked();
+            },
+        );
+        if draft {
             ops.push(Op::Draft);
         }
-        ui.add_space(theme::SPACE_SM);
+        return;
     }
     let wide = ui.available_width() >= 600.0;
     let panel = if wide {
@@ -337,7 +427,7 @@ fn body(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui, ops: &mut Vec<Op>
         .frame(egui::Frame::new().inner_margin(theme::margin_xy(0.0, 0.0)))
         .show(ui, |ui| grid(ctx, state, ui, ops));
     egui::CentralPanel::default()
-        .frame(egui::Frame::new().inner_margin(theme::margin_xy(theme::SPACE_XS, 0.0)))
+        .frame(egui::Frame::new().inner_margin(theme::margin_xy(0.0, theme::SPACE_SM)))
         .show(ui, |ui| detail(ctx, state, ui, ops));
     if egui::DragAndDrop::has_payload_of_type::<DragSegs>(ui.ctx())
         && let Some(drag) = egui::DragAndDrop::payload::<DragSegs>(ui.ctx())
@@ -346,7 +436,8 @@ fn body(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui, ops: &mut Vec<Op>
     }
 }
 
-/// The person cards.
+/// The person cards, as Selects' media cards: at most [`view::CARD_MAX`]
+/// wide, 12 px apart, 16 px between rows.
 fn grid(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui, ops: &mut Vec<Op>) {
     let Some(project) = ctx.project.as_ref() else {
         return;
@@ -366,15 +457,29 @@ fn grid(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui, ops: &mut Vec<Op>
         .chain((!model.unassigned.clips.is_empty()).then_some(&model.unassigned))
         .collect();
     let names: Vec<String> = model.groups.iter().filter_map(|g| g.name.clone()).collect();
+    if shown.is_empty() {
+        let mut clear = false;
+        widgets::empty_state(ui, ctx.theme, icons::SEARCH, "Nobody matches", "", |ui| {
+            clear = widgets::outline_button(ui, ctx.theme, "Clear search").clicked()
+        });
+        if clear {
+            state.filter.clear();
+            state.searching = false;
+        }
+        return;
+    }
+    let room = theme::SPACE_XS;
     egui::ScrollArea::vertical()
         .id_salt("people-cards")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            let (columns, width) =
-                widgets::grid_layout(ui.available_width(), 150.0, theme::SPACE_XS, shown.len());
-            for row in shown.chunks(columns.max(1)) {
+            ui.add_space(theme::SPACE_SM);
+            let inner = (ui.available_width() - room * 2.0).max(60.0);
+            let (columns, width) = view::columns(inner);
+            for row in shown.chunks(columns) {
                 ui.horizontal_top(|ui| {
-                    ui.spacing_mut().item_spacing.x = theme::SPACE_XS;
+                    ui.add_space(room);
+                    ui.spacing_mut().item_spacing.x = view::GAP_X;
                     for group in row {
                         let column = egui::Layout::top_down(egui::Align::Min);
                         ui.allocate_ui_with_layout(egui::vec2(width, 0.0), column, |ui| {
@@ -398,10 +503,7 @@ fn grid(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui, ops: &mut Vec<Op>
                         });
                     }
                 });
-                ui.add_space(theme::SPACE_XS);
-            }
-            if shown.is_empty() {
-                widgets::muted(ui, ctx.theme, "Nobody matches.");
+                ui.add_space(view::GAP_Y);
             }
         });
 }
@@ -439,10 +541,7 @@ fn card_actions(
     if let (Some(name), Some((old, buffer))) = (&group.name, renaming.as_mut())
         && name == old
     {
-        let rect = egui::Rect::from_min_size(
-            response.rect.left_bottom() - egui::vec2(-theme::SPACE_XS, 50.0),
-            egui::vec2(response.rect.width() - 2.0 * theme::SPACE_XS, 20.0),
-        );
+        let rect = view::name_rect(response.rect);
         let edit = ui
             .put(
                 rect,
@@ -499,7 +598,7 @@ fn card_actions(
             all.extend(others);
             ops.push(Op::Merge(all));
         }
-        ui.menu_button("Merge into ▸", |ui| {
+        ui.menu_button("Merge into", |ui| {
             egui::ScrollArea::vertical()
                 .max_height(320.0)
                 .show(ui, |ui| {
@@ -511,7 +610,7 @@ fn card_actions(
                 });
         });
         ui.separator();
-        ui.menu_button("Reference in chat ▸", |ui| {
+        ui.menu_button("Reference in chat", |ui| {
             for m in Modifier::ALL {
                 if ui.button(m.label()).clicked() {
                     ops.push(Op::Ref(
@@ -541,81 +640,124 @@ fn detail(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui, ops: &mut Vec<O
         return;
     };
     let Some(index) = project.index.as_ref() else {
-        widgets::muted(ui, ctx.theme, "Index the footage to see who is in it.");
         return;
     };
     let model = state.cache.get(project, state.order);
     let Some(focus) = state.focus.name() else {
-        widgets::muted(
+        widgets::empty_state(
             ui,
             ctx.theme,
-            "Select a person to see their clips. Drag segments onto a card to move them; Space starts the confirm queue.",
+            icons::USER,
+            "Select a person",
+            "Their clips and segments show here.",
+            |_| {},
         );
         return;
     };
     let Some(group) = model.group(focus) else {
-        widgets::muted(ui, ctx.theme, "That person is no longer in the map.");
+        widgets::empty_state(
+            ui,
+            ctx.theme,
+            icons::USER,
+            "No longer in the map",
+            "",
+            |_| {},
+        );
         return;
     };
     let ink = theme::rgb(ctx.theme.text);
     let muted = theme::rgb(ctx.theme.text_muted);
+    let preset = ctx.keymap;
+    let keys = |id: &str| {
+        keymap::command(id)
+            .map(|c| c.hint(preset))
+            .unwrap_or_default()
+    };
 
-    // Header.
+    // Header: the name, a rename button, the counts; the sample and the
+    // props in the name's tooltip.
     ui.horizontal(|ui| {
-        ui.label(text(group.label(), theme::TITLE_SIZE - 2.0, ink).strong());
-        if let Some(name) = &group.name
-            && ui
-                .small_button(text("Rename", META, muted))
-                .on_hover_text("Rename (Enter)")
+        ui.set_min_height(theme::CONTROL_HEIGHT);
+        ui.spacing_mut().item_spacing.x = theme::SPACE_XS;
+        let mut about = view::props_line(group);
+        if !group.sample.is_empty() {
+            if !about.is_empty() {
+                about.push('\n');
+            }
+            about.push_str(&format!("“{}”", group.sample));
+        }
+        let name = ui.add(
+            egui::Label::new(
+                egui::RichText::new(group.label())
+                    .font(theme::medium(ui.ctx(), theme::TITLE_SIZE))
+                    .color(ink),
+            )
+            .truncate(),
+        );
+        if !about.is_empty() {
+            name.on_hover_text(about);
+        }
+        ui.label(text(
+            format!("{} clips · {} segments", group.clips.len(), group.segs),
+            SMALL,
+            muted,
+        ));
+        if let Some(n) = &group.name {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if widgets::icon_btn(
+                    ui,
+                    ctx.theme,
+                    icons::PENCIL,
+                    "Rename",
+                    &keys("people-rename"),
+                )
                 .clicked()
-        {
-            ops.push(Op::StartRename(name.clone()));
+                {
+                    ops.push(Op::StartRename(n.clone()));
+                }
+            });
         }
     });
-    let mut meta = format!("{} clips · {} segments", group.clips.len(), group.segs);
-    let props = view::props_line(group);
-    if !props.is_empty() {
-        meta.push_str(" · ");
-        meta.push_str(&props);
-    }
-    ui.label(text(meta, META, muted));
-    if !group.sample.is_empty() {
-        ui.label(text(format!("“{}”", group.sample), META, muted).italics());
-    }
-    if state.selected.len() > 1 {
+    if state.selected.len() > 1 || !state.picked.is_empty() {
         ui.horizontal(|ui| {
-            ui.label(text(
-                format!("{} people selected", state.selected.len()),
-                META,
-                ink,
-            ));
-            if ui
-                .small_button(text(
-                    format!(
-                        "Merge into {}",
-                        state.selected.first().map_or("", String::as_str)
+            ui.spacing_mut().item_spacing.x = theme::SPACE_XS;
+            if state.selected.len() > 1 {
+                let into = state.selected.first().map_or("", String::as_str);
+                let merge = widgets::tip(
+                    widgets::button_with(
+                        ui,
+                        ctx.theme,
+                        widgets::ButtonKind::Outline,
+                        None,
+                        &format!("Merge {} into {into}", state.selected.len() - 1),
                     ),
-                    META,
-                    ink,
-                ))
-                .on_hover_text("Ctrl+M")
-                .clicked()
-            {
-                ops.push(Op::Merge(state.selected.clone()));
+                    ctx.theme,
+                    "Merge the selected people into the first",
+                    &keys("people-merge"),
+                );
+                if merge.clicked() {
+                    ops.push(Op::Merge(state.selected.clone()));
+                }
             }
-        });
-    }
-    if !state.picked.is_empty() {
-        ui.horizontal(|ui| {
-            ui.label(text(format!("{} picked", state.picked.len()), META, ink));
-            if ui
-                .small_button(text("Split off… (Ctrl+Shift+M)", META, ink))
-                .clicked()
-            {
-                ops.push(Op::Open(Dialog::NewPerson {
-                    segs: state.picked.clone(),
-                    name: String::new(),
-                }));
+            if !state.picked.is_empty() {
+                let split = widgets::tip(
+                    widgets::button_with(
+                        ui,
+                        ctx.theme,
+                        widgets::ButtonKind::Outline,
+                        Some(icons::SPLIT),
+                        &format!("Split {} off", state.picked.len()),
+                    ),
+                    ctx.theme,
+                    "Split the picked segments off as a new person",
+                    &keys("people-new-person"),
+                );
+                if split.clicked() {
+                    ops.push(Op::Open(Dialog::NewPerson {
+                        segs: state.picked.clone(),
+                        name: String::new(),
+                    }));
+                }
             }
         });
     }
@@ -629,11 +771,22 @@ fn detail(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui, ops: &mut Vec<O
         | crate::gui::player::Source::Sequence { .. }
         | crate::gui::player::Source::Audio { .. } => None,
     };
+    if order.is_empty() {
+        widgets::empty_state(
+            ui,
+            ctx.theme,
+            icons::FILM,
+            "No footage under this name",
+            "",
+            |_| {},
+        );
+        return;
+    }
     egui::ScrollArea::vertical()
         .id_salt("people-detail")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 1.0;
+            ui.spacing_mut().item_spacing.y = 2.0;
             for row in &group.clips {
                 let caption = format!(
                     "{} · {} segment{}",
@@ -672,10 +825,7 @@ fn detail(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui, ops: &mut Vec<O
                         segment_menu(ui, group, &names, &payload, index, ops);
                     });
                 }
-                ui.add_space(theme::SPACE_XS);
-            }
-            if order.is_empty() {
-                widgets::muted(ui, ctx.theme, "No indexed footage under this name.");
+                ui.add_space(theme::SPACE_SM);
             }
         });
 }
@@ -695,7 +845,7 @@ fn segment_menu(
         META,
         ui.visuals().weak_text_color(),
     ));
-    ui.menu_button("Move to ▸", |ui| {
+    ui.menu_button("Move to", |ui| {
         egui::ScrollArea::vertical()
             .max_height(360.0)
             .show(ui, |ui| {
@@ -726,7 +876,7 @@ fn segment_menu(
         }));
     }
     ui.separator();
-    ui.menu_button("Reference in chat ▸", |ui| {
+    ui.menu_button("Reference in chat", |ui| {
         for m in Modifier::ALL {
             if ui.button(m.label()).clicked() {
                 for &i in segs {
@@ -757,17 +907,19 @@ fn confirm_queue(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui, ops: &mu
     let ink = theme::rgb(ctx.theme.text);
     let muted = theme::rgb(ctx.theme.text_muted);
     let Some(question) = queue.question(&project.people, model) else {
-        ui.add_space(theme::SPACE_MD);
-        ui.label(text("Queue done", theme::TITLE_SIZE, ink).strong());
-        ui.label(text(
-            format!(
+        let mut back = false;
+        widgets::empty_state(
+            ui,
+            ctx.theme,
+            icons::CIRCLE_CHECK,
+            "Queue done",
+            &format!(
                 "{} answered, {} filed. Nothing else has a plausible guess.",
                 queue.answered, queue.confirmed
             ),
-            SMALL,
-            muted,
-        ));
-        if widgets::button(ui, ctx.theme, "Back to people", widgets::Emphasis::Primary).clicked() {
+            |ui| back = widgets::outline_button(ui, ctx.theme, "Back to people").clicked(),
+        );
+        if back {
             ops.push(Op::StopQueue);
         }
         return;
@@ -796,26 +948,34 @@ fn confirm_queue(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui, ops: &mu
         }
     }
 
-    ui.label(text(
-        format!(
-            "Confirm · {} left · {} answered · Esc to stop",
-            queue.left(),
-            queue.answered
-        ),
-        META,
-        muted,
-    ));
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = theme::SPACE_XS;
+        if widgets::icon_btn(ui, ctx.theme, icons::X, "Stop confirming", "Esc").clicked() {
+            ops.push(Op::StopQueue);
+        }
+        ui.label(
+            egui::RichText::new(format!("Confirm · {} left", queue.left()))
+                .font(theme::medium(ui.ctx(), theme::BODY_SIZE))
+                .color(ink),
+        );
+        ui.label(text(format!("{} answered", queue.answered), SMALL, muted));
+    });
     ui.add_space(theme::SPACE_XS);
     let palette = ctx.theme;
     let strip = |thumbs: &mut crate::gui::thumbs::Thumbs, ui: &mut Ui, segs: &[usize]| {
         let width = ui.available_width();
-        let cell = ((width - 3.0 * 2.0) / 4.0).max(10.0);
-        let (rect, _) =
-            ui.allocate_exact_size(egui::vec2(width, cell * 1.25), egui::Sense::hover());
+        let cell = ((width - 3.0) / 4.0).max(10.0);
+        let height = (width * 9.0 / 16.0).round();
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+        ui.painter().rect_filled(
+            rect,
+            egui::CornerRadius::same(theme::RADIUS_XS),
+            theme::rgb(palette.raised),
+        );
         for (k, &i) in segs.iter().take(4).enumerate() {
             let r = egui::Rect::from_min_size(
-                rect.min + egui::vec2(k as f32 * (cell + 2.0), 0.0),
-                egui::vec2(cell, cell * 1.25),
+                rect.min + egui::vec2(k as f32 * (cell + 1.0), 0.0),
+                egui::vec2(cell, height),
             );
             view::frame(ui, thumbs, palette, r, index, model, i);
         }
@@ -850,22 +1010,19 @@ fn confirm_queue(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui, ops: &mu
         ui.label(text(p.sample.as_str(), SMALL, ink));
     }
     ui.add_space(theme::SPACE_SM);
-    ui.label(
-        text(
-            format!("Is this {}?", question.guess.0),
-            theme::TITLE_SIZE,
-            ink,
-        )
-        .strong(),
-    );
-    ui.label(text(
-        format!(
-            "likeness {:.0}% (caption words, prop, recorded nearby)",
-            question.guess.1 * 100.0
-        ),
-        META,
-        muted,
-    ));
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(format!("Is this {}?", question.guess.0))
+                .font(theme::medium(ui.ctx(), theme::TITLE_SIZE))
+                .color(ink),
+        );
+        ui.label(text(
+            format!("{:.0}% alike", question.guess.1 * 100.0),
+            SMALL,
+            muted,
+        ))
+        .on_hover_text("From the caption words, the prop, and what was recorded nearby");
+    });
     if let Some(guess) = model.group(Some(&question.guess.0)) {
         strip(ctx.thumbs, ui, &guess.strip);
         if !guess.sample.is_empty() {
@@ -873,24 +1030,35 @@ fn confirm_queue(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui, ops: &mu
         }
     }
     ui.add_space(theme::SPACE_SM);
+    let preset = ctx.keymap;
     ui.horizontal(|ui| {
-        if widgets::button(ui, ctx.theme, "Yes  Y", widgets::Emphasis::Primary).clicked() {
-            ops.push(Op::Answer(Answer::Yes));
-        }
-        if widgets::button(ui, ctx.theme, "No  N", widgets::Emphasis::Secondary).clicked() {
-            ops.push(Op::Answer(Answer::No));
-        }
-        if widgets::button(ui, ctx.theme, "Not sure  S", widgets::Emphasis::Secondary).clicked() {
-            ops.push(Op::Answer(Answer::Skip));
+        ui.spacing_mut().item_spacing.x = theme::SPACE_XS;
+        for (kind, label, id, answer) in [
+            (widgets::ButtonKind::Key, "Yes", "people-yes", Answer::Yes),
+            (widgets::ButtonKind::Outline, "No", "people-no", Answer::No),
+            (
+                widgets::ButtonKind::Outline,
+                "Not sure",
+                "people-skip",
+                Answer::Skip,
+            ),
+        ] {
+            let keys = keymap::command(id)
+                .map(|c| c.hint(preset))
+                .unwrap_or_default();
+            let button = widgets::button_with(ui, ctx.theme, kind, None, label);
+            if widgets::tip(button, ctx.theme, label, &keys).clicked() {
+                ops.push(Op::Answer(answer));
+            }
         }
     });
     if !question.others.is_empty() {
         ui.add_space(theme::SPACE_XS);
         ui.horizontal_wrapped(|ui| {
-            ui.label(text("Or it is:", META, muted));
+            ui.label(text("Or it is", SMALL, muted));
             for (name, score) in &question.others {
-                if ui
-                    .small_button(text(format!("{name} {:.0}%", score * 100.0), META, ink))
+                let label = format!("{name} {:.0}%", score * 100.0);
+                if widgets::button_with(ui, ctx.theme, widgets::ButtonKind::Ghost, None, &label)
                     .clicked()
                 {
                     ops.push(Op::AnswerAs(name.clone()));
