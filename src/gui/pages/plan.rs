@@ -60,7 +60,7 @@ use crate::beats::MusicMap;
 use crate::gui::app::Action;
 use crate::gui::player::{EndCard, Player, SeqShot, Source};
 use crate::gui::thumbs::Thumbs;
-use crate::gui::ui::theme;
+use crate::gui::ui::{icons, theme, widgets};
 use crate::plan::{Aspect, Plan, Problem};
 use crate::project::Project;
 use crate::refs::{Reference, Target};
@@ -78,6 +78,12 @@ const ALTERNATIVES: usize = 8;
 const LOCK_STALE: Duration = Duration::from_secs(300);
 /// Width of the comments list beside the tracks.
 const COMMENTS_W: f32 = 300.0;
+/// Height of the check bar along the panel's foot.
+const CHECK_H: f32 = 36.0;
+/// Height of the selected shot's row.
+const SELECTION_H: f32 = 40.0;
+/// Height of the alternatives strip.
+const ALTS_H: f32 = 104.0;
 
 /// The pointer tool.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -87,6 +93,10 @@ enum Tool {
     Select,
     /// Drag slips the in-point.
     Slip,
+    /// Click zooms in, Alt-click out.
+    Zoom,
+    /// Drag scrolls.
+    Hand,
 }
 
 /// A drag in progress.
@@ -174,6 +184,9 @@ struct View {
     follow: bool,
     /// A span (seconds) to scroll into view on the next frame.
     reveal: Option<(f32, f32)>,
+    /// Where the playhead was when the viewer last played this plan: drawn
+    /// as a quiet mark while the viewer shows something else.
+    parked: f32,
 }
 
 impl Default for View {
@@ -184,6 +197,7 @@ impl Default for View {
             fit: true,
             follow: true,
             reveal: None,
+            parked: 0.0,
         }
     }
 }
@@ -703,8 +717,7 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
     housekeeping(state, project, jobs, player);
     ui.spacing_mut().item_spacing = egui::vec2(6.0, 4.0);
 
-    tabs::strip(state, project, player, palette, actions, ui);
-    header(state, project, jobs, palette, ui);
+    header(state, project, jobs, player, palette, actions, ui);
     draft_window(state, project, jobs, palette, ui.ctx());
     tabs::form_window(state, project, player, palette, ui.ctx());
     if state.locked {
@@ -712,10 +725,13 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
     }
 
     let Some(map) = project.music.as_ref() else {
-        empty(
+        widgets::empty_state(
             ui,
             palette,
-            "No music map yet: run Beats on the Home screen, then draft a plan.",
+            icons::MUSIC,
+            "No music map yet",
+            "Run Beats on the Home screen, then draft a plan.",
+            |_| {},
         );
         return;
     };
@@ -723,15 +739,45 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
         (Some(v), _) => v.plan.clone(),
         (None, Some(p)) => p.clone(),
         (None, None) => {
-            let why = match (&state.load_error, project.plans.is_empty()) {
-                (Some(e), _) => format!("Could not read the plan: {e}"),
-                (None, true) => {
-                    "No plans yet. Draft new… lays one out on the beat grid from the shot log."
-                        .to_owned()
-                }
-                (None, false) => "Pick a plan.".to_owned(),
-            };
-            empty(ui, palette, &why);
+            let mut draft = false;
+            match (&state.load_error, project.plans.is_empty()) {
+                (Some(e), _) => widgets::empty_state(
+                    ui,
+                    palette,
+                    icons::TRIANGLE_ALERT,
+                    "Could not read the plan",
+                    e,
+                    |_| {},
+                ),
+                (None, true) => widgets::empty_state(
+                    ui,
+                    palette,
+                    icons::FILM,
+                    "No plans yet",
+                    "Draft one on the beat grid from the shot log.",
+                    |ui| {
+                        draft = widgets::button_with(
+                            ui,
+                            palette,
+                            widgets::ButtonKind::Secondary,
+                            Some(icons::PLUS),
+                            "Draft new plan",
+                        )
+                        .clicked();
+                    },
+                ),
+                (None, false) => widgets::empty_state(
+                    ui,
+                    palette,
+                    icons::LIST,
+                    "Pick a plan",
+                    "Open one of the tabs above.",
+                    |_| {},
+                ),
+            }
+            if draft {
+                open_draft_form(state, project);
+            }
             return;
         }
     };
@@ -801,8 +847,21 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
         return;
     }
 
-    // Rows, bottom up: check bar, selection bar or alternatives, tracks;
-    // the comments list, when open, takes the right-hand side.
+    // Rows, bottom up: check bar, alternatives, the selected shot, tracks;
+    // the comments list, when open, takes the right-hand side. The panel
+    // inset is bled back so the canvas and rows run edge to edge.
+    let clip = ui.clip_rect();
+    let bleed = |gap: f32| gap.clamp(0.0, theme::PANEL_INSET - 1.0);
+    let whole = egui::Rect::from_min_max(
+        egui::pos2(
+            whole.left() - bleed(whole.left() - clip.left()),
+            whole.top(),
+        ),
+        egui::pos2(
+            whole.right() + bleed(clip.right() - whole.right()),
+            whole.bottom() + bleed(clip.bottom() - whole.bottom()),
+        ),
+    );
     let side_w = if state.show_comments {
         COMMENTS_W.min(whole.width() * 0.4)
     } else {
@@ -810,35 +869,31 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
     };
     let full = egui::Rect::from_min_max(
         whole.min,
-        egui::pos2(
-            whole.right() - side_w - if side_w > 0.0 { 4.0 } else { 0.0 },
-            whole.bottom(),
-        ),
+        egui::pos2(whole.right() - side_w, whole.bottom()),
     );
     let side = egui::Rect::from_min_max(egui::pos2(whole.right() - side_w, whole.top()), whole.max);
-    let check_h = 22.0;
-    let sel_h = 30.0;
-    let alts_h = if state.alts.is_some() { 92.0 } else { 0.0 };
-    let tracks_h = (full.height() - check_h - sel_h - alts_h - 6.0).max(80.0);
+    let check_h = CHECK_H;
+    let sel_h = if s.sel.is_empty() { 0.0 } else { SELECTION_H };
+    let alts_h = if state.alts.is_some() { ALTS_H } else { 0.0 };
+    let tracks_h = (full.height() - check_h - sel_h - alts_h).max(80.0);
     let tracks = egui::Rect::from_min_size(full.min, egui::vec2(full.width(), tracks_h));
-    let mut y = tracks.bottom() + 2.0;
+    let mut y = tracks.bottom();
     let sel_rect =
         egui::Rect::from_min_size(egui::pos2(full.left(), y), egui::vec2(full.width(), sel_h));
-    y += sel_h + 2.0;
+    y += sel_h;
     let alts_rect =
         egui::Rect::from_min_size(egui::pos2(full.left(), y), egui::vec2(full.width(), alts_h));
     y += alts_h;
-    let check_rect = egui::Rect::from_min_size(
-        egui::pos2(full.left(), y + 2.0),
-        egui::vec2(full.width(), check_h),
-    );
+    let check_rect = egui::Rect::from_min_max(egui::pos2(full.left(), y), full.max);
     ui.allocate_rect(whole, egui::Sense::hover());
 
     timeline::tracks(state, &s, &mut io, ui, tracks);
     if side_w > 0.0 {
         comments::panel(state, &s, &mut io, ui, side);
     }
-    strips::selection_bar(state, &s, &mut io, ui, sel_rect);
+    if sel_h > 0.0 {
+        strips::selection_bar(state, &s, &mut io, ui, sel_rect);
+    }
     if state.alts.is_some() {
         strips::alternatives(state, &s, &mut io, ui, alts_rect);
     }
@@ -972,196 +1027,414 @@ fn open_in_player(state: &State, project: &Project, player: &mut Player) {
     }
 }
 
-/// A one-line message where the tracks would be.
-fn empty(ui: &mut egui::Ui, palette: &Palette, text: &str) {
-    ui.add_space(theme::SPACE_LG);
-    ui.vertical_centered(|ui| {
-        ui.label(egui::RichText::new(text).color(theme::rgb(palette.text_muted)));
-    });
+/// What the header's right side shows, read before it is drawn (the tab
+/// strip on the left holds the state mutably while it draws).
+struct HeaderInfo {
+    /// What Undo would undo.
+    undo: Option<String>,
+    /// What Redo would redo.
+    redo: Option<String>,
+    /// Unresolved comments.
+    comments_open: usize,
+    /// The comments list is showing.
+    show_comments: bool,
+    /// The storyboard lane is showing.
+    storyboard: bool,
+    /// What the compare menu offers, when a plan is open.
+    compare: Option<compare::MenuInfo>,
+    /// The open plan's versions, oldest first.
+    versions: Vec<history::Version>,
+    /// The version on show, when not the latest.
+    viewing: Option<u32>,
+    /// The open plan's aspect.
+    aspect: Option<Aspect>,
+    /// Whether the plan can be edited.
+    editable: bool,
+    /// Shots, length, tempo and bars.
+    stats: Option<String>,
+    /// The save line.
+    status: String,
+    /// An unsaved change is waiting.
+    dirty: bool,
+    /// A draft job is running.
+    drafting: Option<String>,
 }
 
-/// The header row: plan picker, versions, draft, aspect, undo, save state.
+/// What the header's right side asked for.
+#[derive(Default)]
+struct HeaderOut {
+    /// Undo was pressed.
+    undo: bool,
+    /// Redo was pressed.
+    redo: bool,
+    /// The comments toggle was pressed.
+    comments: bool,
+    /// The storyboard toggle was pressed.
+    storyboard: bool,
+    /// A version was picked to view.
+    version: Option<history::Version>,
+    /// An aspect was picked.
+    aspect: Option<Aspect>,
+    /// Something was picked in the compare menu.
+    compare: Option<compare::Pick>,
+}
+
+/// Width the header keeps for its right side; the tabs scroll in the rest.
+const HEADER_RIGHT: f32 = 520.0;
+
+/// The panel header: the plan tabs on the left; stats, aspect, versions,
+/// compare, storyboard, comments, undo and redo on the right.
 fn header(
     state: &mut State,
     project: &mut Project,
     jobs: &crate::jobs::Jobs,
+    player: &mut Player,
     palette: &Palette,
+    actions: &mut Vec<Action>,
     ui: &mut egui::Ui,
 ) {
-    let muted = theme::rgb(palette.text_muted);
-    ui.horizontal(|ui| {
-        // Versions.
-        let label = match (&state.viewing, state.versions.last()) {
-            (Some(v), _) => format!("viewing v{}", v.version.n),
-            (None, Some(v)) => format!("v{}", v.n),
-            (None, None) => "v–".to_owned(),
-        };
-        ui.add_enabled_ui(!state.versions.is_empty(), |ui| {
-            ui.menu_button(label, |ui| {
-                ui.set_min_width(300.0);
-                let latest = state.versions.last().map(|v| v.n);
-                for v in state.versions.iter().rev() {
-                    let text = format!(
-                        "v{}  {}  ·  {}{}",
-                        v.n,
-                        v.saved.trim_end_matches(" UTC"),
-                        if v.change.is_empty() {
-                            "save"
-                        } else {
-                            &v.change
-                        },
-                        if Some(v.n) == latest {
-                            "  (current)"
-                        } else {
-                            ""
-                        }
-                    );
-                    if ui
-                        .selectable_label(
-                            state.viewing.as_ref().is_some_and(|w| w.version.n == v.n),
-                            text,
-                        )
-                        .on_hover_text("Show this version read-only; restore it from the banner")
-                        .clicked()
-                    {
-                        match history::load(v) {
-                            Ok(plan) => {
-                                state.viewing = if Some(v.n) == latest {
-                                    None
-                                } else {
-                                    Some(Viewing {
-                                        version: v.clone(),
-                                        plan,
-                                    })
-                                };
-                                state.alts = None;
-                            }
-                            Err(e) => state.status = format!("v{}: {e:#}", v.n),
-                        }
-                        ui.close();
-                    }
-                }
-            })
-            .response
-            .on_hover_text("Versions: every save keeps a numbered copy");
-        });
-        if jobs
-            .running()
-            .any(|j| matches!(j.cmd, crate::commands::Cmd::Plan { .. }))
-            && state.pending_job.is_none()
-        {
-            ui.spinner();
-        }
-        ui.separator();
-
-        // Aspect of the open plan (an edit).
-        if let Some(plan) = state.plan.clone() {
-            let mut aspect = plan.aspect;
-            let editable = state.viewing.is_none() && !state.locked;
-            ui.add_enabled_ui(editable, |ui| {
-                egui::ComboBox::from_id_salt("plan_aspect")
-                    .selected_text(aspect_key(aspect))
-                    .width(54.0)
-                    .show_ui(ui, |ui| {
-                        for a in [Aspect::Vertical, Aspect::Feed, Aspect::Wide] {
-                            ui.selectable_value(&mut aspect, a, aspect_key(a));
-                        }
-                    })
-                    .response
-                    .on_hover_text("Output aspect; crops follow each shot's cx");
-            });
-            if aspect != plan.aspect {
-                state.apply(format!("aspect {}", aspect_key(aspect)), |p| {
-                    p.aspect = aspect;
-                    let half = aspect.crop_frac() / 2.0;
-                    for s in &mut p.shots {
-                        s.cx = s.cx.clamp(half, 1.0 - half);
-                    }
-                    true
-                });
-            }
-            if let Some(map) = project.music.as_ref() {
+    let info = HeaderInfo {
+        undo: state.undo.undo_label().map(str::to_owned),
+        redo: state.undo.redo_label().map(str::to_owned),
+        comments_open: state
+            .plan
+            .as_ref()
+            .map_or(0, |p| p.comments.iter().filter(|c| !c.resolved).count()),
+        show_comments: state.show_comments,
+        storyboard: state.storyboard,
+        compare: compare::menu_info(state, project),
+        versions: state.versions.clone(),
+        viewing: state.viewing.as_ref().map(|v| v.version.n),
+        aspect: state.plan.as_ref().map(|p| p.aspect),
+        editable: state.viewing.is_none() && !state.locked,
+        stats: match (state.plan.as_ref(), project.music.as_ref()) {
+            (Some(plan), Some(map)) => {
                 let len = map.beat_time(plan.end_bar, 0) - map.beat_time(plan.start_bar, 0);
-                ui.label(
-                    egui::RichText::new(format!(
-                        "{} shots · {len:.1}s · {:.0} bpm · bars {}–{}",
-                        plan.shots.len(),
-                        map.bpm,
-                        plan.start_bar,
-                        plan.end_bar
-                    ))
-                    .size(11.5)
-                    .color(muted),
-                );
-            }
-        }
-
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let redo = state.undo.redo_label().map(str::to_owned);
-            let undo = state.undo.undo_label().map(str::to_owned);
-            if ui
-                .add_enabled(redo.is_some(), egui::Button::new("Redo").small())
-                .on_hover_text(format!(
-                    "Redo {} (Ctrl+Shift+Z)",
-                    redo.as_deref().unwrap_or("")
+                Some(format!(
+                    "{} shots · {} · {:.0} bpm · bars {}–{}",
+                    plan.shots.len(),
+                    timeline::timecode(len, false),
+                    map.bpm,
+                    plan.start_bar,
+                    plan.end_bar
                 ))
-                .clicked()
-            {
-                state.redo();
             }
-            if ui
-                .add_enabled(undo.is_some(), egui::Button::new("Undo").small())
-                .on_hover_text(format!("Undo {} (Ctrl+Z)", undo.as_deref().unwrap_or("")))
-                .clicked()
-            {
-                state.undo();
+            (Some(_) | None, _) => None,
+        },
+        status: state.status.clone(),
+        dirty: state.dirty.is_some(),
+        drafting: match &state.pending_job {
+            Some((_, name)) => Some(format!("Drafting {name}…")),
+            None => jobs
+                .running()
+                .any(|j| matches!(j.cmd, crate::commands::Cmd::Plan { .. }))
+                .then(|| "Drafting…".to_owned()),
+        },
+    };
+    let mut out = HeaderOut::default();
+    widgets::panel_bar(
+        ui,
+        palette,
+        |ui| {
+            let room = (ui.available_width() - HEADER_RIGHT).max(160.0);
+            egui::ScrollArea::horizontal()
+                .id_salt("plan_tabs")
+                .max_width(room)
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        tabs::strip(state, project, player, palette, actions, ui);
+                    });
+                });
+        },
+        |ui| out = header_right(ui, palette, &info),
+    );
+    if out.undo {
+        state.undo();
+    }
+    if out.redo {
+        state.redo();
+    }
+    if out.comments {
+        state.show_comments = !state.show_comments;
+        set_page_flag(project, "comments", state.show_comments);
+    }
+    if out.storyboard {
+        state.storyboard = !state.storyboard;
+        set_page_flag(project, "storyboard", state.storyboard);
+    }
+    if let Some(v) = out.version {
+        let latest = state.versions.last().map(|v| v.n);
+        match history::load(&v) {
+            Ok(plan) => {
+                state.viewing = (Some(v.n) != latest).then(|| Viewing {
+                    version: v.clone(),
+                    plan,
+                });
+                state.alts = None;
             }
-            ui.separator();
-            let open = state
-                .plan
-                .as_ref()
-                .map_or(0, |p| p.comments.iter().filter(|c| !c.resolved).count());
-            let label = if open > 0 {
-                format!("Comments {open}")
-            } else {
-                "Comments".to_owned()
-            };
-            if ui
-                .selectable_label(state.show_comments, label)
-                .on_hover_text(
-                    "Comment mode: the list of review comments; F adds one at the playhead",
-                )
-                .clicked()
-            {
-                state.show_comments = !state.show_comments;
-                set_page_flag(project, "comments", state.show_comments);
+            Err(e) => state.status = format!("v{}: {e:#}", v.n),
+        }
+    }
+    if let (Some(aspect), Some(plan)) = (out.aspect, state.plan.as_ref())
+        && aspect != plan.aspect
+    {
+        state.apply(format!("aspect {}", aspect_key(aspect)), |p| {
+            p.aspect = aspect;
+            let half = aspect.crop_frac() / 2.0;
+            for s in &mut p.shots {
+                s.cx = s.cx.clamp(half, 1.0 - half);
             }
-            if ui
-                .selectable_label(state.storyboard, "Storyboard")
-                .on_hover_text("Shot cards with their notes above V1, grouped by song section")
-                .clicked()
-            {
-                state.storyboard = !state.storyboard;
-                set_page_flag(project, "storyboard", state.storyboard);
-            }
-            let saving = state.dirty.is_some();
-            ui.label(
-                egui::RichText::new(if saving {
-                    "unsaved"
-                } else {
-                    state.status.as_str()
-                })
-                .size(11.0)
-                .color(if saving {
-                    theme::rgb(palette.warning)
-                } else if state.status.starts_with("save failed") {
-                    theme::rgb(palette.danger)
-                } else {
-                    muted
-                }),
-            );
+            true
         });
+    }
+    if let Some(pick) = out.compare {
+        compare::take(state, project, pick);
+    }
+}
+
+/// The header's right side, laid out right to left.
+fn header_right(ui: &mut egui::Ui, t: &Palette, info: &HeaderInfo) -> HeaderOut {
+    let mut out = HeaderOut::default();
+    ui.add_enabled_ui(info.redo.is_some(), |ui| {
+        let label = format!("Redo {}", info.redo.as_deref().unwrap_or(""))
+            .trim_end()
+            .to_owned();
+        out.redo = widgets::icon_btn(ui, t, icons::REDO, &label, "Ctrl+Shift+Z").clicked();
     });
+    ui.add_enabled_ui(info.undo.is_some(), |ui| {
+        let label = format!("Undo {}", info.undo.as_deref().unwrap_or(""))
+            .trim_end()
+            .to_owned();
+        out.undo = widgets::icon_btn(ui, t, icons::UNDO, &label, "Ctrl+Z").clicked();
+    });
+    widgets::bar_divider(ui, t);
+    let comments = widgets::icon_toggle(
+        ui,
+        t,
+        icons::MESSAGE_SQUARE,
+        "Comments: review notes pinned to moments of the cut",
+        "F adds one",
+        info.show_comments,
+    );
+    if info.comments_open > 0 {
+        count_badge(ui, t, comments.rect, info.comments_open);
+    }
+    out.comments = comments.clicked();
+    out.storyboard = widgets::icon_toggle(
+        ui,
+        t,
+        icons::LAYOUT_GRID,
+        "Storyboard: shot cards with their notes, by song section",
+        "",
+        info.storyboard,
+    )
+    .clicked();
+    if let Some(menu) = &info.compare {
+        out.compare = compare::menu(ui, t, menu);
+    }
+    widgets::bar_divider(ui, t);
+
+    let muted = theme::rgb(t.text_muted);
+    let small = theme::font(theme::BODY_SIZE);
+    let (status, color) = if info.dirty {
+        ("Unsaved".to_owned(), theme::rgb(t.warning))
+    } else if info.status.starts_with("save failed") {
+        (info.status.clone(), theme::rgb(t.danger))
+    } else {
+        (info.status.clone(), theme::rgb(t.text_faint))
+    };
+    if ui.available_width() > 360.0 {
+        ui.add(
+            egui::Label::new(egui::RichText::new(status).font(small.clone()).color(color))
+                .truncate(),
+        );
+    }
+    // Versions.
+    let label = match (info.viewing, info.versions.last()) {
+        (Some(n), _) => format!("Viewing v{n}"),
+        (None, Some(v)) => format!("v{}", v.n),
+        (None, None) => "v–".to_owned(),
+    };
+    ui.add_enabled_ui(!info.versions.is_empty(), |ui| {
+        let resp = text_menu_button(ui, t, Some(icons::HISTORY), &label);
+        let resp = widgets::tip(resp, t, "Versions: every save keeps a numbered copy", "");
+        let latest = info.versions.last().map(|v| v.n);
+        let _ = egui::Popup::menu(&resp)
+            .width(340.0)
+            .gap(theme::SPACE_XS)
+            .show(|ui| {
+                ui.horizontal(|ui| {
+                    ui.add_space(theme::SPACE_SM);
+                    widgets::menu_heading(ui, t, "Versions");
+                });
+                egui::ScrollArea::vertical()
+                    .max_height(320.0)
+                    .show(ui, |ui| {
+                        for v in info.versions.iter().rev() {
+                            let text = format!(
+                                "v{} · {} · {}",
+                                v.n,
+                                v.saved.trim_end_matches(" UTC"),
+                                if v.change.is_empty() {
+                                    "save"
+                                } else {
+                                    &v.change
+                                },
+                            );
+                            let on = info.viewing.map_or(Some(v.n) == latest, |n| n == v.n);
+                            let keys = if Some(v.n) == latest { "current" } else { "" };
+                            if widgets::menu_item(ui, t, None, &text, keys, on).clicked() {
+                                out.version = Some(v.clone());
+                                ui.close();
+                            }
+                        }
+                    });
+            });
+    });
+    // Aspect.
+    if let Some(aspect) = info.aspect {
+        ui.add_enabled_ui(info.editable, |ui| {
+            let resp = text_menu_button(ui, t, None, aspect_key(aspect));
+            let resp = widgets::tip(resp, t, "Output aspect; crops follow each shot's cx", "");
+            let _ = egui::Popup::menu(&resp)
+                .width(180.0)
+                .gap(theme::SPACE_XS)
+                .show(|ui| {
+                    for (a, glyph) in [
+                        (Aspect::Vertical, icons::SMARTPHONE),
+                        (Aspect::Feed, icons::PORTRAIT),
+                        (Aspect::Wide, icons::MONITOR),
+                    ] {
+                        if widgets::menu_item(ui, t, Some(glyph), aspect_key(a), "", a == aspect)
+                            .clicked()
+                        {
+                            out.aspect = Some(a);
+                            ui.close();
+                        }
+                    }
+                });
+        });
+    }
+    if let Some(stats) = &info.stats
+        && ui.available_width() > 220.0
+    {
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(stats)
+                    .font(theme::tabular(ui.ctx(), theme::BODY_SIZE))
+                    .color(muted),
+            )
+            .truncate(),
+        );
+    }
+    if let Some(drafting) = &info.drafting {
+        ui.label(egui::RichText::new(drafting).font(small).color(muted));
+        ui.spinner();
+    }
+    out
+}
+
+/// A quiet menu trigger in a header: 12 px Medium muted text (and an
+/// optional icon) with a chevron, ink 8 % under the pointer.
+fn text_menu_button(
+    ui: &mut egui::Ui,
+    t: &Palette,
+    glyph: Option<char>,
+    text: &str,
+) -> egui::Response {
+    let font = theme::medium(ui.ctx(), theme::BODY_SIZE);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(text.to_owned(), font, egui::Color32::PLACEHOLDER);
+    let icon_w = if glyph.is_some() {
+        icons::SMALL + theme::SPACE_XS
+    } else {
+        0.0
+    };
+    let size = egui::vec2(
+        theme::SPACE_SM
+            + icon_w
+            + galley.size().x
+            + theme::SPACE_XS
+            + icons::SMALL
+            + theme::SPACE_XS,
+        theme::CONTROL_HEIGHT,
+    );
+    let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), text));
+    let painter = ui.painter();
+    let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
+    if resp.hovered() || open {
+        painter.rect_filled(
+            rect,
+            egui::CornerRadius::same(theme::RADIUS_MD),
+            theme::ink_hover(t),
+        );
+    }
+    let ink = if resp.hovered() || open {
+        theme::rgb(t.text)
+    } else {
+        theme::rgb(t.text_muted)
+    };
+    let mut x = rect.left() + theme::SPACE_SM;
+    if let Some(g) = glyph {
+        icons::paint(
+            painter,
+            egui::Rect::from_min_size(
+                egui::pos2(x, rect.center().y - icons::SMALL / 2.0),
+                egui::Vec2::splat(icons::SMALL),
+            ),
+            g,
+            icons::SMALL,
+            ink,
+        );
+        x += icon_w;
+    }
+    painter.galley(
+        egui::pos2(x, rect.center().y - galley.size().y / 2.0),
+        galley.clone(),
+        ink,
+    );
+    x += galley.size().x + theme::SPACE_XS;
+    icons::paint(
+        painter,
+        egui::Rect::from_min_size(
+            egui::pos2(x, rect.center().y - icons::SMALL / 2.0),
+            egui::Vec2::splat(icons::SMALL),
+        ),
+        icons::CHEVRON_DOWN,
+        icons::SMALL,
+        ink.gamma_multiply(0.7),
+    );
+    resp
+}
+
+/// A count over the top-right corner of an icon button.
+fn count_badge(ui: &egui::Ui, t: &Palette, button: egui::Rect, n: usize) {
+    let text = if n > 99 {
+        "99+".to_owned()
+    } else {
+        n.to_string()
+    };
+    let galley = ui.painter().layout_no_wrap(
+        text,
+        theme::medium(ui.ctx(), theme::TINY_SIZE),
+        theme::rgb(t.text_on_accent),
+    );
+    let w = (galley.size().x + 6.0).max(14.0);
+    let rect = egui::Rect::from_min_size(
+        egui::pos2(button.right() - w + 2.0, button.top() - 1.0),
+        egui::vec2(w, 14.0),
+    );
+    ui.painter()
+        .rect_filled(rect, egui::CornerRadius::same(7), theme::rgb(t.accent));
+    ui.painter().galley(
+        rect.center() - galley.size() / 2.0,
+        galley,
+        theme::rgb(t.text_on_accent),
+    );
 }
 
 /// A boolean page option from the night's settings.
@@ -1188,26 +1461,48 @@ fn set_page_flag(project: &mut Project, key: &str, on: bool) {
 
 /// The banner over the tracks while the assistant holds the plan's lock.
 fn lock_banner(palette: &Palette, ui: &mut egui::Ui) {
+    banner(
+        ui,
+        theme::translucent(palette.accent, 26),
+        icons::LOCK,
+        theme::rgb(palette.accent),
+        |ui| {
+            ui.label(
+                egui::RichText::new(
+                    "Chat is editing this plan. The timeline is read-only until it finishes.",
+                )
+                .font(theme::font(theme::BODY_SIZE))
+                .color(theme::rgb(palette.text)),
+            );
+            ui.spinner();
+        },
+    );
+}
+
+/// A slim notice row under the header: a tinted fill with 8 px corners,
+/// an icon in `ink`, then `add`.
+pub(super) fn banner(
+    ui: &mut egui::Ui,
+    fill: egui::Color32,
+    glyph: char,
+    ink: egui::Color32,
+    add: impl FnOnce(&mut egui::Ui),
+) {
+    ui.add_space(theme::SPACE_XS);
     egui::Frame::new()
-        .fill(theme::translucent(palette.accent, 36))
-        .stroke(egui::Stroke::new(
-            1.0,
-            theme::translucent(palette.accent, 140),
-        ))
-        .corner_radius(egui::CornerRadius::same(4))
-        .inner_margin(egui::Margin::symmetric(8, 3))
+        .fill(fill)
+        .corner_radius(egui::CornerRadius::same(theme::RADIUS_MD))
+        .inner_margin(theme::margin_xy(theme::SPACE_SM, theme::SPACE_XS))
         .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label(
-                    egui::RichText::new(
-                        "Chat is editing this plan. The timeline is read-only until it finishes.",
-                    )
-                    .size(11.5)
-                    .color(theme::rgb(palette.text)),
-                );
+            ui.set_width(ui.available_width());
+            ui.set_min_height(theme::COMPACT_HEIGHT);
+            ui.horizontal_centered(|ui| {
+                ui.spacing_mut().item_spacing.x = theme::SPACE_SM;
+                icons::icon(ui, glyph, icons::SMALL, ink);
+                add(ui);
             });
         });
+    ui.add_space(theme::SPACE_XS);
 }
 
 /// Opens the "Draft new…" form, shaped like the open plan.

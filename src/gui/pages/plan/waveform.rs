@@ -73,6 +73,16 @@ impl Peaks {
         let norm = self.peak.max(1e-6);
         Some((lo / norm, hi / norm))
     }
+
+    /// The loudest sample between `t0` and `t1` seconds as a fraction of
+    /// full scale (not of the track's peak), the larger of |min| and |max|,
+    /// as Selects draws its bars: a column at 1.0 clipped. `None` outside
+    /// the track.
+    pub(super) fn level(&self, t0: f32, t1: f32) -> Option<f32> {
+        let (lo, hi) = self.span(t0, t1)?;
+        let norm = self.peak.max(1e-6);
+        Some((lo.abs().max(hi.abs()) * norm).min(1.0))
+    }
 }
 
 /// The cache, shared with the decode threads.
@@ -145,6 +155,13 @@ mod tests {
         let whole = p.span(0.0, 2.0).ok_or_else(|| anyhow::anyhow!("no span"))?;
         assert!((whole.0 + 1.0).abs() < 1e-6, "the loud half: {whole:?}");
         assert!(p.span(5.0, 6.0).is_none(), "past the end");
+        let level = p
+            .level(0.0, 0.9)
+            .ok_or_else(|| anyhow::anyhow!("no level"))?;
+        assert!(
+            (level - 0.25).abs() < 1e-6,
+            "levels are of full scale, not the peak: {level}"
+        );
         Ok(())
     }
 }
