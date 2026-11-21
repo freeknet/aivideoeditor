@@ -12,6 +12,13 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- A Shot list tab in the inspector, Selects' Transcript for a cut: the open plan's shots
+  in timeline order under their song sections, each with its number, time (MM:SS.s),
+  bar, source segment, caption line, the plan's note and a quiet icon for its
+  `plan::check` problems. Clicking a row selects the shot and seeks the viewer to it,
+  the row under the playhead carries a lime marker while the plan plays, Up / Down walk
+  the rows, Enter plays from one, Delete lifts it through the timeline's undoable lift,
+  `R` and the right-click menu mention it in chat.
 - A design system matched to Selects' dark workspace (`docs/DESIGN.md`): its exact
   tokens (neutral surfaces, white-10 % hairlines, ink overlays, neutral selection,
   lime key, 6/8/10/12/14 px radii, 4 px grid, 10/11/12/14 px type), the Mona Sans

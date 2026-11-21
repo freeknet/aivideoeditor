@@ -73,6 +73,15 @@ impl Plans {
             .and_then(|c| c.plan.as_ref())
     }
 
+    /// The names of the plans that parsed, in file order.
+    pub(super) fn names(&self) -> Vec<String> {
+        self.files
+            .iter()
+            .filter(|c| c.plan.is_some())
+            .map(|c| stem(&c.path))
+            .collect()
+    }
+
     /// Every shot whose source range overlaps `t0..t1` of `clip`.
     pub(super) fn uses(&self, clip: &str, t0: f32, t1: f32, music: Option<&MusicMap>) -> Vec<Use> {
         let mut out = Vec::new();
