@@ -1,255 +1,416 @@
 // ============================================================================
 // Module:       gui::player::transport
-// Description:  The transport bar under the viewer: play/pause, shuttle
-//               speed, timecode, a scrub bar with the I/O range, loop and
-//               volume, all painted (no glyph-font dependence).
+// Description:  The transport under the viewer, as Selects draws it: a 4 px
+//               scrub bar on its top edge, play/skip/loop as ghost icon
+//               buttons, the shuttle speed, a centred timecode in fixed
+//               digit cells, and a slot on the right for settings.
 //
-// Dependencies: egui; super (Player), super::clock
+// Dependencies: egui; super (Player), super::clock,
+//               crate::gui::ui::{icons, theme, widgets}, crate::theme
 // ============================================================================
 
 //! The transport bar.
 //!
-//! One row: `[▶] [×2] 00:00:03:12 [──────●──────] 00:00:12:00 [⟲] [🔊 ▬▬]`.
-//! The scrub bar shows the marked I/O range as a band, shot boundaries of a
-//! cut as ticks, and the playhead as a knob; dragging it scrubs from
-//! thumbnails, releasing lands the decoder on the exact frame.
+//! ```text
+//! ════════════════════════════════════════════════════════════  4 px scrub
+//! [⏮][▶][⏭] 1x        00:00:03:12 / 00:00:12:00        [⟲][⚙]   48 px
+//! ```
+//!
+//! The scrub bar has no knob: a `#404040` track, the played part white,
+//! 6 px under the pointer. It shows the marked I/O range as a lighter band
+//! with key-coloured edges and a cut's shot boundaries as hairline gaps;
+//! dragging scrubs from thumbnails, releasing lands the decoder on the
+//! exact frame. Its hit area reaches 20 px up into the picture, so it adds
+//! no height. The timecode is laid out a digit per fixed cell, because egui
+//! cannot switch on Inter's tabular figures and a running clock must not
+//! jitter. There is no volume slider in the row (Selects has none): it
+//! lives in the settings menu the caller puts on the right.
 
-use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Stroke, Ui, Vec2, pos2, vec2};
+use egui::{Align, Color32, CornerRadius, Layout, Rect, Sense, Ui, Vec2, pos2, vec2};
 
 use super::{Player, clock};
+use crate::gui::ui::{icons, theme, widgets};
+use crate::theme::Palette;
 
-/// Colours for the bar.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct Style {
-    /// Played portion, playhead, active toggles.
-    pub(crate) accent: Color32,
-    /// Primary text and icons.
-    pub(crate) text: Color32,
-    /// Secondary text, idle icons.
-    pub(crate) muted: Color32,
-    /// The unplayed track.
-    pub(crate) track: Color32,
-    /// Button hover fill.
-    pub(crate) hover: Color32,
+/// Height of the transport row (Selects' `h-12`).
+pub(crate) const HEIGHT: f32 = 48.0;
+
+/// The scrub bar's hit area, reaching up into the picture.
+const SCRUB_HIT: f32 = 20.0;
+
+/// The scrub bar's thickness, and under the pointer.
+const SCRUB: f32 = 4.0;
+const SCRUB_HOT: f32 = 6.0;
+
+/// The closest two shot boundaries are drawn on the scrub bar, points; a
+/// cut whose shots average under twice this apart draws none.
+const MIN_TICK_GAP: f32 = 6.0;
+
+/// The timecode's size (`text-sm`).
+const TIMECODE_SIZE: f32 = 14.0;
+
+/// Shuttle speeds offered by the speed menu.
+const SPEEDS: [f64; 4] = [1.0, 2.0, 4.0, 8.0];
+
+/// How far a bar may reach past `ui`'s edge into the panel's inset.
+fn bleed(gap: f32) -> f32 {
+    gap.clamp(0.0, theme::PANEL_INSET)
 }
 
-impl Style {
-    /// A style from the current egui visuals.
-    pub(crate) fn from_visuals(v: &egui::Visuals) -> Self {
-        Self {
-            accent: v.selection.bg_fill,
-            text: v.strong_text_color(),
-            muted: v.weak_text_color(),
-            track: v.widgets.inactive.bg_fill,
-            hover: v.widgets.hovered.bg_fill,
-        }
-    }
+/// The height [`bar`] takes from `ui` when it is the last thing in it:
+/// the row sits on the panel's floor, so the part of it that falls in the
+/// panel's bottom inset is not taken from the content.
+pub(crate) fn reserved(ui: &Ui) -> f32 {
+    let gap = ui.clip_rect().bottom() - ui.available_rect_before_wrap().bottom();
+    HEIGHT - bleed(gap)
 }
 
-/// Row height.
-const HEIGHT: f32 = 28.0;
-
-/// Draws the bar.
-pub(crate) fn bar(p: &mut Player, ui: &mut Ui, style: &Style) {
+/// Draws the bar at the bottom of what is left of `ui`: the scrub bar on
+/// its top edge, transport on the left, the timecode centred, and `right`
+/// laid out right to left at the far end (after the loop toggle).
+pub(crate) fn bar(
+    p: &mut Player,
+    ui: &mut Ui,
+    theme: &Palette,
+    right: impl FnOnce(&mut Ui, &mut Player),
+) {
     let fps = p.fps();
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 6.0;
-        let playing = p.playing();
-        let play = icon_button(ui, style, false, |painter, r, c| {
-            if playing {
-                paint_pause(painter, r, c);
-            } else {
-                paint_play(painter, r, c);
-            }
-        })
-        .on_hover_text("Play / pause (Space)");
-        if play.clicked() {
-            p.set_rate(1.0);
-            p.toggle();
-        }
-        let speed = speed_label(p.rate(), playing);
-        ui.add_sized(
-            vec2(34.0, HEIGHT),
-            egui::Label::new(
-                egui::RichText::new(speed)
-                    .monospace()
-                    .size(11.0)
-                    .color(style.accent),
-            ),
+    let available = ui.available_rect_before_wrap();
+    let (_, _) = ui.allocate_exact_size(vec2(available.width(), reserved(ui)), Sense::hover());
+    // Bleed across the panel's inset, as a header does, so the bar runs
+    // edge to edge and the row sits on the panel's floor.
+    let clip = ui.clip_rect();
+    let left = available.left() - bleed(available.left() - clip.left());
+    let right_edge = available.right() + bleed(clip.right() - available.right());
+    let top = available.top();
+    let strip = Rect::from_min_max(pos2(left, top), pos2(right_edge, top + HEIGHT));
+    let row = Rect::from_min_max(
+        pos2(strip.left() + theme::SPACE_SM, strip.top()),
+        pos2(strip.right() - theme::SPACE_SM, strip.top() + HEIGHT),
+    );
+
+    let mut bar = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(row)
+            .layout(Layout::left_to_right(Align::Center)),
+    );
+    bar.spacing_mut().item_spacing.x = 2.0;
+    let playing = p.playing();
+    let starts = p.seg_starts();
+    let duration = p.duration();
+    // The timecode is centred on the row whatever the side groups hold; a
+    // narrow viewer (the 9:16 column) sheds the skip buttons and the speed,
+    // then the length, rather than draw them under it.
+    let now = clock::timecode(p.position(), fps);
+    let full = format!("{now} / {}", clock::timecode(duration, fps));
+    let painter = ui.painter_at(row);
+    let fit = Fit::choose(row.width(), timecode_width(&painter, &full));
+    if fit == Fit::Full
+        && button(
+            &mut bar,
+            theme,
+            icons::SKIP_BACK,
+            "Previous shot or start",
+            "",
+            false,
         )
-        .on_hover_text("Shuttle: J / K / L, repeat for ×2 ×4 ×8");
-        timecode_label(ui, style.text, &clock::timecode(p.position(), fps));
-        // Everything right of the scrub bar has a fixed width.
-        let right = 92.0 + 6.0 + HEIGHT + 6.0 + HEIGHT + 6.0 + 64.0 + 8.0;
-        let width = (ui.available_width() - right).max(60.0);
-        scrub_bar(p, ui, style, width, fps);
-        timecode_label(ui, style.muted, &clock::timecode(p.duration(), fps));
+        .clicked()
+    {
+        p.seek(skip_target(p.position(), &starts, duration, -1.0));
+    }
+    let (glyph, label) = if playing {
+        (icons::PAUSE, "Pause")
+    } else {
+        (icons::PLAY, "Play")
+    };
+    if play_button(&mut bar, theme, glyph, label).clicked() {
+        p.set_rate(1.0);
+        p.toggle();
+    }
+    if fit == Fit::Full
+        && button(
+            &mut bar,
+            theme,
+            icons::SKIP_FORWARD,
+            "Next shot or end",
+            "",
+            false,
+        )
+        .clicked()
+    {
+        p.seek(skip_target(p.position(), &starts, duration, 1.0));
+    }
+    if fit != Fit::Minimal {
+        speed(&mut bar, theme, p);
+    }
+    bar.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        right(ui, p);
         let looping = p.looping();
-        let lp = icon_button(ui, style, looping, paint_loop).on_hover_text("Loop (Ctrl+L)");
-        if lp.clicked() {
+        if button(ui, theme, icons::REPEAT, "Loop", "Ctrl+L", looping).clicked() {
             p.set_looping(!looping);
         }
-        let muted = p.muted();
-        let volume = p.volume();
-        let level = if muted { 0.0 } else { volume };
-        let mute = icon_button(ui, style, false, move |painter, r, c| {
-            paint_speaker(painter, r, c, level);
-        })
-        .on_hover_text(if muted { "Unmute" } else { "Mute" });
-        if mute.clicked() {
-            p.set_volume(volume, !muted);
-        }
-        if let Some(v) = volume_slider(ui, style, volume, muted) {
-            p.set_volume(v, false);
-        }
     });
+
+    let text = if fit == Fit::Minimal { now } else { full };
+    let shown = paint_timecode(&painter, row.center(), &text, theme::rgb(theme.text_muted));
+    let id = ui.scope_id().with("transport-timecode");
+    let response = ui.interact(shown, id, Sense::hover());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, &text));
+    let _ = response.on_hover_text("Playhead position / length");
+
+    scrub_bar(p, ui, theme, strip, fps);
 }
 
-/// The shuttle indicator: blank at ×1 forward, else direction and speed.
+/// How much of the row fits beside a centred timecode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Fit {
+    /// Skip, play, skip and speed on the left; `now / length`.
+    Full,
+    /// Play and speed; `now / length`.
+    Compact,
+    /// Play only; `now`.
+    Minimal,
+}
+
+impl Fit {
+    /// The most that fits a row `width` wide with a `timecode` that wide.
+    fn choose(width: f32, timecode: f32) -> Self {
+        // The right group: loop and one settings button.
+        const RIGHT: f32 = theme::BAR_CONTROL * 2.0 + 2.0;
+        // The left group, full and compact (speed counted at its minimum).
+        const FULL: f32 = theme::BAR_CONTROL * 4.0 + 6.0;
+        const COMPACT: f32 = theme::BAR_CONTROL * 2.0 + 2.0;
+        let side = (width - timecode) / 2.0 - theme::SPACE_SM;
+        if side >= FULL.max(RIGHT) {
+            Self::Full
+        } else if side >= COMPACT.max(RIGHT) {
+            Self::Compact
+        } else {
+            Self::Minimal
+        }
+    }
+}
+
+/// A transport button: 36 px square, 8 px corners, a 16 px icon muted until
+/// hovered, an ink-10 % hover; `on` shows the neutral selected fill and a
+/// full-strength icon (a toggle that is on).
+pub(crate) fn button(
+    ui: &mut Ui,
+    theme: &Palette,
+    glyph: char,
+    label: &str,
+    keys: &str,
+    on: bool,
+) -> egui::Response {
+    let rest = if on { theme.text } else { theme.text_muted };
+    face(ui, theme, glyph, label, keys, on, rest, theme.text)
+}
+
+/// The play/pause button: a transport button whose icon is always the
+/// foreground colour.
+fn play_button(ui: &mut Ui, theme: &Palette, glyph: char, label: &str) -> egui::Response {
+    face(
+        ui, theme, glyph, label, "Space", false, theme.text, theme.text,
+    )
+}
+
+/// Paints a transport button with the icon going from `rest` to `hot`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a button's look is these eight things; a struct for one private call site would only rename them"
+)]
+fn face(
+    ui: &mut Ui,
+    theme: &Palette,
+    glyph: char,
+    label: &str,
+    keys: &str,
+    on: bool,
+    rest: crate::color::Rgb,
+    hot: crate::color::Rgb,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(theme::BAR_CONTROL), Sense::click());
+    response
+        .widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), on, label));
+    let lift = widgets::hover_t(ui, response.id, response.hovered());
+    let alpha = if on {
+        f32::from(theme::INK_12)
+    } else {
+        f32::from(theme::INK_10) * lift
+    };
+    if alpha > 0.0 {
+        ui.painter().rect_filled(
+            rect,
+            CornerRadius::same(theme::RADIUS_MD),
+            theme::ink(theme, alpha.round() as u8),
+        );
+    }
+    icons::paint(
+        ui.painter(),
+        rect,
+        glyph,
+        icons::SIZE,
+        widgets::blend(rest, hot, lift),
+    );
+    widgets::focus_ring(ui, theme, &response);
+    widgets::tip(response, theme, label, keys)
+}
+
+/// The shuttle speed: `1x` in 12 px muted text, opening the speeds; J/K/L
+/// change it from the keyboard.
+fn speed(ui: &mut Ui, theme: &Palette, p: &mut Player) {
+    let text = speed_label(p.rate(), p.playing());
+    let font = theme::font(theme::BODY_SIZE);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(text.clone(), font, Color32::PLACEHOLDER);
+    let width = (galley.size().x + theme::SPACE_SM * 2.0).max(theme::BAR_CONTROL);
+    let (rect, response) = ui.allocate_exact_size(vec2(width, theme::BAR_CONTROL), Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Speed {text}"))
+    });
+    let lift = widgets::hover_t(ui, response.id, response.hovered());
+    if lift > 0.0 {
+        ui.painter().rect_filled(
+            rect,
+            CornerRadius::same(theme::RADIUS_MD),
+            theme::ink(theme, (f32::from(theme::INK_10) * lift).round() as u8),
+        );
+    }
+    let shuttling = text != "1x";
+    let rest = if shuttling {
+        theme.text
+    } else {
+        theme.text_muted
+    };
+    ui.painter().galley(
+        rect.center() - galley.size() / 2.0,
+        galley,
+        widgets::blend(rest, theme.text, lift),
+    );
+    let response = widgets::tip(response, theme, "Speed", "J / K / L");
+    let _ = egui::Popup::menu(&response)
+        .width(120.0)
+        .gap(theme::SPACE_XS)
+        .align(egui::RectAlign::TOP_START)
+        .show(|ui| {
+            for rate in SPEEDS {
+                let current = p.playing() && (p.rate() - rate).abs() < 1e-9;
+                if widgets::menu_item(ui, theme, None, &format!("{rate:.0}x"), "", current)
+                    .clicked()
+                {
+                    p.set_rate(rate);
+                    p.play();
+                    ui.close();
+                }
+            }
+        });
+}
+
+/// The shuttle speed as Selects writes it: `1x` at normal play or paused,
+/// else the speed with a minus for reverse (`2x`, `-8x`).
 pub(crate) fn speed_label(rate: f64, playing: bool) -> String {
     if !playing || (rate - 1.0).abs() < 1e-9 {
-        return String::new();
+        return "1x".to_owned();
     }
-    let x = rate.abs();
-    let n = if (x - x.round()).abs() < 1e-9 {
-        format!("{x:.0}")
-    } else {
-        format!("{x:.1}")
-    };
+    let x = format!("{:.2}", rate.abs());
+    let n = x.trim_end_matches('0').trim_end_matches('.');
     if rate < 0.0 {
-        format!("«×{n}")
+        format!("-{n}x")
     } else {
-        format!("×{n}»")
+        format!("{n}x")
     }
 }
 
-/// A fixed-width monospace timecode.
-fn timecode_label(ui: &mut Ui, color: Color32, text: &str) {
-    ui.add_sized(
-        vec2(92.0, HEIGHT),
-        egui::Label::new(
-            egui::RichText::new(text)
-                .monospace()
-                .size(12.0)
-                .color(color),
-        ),
-    );
+/// Where the skip buttons go from `pos`: the previous or next shot start
+/// (`dir` negative or positive), else the start or the end. Going back
+/// from just after a boundary skips to the one before it, as players do,
+/// so a double press walks back shot by shot.
+pub(crate) fn skip_target(pos: f64, starts: &[f64], duration: f64, dir: f64) -> f64 {
+    // Within this of a boundary counts as on it.
+    const NEAR: f64 = 0.25;
+    if dir < 0.0 {
+        starts
+            .iter()
+            .copied()
+            .filter(|&t| t < pos - NEAR)
+            .fold(0.0, f64::max)
+    } else {
+        starts
+            .iter()
+            .copied()
+            .filter(|&t| t > pos + 1e-6)
+            .fold(duration, f64::min)
+    }
 }
 
-/// A square button whose face is painted by `face(painter, rect, colour)`.
-fn icon_button(
-    ui: &mut Ui,
-    style: &Style,
-    active: bool,
-    face: impl FnOnce(&egui::Painter, Rect, Color32),
-) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(Vec2::splat(HEIGHT), Sense::click());
-    let painter = ui.painter();
-    if response.hovered() {
-        painter.rect_filled(rect, CornerRadius::same(4), style.hover);
-    }
-    let color = if active {
-        style.accent
-    } else if response.hovered() {
-        style.text
-    } else {
-        style.muted
+/// How wide [`paint_timecode`] lays `text` out.
+fn timecode_width(painter: &egui::Painter, text: &str) -> f32 {
+    let font = theme::tabular(painter.ctx(), TIMECODE_SIZE);
+    let width = |c: char| {
+        painter
+            .layout_no_wrap(c.to_string(), font.clone(), Color32::PLACEHOLDER)
+            .size()
+            .x
     };
-    face(painter, rect.shrink(8.0), color);
-    response
+    let cell = ('0'..='9').map(width).fold(0.0, f32::max);
+    text.chars()
+        .map(|c| if c.is_ascii_digit() { cell } else { width(c) })
+        .sum()
 }
 
-fn paint_play(painter: &egui::Painter, r: Rect, c: Color32) {
-    let pts = vec![
-        pos2(r.left() + 1.0, r.top()),
-        pos2(r.right(), r.center().y),
-        pos2(r.left() + 1.0, r.bottom()),
-    ];
-    painter.add(egui::Shape::convex_polygon(pts, c, Stroke::NONE));
-}
-
-fn paint_pause(painter: &egui::Painter, r: Rect, c: Color32) {
-    let w = r.width() * 0.32;
-    painter.rect_filled(
-        Rect::from_min_size(r.min, vec2(w, r.height())),
-        CornerRadius::same(1),
-        c,
-    );
-    painter.rect_filled(
-        Rect::from_min_size(pos2(r.right() - w, r.top()), vec2(w, r.height())),
-        CornerRadius::same(1),
-        c,
-    );
-}
-
-fn paint_loop(painter: &egui::Painter, r: Rect, c: Color32) {
-    let centre = r.center();
-    let radius = r.width() * 0.45;
-    let pts: Vec<Pos2> = (0..=20)
-        .map(|k| {
-            let a = 0.35 + k as f32 / 20.0 * (std::f32::consts::TAU - 0.9);
-            centre + vec2(a.cos(), a.sin()) * radius
-        })
+/// Paints `text` centred on `centre` in 14 px Inter, each digit in a cell
+/// as wide as the widest digit so a running clock does not jitter; returns
+/// the rect it covered.
+pub(crate) fn paint_timecode(
+    painter: &egui::Painter,
+    centre: egui::Pos2,
+    text: &str,
+    color: Color32,
+) -> Rect {
+    let font = theme::tabular(painter.ctx(), TIMECODE_SIZE);
+    let glyphs: Vec<_> = text
+        .chars()
+        .map(|c| painter.layout_no_wrap(c.to_string(), font.clone(), color))
         .collect();
-    let tip = pts.last().copied().unwrap_or(centre);
-    painter.add(egui::Shape::line(pts, Stroke::new(1.6, c)));
-    painter.add(egui::Shape::convex_polygon(
-        vec![
-            tip + vec2(-3.5, -3.0),
-            tip + vec2(3.0, -1.0),
-            tip + vec2(-1.0, 3.5),
-        ],
-        c,
-        Stroke::NONE,
-    ));
+    let cell = ('0'..='9')
+        .map(|d| {
+            painter
+                .layout_no_wrap(d.to_string(), font.clone(), color)
+                .size()
+                .x
+        })
+        .fold(0.0, f32::max);
+    let widths: Vec<f32> = text
+        .chars()
+        .zip(&glyphs)
+        .map(|(c, g)| if c.is_ascii_digit() { cell } else { g.size().x })
+        .collect();
+    let total: f32 = widths.iter().sum();
+    let height = glyphs.first().map_or(TIMECODE_SIZE, |g| g.size().y);
+    let mut x = (centre.x - total / 2.0).round();
+    let y = (centre.y - height / 2.0).round();
+    for (g, w) in glyphs.into_iter().zip(widths) {
+        let gx = x + (w - g.size().x) / 2.0;
+        painter.galley(pos2(gx, y), g, color);
+        x += w;
+    }
+    Rect::from_center_size(centre, vec2(total, height))
 }
 
-fn paint_speaker(painter: &egui::Painter, r: Rect, c: Color32, level: f32) {
-    let h = r.height();
-    let body = vec![
-        pos2(r.left(), r.top() + h * 0.33),
-        pos2(r.left() + h * 0.3, r.top() + h * 0.33),
-        pos2(r.left() + h * 0.62, r.top()),
-        pos2(r.left() + h * 0.62, r.bottom()),
-        pos2(r.left() + h * 0.3, r.bottom() - h * 0.33),
-        pos2(r.left(), r.bottom() - h * 0.33),
-    ];
-    painter.add(egui::Shape::convex_polygon(body, c, Stroke::NONE));
-    let centre = pos2(r.left() + h * 0.62, r.center().y);
-    if level <= 0.0 {
-        let x = r.right() - h * 0.2;
-        let y = r.center().y;
-        let d = h * 0.18;
-        painter.line_segment(
-            [pos2(x - d, y - d), pos2(x + d, y + d)],
-            Stroke::new(1.4, c),
-        );
-        painter.line_segment(
-            [pos2(x - d, y + d), pos2(x + d, y - d)],
-            Stroke::new(1.4, c),
-        );
-        return;
-    }
-    let waves = if level > 0.5 { 2 } else { 1 };
-    for w in 0..waves {
-        let radius = h * (0.25 + 0.2 * w as f32);
-        let pts: Vec<Pos2> = (0..=10)
-            .map(|k| {
-                let a = -0.9 + k as f32 / 10.0 * 1.8;
-                centre + vec2(a.cos(), a.sin()) * radius
-            })
-            .collect();
-        painter.add(egui::Shape::line(pts, Stroke::new(1.3, c)));
-    }
-}
-
-/// The scrub bar; dragging scrubs.
-fn scrub_bar(p: &mut Player, ui: &mut Ui, style: &Style, width: f32, fps: f64) {
-    let (rect, response) = ui.allocate_exact_size(vec2(width, HEIGHT), Sense::click_and_drag());
+/// The scrub bar on the top edge of `strip`; dragging scrubs.
+fn scrub_bar(p: &mut Player, ui: &mut Ui, theme: &Palette, strip: Rect, fps: f64) {
+    let hit = Rect::from_min_max(
+        pos2(strip.left(), strip.top() - SCRUB_HIT),
+        pos2(strip.right(), strip.top()),
+    );
+    let id = ui.scope_id().with("transport-scrub");
+    let response = ui.interact(hit, id, Sense::click_and_drag());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Slider, true, "Playhead"));
     let d = p.duration().max(1e-3);
-    let track = Rect::from_center_size(rect.center(), vec2(rect.width() - 8.0, 4.0));
-    let x_of = |t: f64| track.left() + (t / d).clamp(0.0, 1.0) as f32 * track.width();
-    let t_of = |x: f32| f64::from(((x - track.left()) / track.width()).clamp(0.0, 1.0)) * d;
+    let x_of = |t: f64| hit.left() + (t / d).clamp(0.0, 1.0) as f32 * hit.width();
+    let t_of = |x: f32| f64::from(((x - hit.left()) / hit.width()).clamp(0.0, 1.0)) * d;
     if response.drag_started() || response.is_pointer_button_down_on() {
         p.set_scrubbing(true);
     }
@@ -261,100 +422,205 @@ fn scrub_bar(p: &mut Player, ui: &mut Ui, style: &Style, width: f32, fps: f64) {
     if response.drag_stopped() || (!response.is_pointer_button_down_on() && !response.dragged()) {
         p.set_scrubbing(false);
     }
-    let painter = ui.painter();
-    painter.rect_filled(track, CornerRadius::same(2), style.track);
-    // The marked range, as a band taller than the track.
+    let hot = widgets::hover_t(ui, id, response.hovered() || response.dragged());
+    let thick = SCRUB + (SCRUB_HOT - SCRUB) * hot;
+    let track = Rect::from_min_max(pos2(hit.left(), hit.bottom() - thick), hit.right_bottom());
+    let painter = ui.painter_at(hit);
+    painter.rect_filled(track, CornerRadius::ZERO, theme::accent_fill(theme));
+    let x = x_of(p.position());
+    painter.rect_filled(
+        Rect::from_min_max(track.min, pos2(x, track.max.y)),
+        CornerRadius::ZERO,
+        theme::rgb(theme.text),
+    );
+    // The marked range: a lighter band over the bar, key-coloured edges.
     let (mi, mo) = p.marks();
     if let Some((i, o)) = p.marked() {
-        let band = Rect::from_min_max(
-            pos2(x_of(i), rect.center().y - 7.0),
-            pos2(x_of(o), rect.center().y + 7.0),
-        );
+        let band = Rect::from_x_y_ranges(x_of(i)..=x_of(o), track.y_range());
         painter.rect_filled(
             band,
-            CornerRadius::same(2),
-            style.accent.gamma_multiply(0.28),
+            CornerRadius::ZERO,
+            theme::translucent(theme.accent, 90),
         );
     }
-    for (mark, dir) in [(mi, 1.0_f32), (mo, -1.0)] {
-        if let Some(t) = mark {
-            let x = x_of(t);
-            let y0 = rect.center().y - 8.0;
-            let y1 = rect.center().y + 8.0;
-            painter.line_segment([pos2(x, y0), pos2(x, y1)], Stroke::new(1.5, style.accent));
-            painter.line_segment(
-                [pos2(x, y0), pos2(x + 4.0 * dir, y0)],
-                Stroke::new(1.5, style.accent),
-            );
-            painter.line_segment(
-                [pos2(x, y1), pos2(x + 4.0 * dir, y1)],
-                Stroke::new(1.5, style.accent),
-            );
+    let key = theme::rgb(theme.accent);
+    for t in [mi, mo].into_iter().flatten() {
+        let mx = x_of(t).round();
+        painter.rect_filled(
+            Rect::from_x_y_ranges((mx - 1.0)..=(mx + 1.0), track.y_range()),
+            CornerRadius::ZERO,
+            key,
+        );
+    }
+    // A cut's shot boundaries: 1 px gaps in the panel colour, only where
+    // they stand apart, and none at all for a tape of hundreds of shots
+    // (they would only dash the bar).
+    let gap = theme::rgb(theme.panel);
+    let starts = p.seg_starts();
+    let sparse = starts.len() as f32 * MIN_TICK_GAP * 2.0 <= track.width();
+    let mut last = f32::NEG_INFINITY;
+    for t in starts.into_iter().filter(|_| sparse) {
+        let sx = x_of(t).round();
+        if sx - last >= MIN_TICK_GAP {
+            painter.vline(sx, track.y_range(), egui::Stroke::new(1.0, gap));
+            last = sx;
         }
     }
-    // Shot boundaries of a cut.
-    for t in p.seg_starts() {
-        let x = x_of(t);
-        painter.line_segment(
-            [pos2(x, track.top() - 3.0), pos2(x, track.bottom() + 3.0)],
-            Stroke::new(1.0, style.muted.gamma_multiply(0.7)),
-        );
-    }
-    let x = x_of(p.position());
-    let played = Rect::from_min_max(track.min, pos2(x, track.max.y));
-    painter.rect_filled(played, CornerRadius::same(2), style.accent);
-    let hot = response.hovered() || response.dragged();
-    painter.circle_filled(
-        pos2(x, rect.center().y),
-        if hot { 6.0 } else { 4.5 },
-        style.text,
-    );
     if response.hovered()
         && !response.dragged()
         && let Some(at) = response.hover_pos()
     {
         let t = t_of(at.x);
-        painter.line_segment(
-            [
-                pos2(at.x, track.top() - 4.0),
-                pos2(at.x, track.bottom() + 4.0),
-            ],
-            Stroke::new(1.0, style.muted),
+        painter.vline(
+            at.x.round(),
+            track.y_range(),
+            egui::Stroke::new(1.0, theme::rgb(theme.text_muted)),
         );
-        response.on_hover_text_at_pointer(clock::timecode(t, fps));
+        let _ = response.on_hover_text_at_pointer(clock::timecode(t, fps));
     }
 }
 
-/// The volume bar; returns a new volume when clicked or dragged.
-fn volume_slider(ui: &mut Ui, style: &Style, volume: f32, muted: bool) -> Option<f32> {
-    let (rect, response) = ui.allocate_exact_size(vec2(64.0, HEIGHT), Sense::click_and_drag());
-    let track = Rect::from_center_size(rect.center(), vec2(rect.width() - 6.0, 3.0));
-    let painter = ui.painter();
-    painter.rect_filled(track, CornerRadius::same(2), style.track);
-    let level = if muted { 0.0 } else { volume };
-    let x = track.left() + level * track.width();
-    painter.rect_filled(
-        Rect::from_min_max(track.min, pos2(x, track.max.y)),
-        CornerRadius::same(2),
-        if muted { style.muted } else { style.text },
+/// A volume button opening [`volume_rows`]: the right-hand slot for a
+/// transport with no settings of its own.
+pub(crate) fn volume_menu(ui: &mut Ui, theme: &Palette, p: &mut Player) {
+    let glyph = if p.muted() {
+        icons::VOLUME_X
+    } else {
+        icons::VOLUME
+    };
+    let response = button(ui, theme, glyph, "Volume", "", false);
+    let _ = egui::Popup::menu(&response)
+        .width(220.0)
+        .gap(theme::SPACE_XS)
+        .align(egui::RectAlign::TOP_END)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| volume_rows(ui, theme, p));
+}
+
+/// The volume controls for a settings menu: a mute row with a check and a
+/// slider cell. Changes go straight to the player.
+pub(crate) fn volume_rows(ui: &mut Ui, theme: &Palette, p: &mut Player) {
+    let muted = p.muted();
+    let mut volume = p.volume();
+    let glyph = if muted {
+        icons::VOLUME_X
+    } else {
+        icons::VOLUME
+    };
+    if widgets::menu_item(ui, theme, Some(glyph), "Mute", "", muted).clicked() {
+        p.set_volume(volume, !muted);
+    }
+    if slider_cell(ui, theme, "Volume", &mut volume) {
+        p.set_volume(volume, false);
+    }
+}
+
+/// Selects' slider cell: a 32 px field (6 px corners, ink-8 % fill), the
+/// label on the left, the percentage on the right, the filled part
+/// foreground at 10 % (15 % hovered, 20 % dragging). Returns whether
+/// `value` (0..1) changed.
+pub(crate) fn slider_cell(ui: &mut Ui, theme: &Palette, label: &str, value: &mut f32) -> bool {
+    let width = ui.available_width().max(160.0);
+    let (rect, response) = ui.allocate_exact_size(
+        vec2(width, theme::CONTROL_HEIGHT + theme::SPACE_XS),
+        Sense::click_and_drag(),
     );
-    painter.circle_filled(pos2(x, rect.center().y), 4.0, style.text);
-    let changed = response.dragged() || response.clicked();
-    let at = response.interact_pointer_pos()?;
-    changed.then(|| ((at.x - track.left()) / track.width()).clamp(0.0, 1.0))
+    response.widget_info(|| egui::WidgetInfo::slider(true, f64::from(*value), label));
+    let mut changed = false;
+    if (response.dragged() || response.clicked())
+        && let Some(at) = response.interact_pointer_pos()
+    {
+        let next = ((at.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
+        if (next - *value).abs() > f32::EPSILON {
+            *value = next;
+            changed = true;
+        }
+    }
+    let radius = CornerRadius::same(theme::RADIUS);
+    let painter = ui.painter();
+    painter.rect_filled(rect, radius, theme::ink(theme, theme::INK_08));
+    let alpha = if response.dragged() {
+        theme::INK_20
+    } else if response.hovered() {
+        theme::INK_15
+    } else {
+        theme::INK_10
+    };
+    let filled = Rect::from_min_max(
+        rect.min,
+        pos2(
+            rect.left() + rect.width() * value.clamp(0.0, 1.0),
+            rect.max.y,
+        ),
+    );
+    painter.rect_filled(filled, radius, theme::ink(theme, alpha));
+    let inset = theme::SPACE_SM + 2.0;
+    let font = theme::font(theme::BODY_SIZE);
+    painter.text(
+        pos2(rect.left() + inset, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        font.clone(),
+        theme::rgb(theme.text),
+    );
+    painter.text(
+        pos2(rect.right() - inset, rect.center().y),
+        egui::Align2::RIGHT_CENTER,
+        format!("{:.0} %", *value * 100.0),
+        theme::tabular(ui.ctx(), theme::BODY_SIZE),
+        theme::rgb(theme.text_muted),
+    );
+    changed
 }
 
 #[cfg(test)]
 mod tests {
-    use super::speed_label;
+    use super::{Fit, skip_target, speed_label};
 
     #[test]
-    fn the_speed_shows_only_off_normal_play() -> anyhow::Result<()> {
-        assert_eq!(speed_label(1.0, true), "", "normal play is blank");
-        assert_eq!(speed_label(4.0, false), "", "paused is blank");
-        assert_eq!(speed_label(2.0, true), "×2»", "fast forward");
-        assert_eq!(speed_label(-8.0, true), "«×8", "fast reverse");
-        assert_eq!(speed_label(-1.0, true), "«×1", "reverse");
+    fn a_narrow_row_sheds_controls_before_the_timecode() -> anyhow::Result<()> {
+        assert_eq!(Fit::choose(900.0, 190.0), Fit::Full, "a wide viewer");
+        assert_eq!(Fit::choose(420.0, 190.0), Fit::Compact, "the 9:16 column");
+        assert_eq!(Fit::choose(300.0, 190.0), Fit::Minimal, "very narrow");
+        Ok(())
+    }
+
+    #[test]
+    fn the_speed_reads_like_selects() -> anyhow::Result<()> {
+        assert_eq!(speed_label(1.0, true), "1x", "normal play");
+        assert_eq!(speed_label(4.0, false), "1x", "paused");
+        assert_eq!(speed_label(2.0, true), "2x", "fast forward");
+        assert_eq!(speed_label(-8.0, true), "-8x", "fast reverse");
+        assert_eq!(speed_label(-1.0, true), "-1x", "reverse");
+        assert_eq!(speed_label(1.5, true), "1.5x", "fast review");
+        assert_eq!(speed_label(1.04, true), "1.04x", "never a bare 1.0x");
+        Ok(())
+    }
+
+    #[test]
+    fn skipping_walks_shot_starts_then_the_ends() -> anyhow::Result<()> {
+        let starts = [2.0, 5.0, 9.0];
+        assert!(
+            (skip_target(3.0, &starts, 12.0, 1.0) - 5.0).abs() < 1e-9,
+            "next"
+        );
+        assert!(
+            (skip_target(9.5, &starts, 12.0, 1.0) - 12.0).abs() < 1e-9,
+            "end"
+        );
+        assert!(
+            (skip_target(6.0, &starts, 12.0, -1.0) - 5.0).abs() < 1e-9,
+            "back"
+        );
+        assert!(
+            (skip_target(5.1, &starts, 12.0, -1.0) - 2.0).abs() < 1e-9,
+            "just past a start goes to the one before"
+        );
+        assert!(skip_target(1.0, &starts, 12.0, -1.0).abs() < 1e-9, "start");
+        assert!(
+            (skip_target(4.0, &[], 12.0, 1.0) - 12.0).abs() < 1e-9,
+            "a clip skips to its end"
+        );
         Ok(())
     }
 }

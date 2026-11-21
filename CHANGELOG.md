@@ -23,6 +23,14 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   and Lucide buttons, edge-to-edge panels with one hairline between them and a focus
   outline on the panel last clicked, 40 px panel headers, a 44 px icon rail for the
   folded chat and glass buttons over the viewer for a folded browser or inspector.
+- The viewer and inspector in Selects' style. The viewer drops its toolbar: the
+  picture is letterboxed on the panel above a 48 px transport with a 4 px knobless
+  scrub bar on its top edge (I/O range and shot boundaries on it), Lucide skip, play
+  and loop buttons, a `1x` speed menu, a centred `HH:MM:SS:FF / HH:MM:SS:FF` timecode
+  in fixed digit cells, and a gear menu holding aspect, guides, the info overlay,
+  preview quality and volume. The inspector gets an Inspector | Facts tab header,
+  12 px label/value rows under hairline sections, neutral links and quality colours,
+  and centred empty states.
 
 - Timeline playback ends like the render: after the last shot the viewer holds the
   plan's end card for the render's span (`card_bar` to `end_bar`, `Plan::card_span`)

@@ -1,9 +1,10 @@
 // ============================================================================
 // Module:       gui::pages::viewer::overlays
 // Description:  Guides drawn over the viewer's frame: title/action safe
-//               areas, the TikTok/Reels interface zones, the info card.
+//               areas, the TikTok/Reels interface zones, the info card and
+//               the reduced-quality badge.
 //
-// Dependencies: egui
+// Dependencies: egui; crate::gui::ui::theme
 // ============================================================================
 
 //! Overlay geometry and painting.
@@ -18,6 +19,8 @@
 //! the bottom, and the like/comment/share column on the right.
 
 use egui::{Color32, CornerRadius, Rect, Stroke, pos2};
+
+use crate::gui::ui::theme;
 
 /// Action-safe fraction of each side.
 pub(crate) const ACTION_SAFE: f32 = 0.93;
@@ -67,7 +70,7 @@ pub(crate) fn paint_safe(painter: &egui::Painter, frame: Rect) {
             r.left_top() + egui::vec2(4.0, 2.0),
             egui::Align2::LEFT_TOP,
             label,
-            egui::FontId::proportional(9.0),
+            theme::font(theme::TINY_SIZE),
             Color32::from_white_alpha(alpha),
         );
     }
@@ -97,34 +100,67 @@ pub(crate) fn paint_social(painter: &egui::Painter, frame: Rect) {
             r.center(),
             egui::Align2::CENTER_CENTER,
             label,
-            egui::FontId::proportional(9.0),
+            theme::font(theme::TINY_SIZE),
             Color32::from_white_alpha(150),
         );
     }
 }
 
-/// Draws a small card of `lines` in the frame's top-left corner.
+/// Draws a small card of `lines` in the frame's bottom-left corner (the
+/// top corners belong to the folded panels' glass buttons): black at 45 %,
+/// 6 px corners, 11 px mono in white.
 pub(crate) fn paint_info(painter: &egui::Painter, frame: Rect, lines: &[String]) {
     if lines.is_empty() {
         return;
     }
-    let font = egui::FontId::monospace(11.0);
+    let font = theme::mono(theme::SMALL_SIZE);
+    let ink = Color32::from_gray(235);
     let galleys: Vec<_> = lines
         .iter()
-        .map(|l| painter.layout_no_wrap(l.clone(), font.clone(), Color32::from_gray(230)))
+        .map(|l| painter.layout_no_wrap(l.clone(), font.clone(), ink))
         .collect();
     let w = galleys.iter().map(|g| g.size().x).fold(0.0, f32::max);
-    let line_h = galleys.first().map_or(13.0, |g| g.size().y);
-    let card = Rect::from_min_size(
-        frame.left_top() + egui::vec2(8.0, 8.0),
-        egui::vec2(w + 14.0, line_h * galleys.len() as f32 + 10.0),
+    let line_h = galleys.first().map_or(14.0, |g| g.size().y);
+    let size = egui::vec2(
+        w + theme::SPACE_MD * 2.0,
+        line_h * galleys.len() as f32 + theme::SPACE_SM * 2.0,
     );
-    painter.rect_filled(card, CornerRadius::same(4), Color32::from_black_alpha(170));
-    let mut y = card.top() + 5.0;
+    let card = Rect::from_min_size(
+        frame.left_bottom() + egui::vec2(theme::SPACE_SM, -theme::SPACE_MD - size.y),
+        size,
+    );
+    painter.rect_filled(
+        card,
+        CornerRadius::same(theme::RADIUS),
+        Color32::from_black_alpha(115),
+    );
+    let mut y = card.top() + theme::SPACE_SM;
     for g in galleys {
-        painter.galley(pos2(card.left() + 7.0, y), g, Color32::WHITE);
+        painter.galley(pos2(card.left() + theme::SPACE_MD, y), g, ink);
         y += line_h;
     }
+}
+
+/// Selects' "Preview quality reduced" badge, bottom right of the frame:
+/// black at 20 %, 4 px corners, 12 px text in white at 50 %.
+pub(crate) fn paint_reduced(painter: &egui::Painter, frame: Rect) {
+    let ink = Color32::from_white_alpha(128);
+    let galley = painter.layout_no_wrap(
+        "Preview quality reduced".to_owned(),
+        theme::font(theme::BODY_SIZE),
+        ink,
+    );
+    let size = galley.size() + egui::vec2(theme::SPACE_SM * 2.0, theme::SPACE_XS * 2.0);
+    let badge = Rect::from_min_size(
+        frame.right_bottom() - egui::vec2(theme::SPACE_SM + size.x, theme::SPACE_MD + size.y),
+        size,
+    );
+    painter.rect_filled(badge, CornerRadius::same(4), Color32::from_black_alpha(51));
+    painter.galley(
+        badge.min + egui::vec2(theme::SPACE_SM, theme::SPACE_XS),
+        galley,
+        ink,
+    );
 }
 
 #[cfg(test)]
