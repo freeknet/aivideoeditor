@@ -827,6 +827,26 @@ pub const COMMANDS: &[Command] = &[
         Scope::Chat,
         Keys::Text("Up / Down, Enter or Tab"),
     ),
+    region("chat-new", "New chat", Scope::Chat, with(CMD_SHIFT, Key::N)),
+    // Ctrl+F is the workspace's search, dispatched before the chat sees it.
+    region(
+        "chat-find",
+        "Find in chat",
+        Scope::Chat,
+        with(CMD_SHIFT, Key::F),
+    ),
+    region(
+        "chat-find-step",
+        "Find in chat: next / previous match",
+        Scope::Chat,
+        Keys::Text("Enter / Shift+Enter"),
+    ),
+    region(
+        "recall-prompt",
+        "Recall an earlier prompt with its references",
+        Scope::Chat,
+        Keys::Text("Up on an empty composer"),
+    ),
     // ---- export ----------------------------------------------------------
     region(
         "deliver-render",

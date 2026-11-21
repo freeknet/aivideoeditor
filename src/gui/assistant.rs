@@ -34,15 +34,26 @@
 //! | [`complete`] | the `@` autocomplete and chip/token merging |
 //! | [`look`] | the chat's own drawing pieces (activity rows, the mode switch) |
 //! | [`markdown`] | the bold/bullet text the model writes |
+//! | [`chats`] | the chat list, tabs, rename / archive / delete |
+//! | [`find`] | find in chat: matches, the counter, highlighting |
 //!
-//! A conversation belongs to one plan and lives in `<work>/chat/<plan>.jsonl`;
-//! switching plans switches conversations, and reopening the night restores
-//! the panel as it was.
+//! A night has any number of chats, each about one plan (an attribute of
+//! the chat, see [`store`]), each with its own log and its own Claude Code
+//! session. The header's Chats menu lists them; a wide panel also shows the
+//! open ones as tabs. Reopening the night restores the chat and tabs that
+//! were open.
+//!
+//! While a reply streams, a sent message waits in a queue ("Waiting to
+//! send") and goes out when the turn ends; "Send now" stops the turn to
+//! send it at once. Arrow Up on an empty composer recalls the chat's
+//! earlier prompts, references included.
 
 mod agent;
+mod chats;
 mod claude_code;
 mod complete;
 mod context;
+mod find;
 mod links;
 mod look;
 mod markdown;
@@ -152,8 +163,10 @@ struct Ask {
 struct Chat {
     /// The night's work folder.
     work: PathBuf,
-    /// The plan (file stem).
+    /// The plan (file stem): `meta.plan`, which never changes.
     plan: String,
+    /// The chat as the index lists it.
+    meta: store::ChatMeta,
     /// The log, in order.
     log: Vec<LogLine>,
     /// A question waiting for an answer.
@@ -170,9 +183,9 @@ impl Chat {
         self.work.join("plans").join(format!("{}.toml", self.plan))
     }
 
-    /// The chat log's path.
-    fn log_path(&self) -> PathBuf {
-        store::chat_path(&self.work, &self.plan)
+    /// The chat's id.
+    fn id(&self) -> &str {
+        &self.meta.id
     }
 
     /// The plan as it is on disk now (re-read when the file changes).
@@ -188,7 +201,7 @@ impl Chat {
 
     /// Appends and persists a log line; returns a write error to show.
     fn push(&mut self, line: LogLine) -> Option<String> {
-        let err = store::append(&self.log_path(), &line)
+        let err = store::append_chat(&self.work, &self.meta, &line)
             .err()
             .map(|e| format!("could not save the conversation: {e:#}"));
         self.log.push(line);
@@ -269,6 +282,27 @@ pub(crate) struct State {
     claude_down: Option<String>,
     /// Contact sheets shown under tool calls.
     images: Sheets,
+    /// The night's chats, and the work folder they were read from.
+    chats: Option<(PathBuf, store::Index)>,
+    /// The chats open as tabs, by id, in order.
+    tabs: Vec<String>,
+    /// How many recent chats the list shows ("Load older" adds more).
+    list_len: usize,
+    /// Whether the list shows the archived chats instead.
+    show_archived: bool,
+    /// A chat being renamed.
+    renaming: Option<chats::Rename>,
+    /// A chat waiting for the delete confirmation, by id.
+    deleting: Option<String>,
+    /// The find bar, while open.
+    find: Option<find::Find>,
+    /// Messages sent while a reply streams, oldest first: each goes out
+    /// when the turn ends.
+    queue: Vec<String>,
+    /// The prompt Arrow Up recalled: how many back (1: the last one).
+    recall: Option<usize>,
+    /// Whether the Chats list is open (it then holds the rename field).
+    list_open: bool,
 }
 
 /// Contact-sheet textures by file (`None`: unreadable).
@@ -303,7 +337,7 @@ pub(crate) fn panel(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
     if state.claude.is_none() {
         state.claude = Some(claude_code::find());
     }
-    let Some(project) = ctx.project.as_ref() else {
+    if ctx.project.is_none() {
         widgets::panel_header(ui, ctx.theme, "Assistant", |_| {});
         widgets::empty_state(
             ui,
@@ -315,10 +349,14 @@ pub(crate) fn panel(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
         );
         return;
     };
-    sync_chat(project, state, &ctx.selection.clone());
+    sync_chat(ctx, state);
     poll(ctx, state, ui.ctx());
+    send_queued(ctx, state, ui.ctx());
+    chats::keys(ctx, state, ui);
 
     header(ctx, state, ui);
+    chats::tab_strip(ctx, state, ui);
+    chats::confirm_delete(ctx, state, ui);
     if state.settings_open {
         settings(ctx, state, ui);
     }
@@ -373,14 +411,33 @@ fn error_row(ctx: &PageCtx<'_>, state: &mut State, ui: &mut Ui, error: &str) {
     });
 }
 
-/// Opens the right conversation: the plan saved for this night, else the
-/// plan of a selected shot, else the first plan.
-fn sync_chat(project: &Project, state: &mut State, selection: &[Reference]) {
-    let stems: Vec<String> = project
+/// The night's plans, by file stem.
+fn plan_stems(project: &Project) -> Vec<String> {
+    project
         .plans
         .iter()
         .filter_map(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
-        .collect();
+        .collect()
+}
+
+/// A per-night option of this panel.
+fn page_value<'a>(project: &'a Project, key: &str) -> Option<&'a toml::Value> {
+    project
+        .settings
+        .pages
+        .get(PAGE_KEY)
+        .and_then(|t| t.get(key))
+}
+
+/// Opens the right conversation: the chat saved for this night, else the
+/// latest chat about the saved plan (or a selected shot's plan, or the
+/// first plan), else a fresh chat about it. Reads the night's chat index
+/// (migrating old per-plan logs) when the night changes.
+fn sync_chat(ctx: &PageCtx<'_>, state: &mut State) {
+    let Some(project) = ctx.project.as_ref() else {
+        return;
+    };
+    let stems = plan_stems(project);
     if let Some(chat) = &state.chat
         && chat.work == project.work
         && stems.contains(&chat.plan)
@@ -390,34 +447,82 @@ fn sync_chat(project: &Project, state: &mut State, selection: &[Reference]) {
     if state.turn.is_some() {
         return;
     }
-    let saved = project
-        .settings
-        .pages
-        .get(PAGE_KEY)
-        .and_then(|t| t.get("plan"))
+    if state
+        .chats
+        .as_ref()
+        .is_none_or(|(work, _)| *work != project.work)
+    {
+        state.chats = Some((project.work.clone(), store::load_index(&project.work)));
+        state.tabs = page_value(project, "tabs")
+            .and_then(toml::Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+        state.queue.clear();
+        state.find = None;
+        state.recall = None;
+        state.renaming = None;
+        state.deleting = None;
+        state.list_len = 0;
+    }
+    let Some((_, index)) = state.chats.as_ref() else {
+        return;
+    };
+    let live = |m: &&store::ChatMeta| !m.archived && stems.contains(&m.plan);
+    let saved = page_value(project, "chat")
         .and_then(toml::Value::as_str)
-        .map(str::to_owned);
-    let selected = selection.iter().find_map(|r| match &r.target {
-        Target::Shot { plan, .. } | Target::Plan { name: plan } => Some(plan.clone()),
-        Target::Segment { .. }
-        | Target::Range { .. }
-        | Target::Frame { .. }
-        | Target::Bars { .. }
-        | Target::Person { .. } => None,
+        .and_then(|id| index.get(id))
+        .filter(live)
+        .cloned();
+    let pick = saved.or_else(|| {
+        let saved_plan = page_value(project, "plan")
+            .and_then(toml::Value::as_str)
+            .map(str::to_owned);
+        let selected = ctx.selection.iter().find_map(|r| match &r.target {
+            Target::Shot { plan, .. } | Target::Plan { name: plan } => Some(plan.clone()),
+            Target::Segment { .. }
+            | Target::Range { .. }
+            | Target::Frame { .. }
+            | Target::Bars { .. }
+            | Target::Person { .. } => None,
+        });
+        let plan = saved_plan
+            .filter(|p| stems.contains(p))
+            .or(selected.filter(|p| stems.contains(p)))
+            .or_else(|| stems.first().cloned())?;
+        Some(
+            index
+                .recent(false)
+                .into_iter()
+                .find(|m| m.plan == plan)
+                .cloned()
+                .unwrap_or_else(|| store::ChatMeta::fresh(index, &plan)),
+        )
     });
-    let plan = saved
-        .filter(|p| stems.contains(p))
-        .or(selected.filter(|p| stems.contains(p)))
-        .or_else(|| stems.first().cloned());
-    state.chat = plan.map(|plan| open_chat(&project.work, &plan));
+    let open: Vec<String> = state
+        .tabs
+        .iter()
+        .filter(|id| index.get(id).as_ref().is_some_and(live))
+        .cloned()
+        .collect();
+    state.tabs = open;
+    if let Some(meta) = &pick
+        && !state.tabs.contains(&meta.id)
+    {
+        state.tabs.push(meta.id.clone());
+    }
+    state.chat = pick.map(|meta| open_chat(&project.work, meta));
     state.cards.clear();
 }
 
-/// Loads the conversation of `plan`.
-fn open_chat(work: &Path, plan: &str) -> Chat {
-    let (log, bad) = store::load(&store::chat_path(work, plan));
+/// Loads chat `meta`'s conversation.
+fn open_chat(work: &Path, meta: store::ChatMeta) -> Chat {
+    let (log, bad) = store::load_chat(work, &meta);
     if bad > 0 {
-        log::warn!("{plan}: {bad} unreadable chat lines skipped");
+        log::warn!("{}: {bad} unreadable chat lines skipped", meta.id);
     }
     let msgs = model::messages(&log);
     // A question still open when the app closed is still open.
@@ -439,7 +544,8 @@ fn open_chat(work: &Path, plan: &str) -> Chat {
         });
     Chat {
         work: work.to_path_buf(),
-        plan: plan.to_owned(),
+        plan: meta.plan.clone(),
+        meta,
         log,
         ask,
         sent_plan: None,
@@ -555,6 +661,8 @@ fn poll(ctx: &mut PageCtx<'_>, state: &mut State, egui_ctx: &egui::Context) {
                     output_tokens: usage.output,
                     cached_tokens: usage.cached,
                     cost_usd: cost,
+                    context_tokens: usage.context,
+                    context_window: usage.window,
                 })
             }
         };
@@ -590,6 +698,7 @@ fn poll(ctx: &mut PageCtx<'_>, state: &mut State, egui_ctx: &egui::Context) {
         if claude {
             claude_turn_over(state);
         }
+        chats::remember(state);
         reload_after_edits(ctx, state);
     }
     if auto_apply(ctx) {
@@ -618,8 +727,11 @@ fn claude_turn_over(state: &mut State) {
         state.session = None;
         return;
     }
-    let (work, plan) = session.key.clone();
-    let file = claude_code::session_file(&work, &plan);
+    let (work, chat) = session.key.clone();
+    let file = claude_code::session_file(&work, &chat);
+    if let Some(dir) = file.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
     if !session.alive() {
         // A session that cannot be resumed is not tried again.
         let _ = std::fs::remove_file(&file);
@@ -665,7 +777,7 @@ fn save_image(chat: &mut Chat, tool_use_id: &str, mime: &str, data: &str) -> Opt
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
         .collect();
-    let file = format!("img/{}-{safe}-{n}.{ext}", chat.plan);
+    let file = format!("img/{}-{safe}-{n}.{ext}", chat.id());
     let path = chat.work.join("chat").join(&file);
     if let Some(dir) = path.parent()
         && let Err(e) = std::fs::create_dir_all(dir)
@@ -726,160 +838,78 @@ fn set_page_option(ctx: &mut PageCtx<'_>, key: &str, value: toml::Value) -> Opti
         .map(|e| format!("could not save ave.toml: {e:#}"))
 }
 
-/// The panel's top row: plan, tabs, new chat, settings.
+/// The panel's top row: the Chats button and list, the chat's title (or
+/// the find bar), then find, history and settings.
 fn header(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
-    let stems: Vec<String> = ctx
-        .project
-        .as_ref()
-        .map(|p| {
-            p.plans
-                .iter()
-                .filter_map(|x| x.file_stem().map(|s| s.to_string_lossy().into_owned()))
-                .collect()
-        })
-        .unwrap_or_default();
     let theme = ctx.theme;
-    let mut switch_to = None;
-    let mut new_chat = false;
-    let current = state
-        .chat
-        .as_ref()
-        .map(|c| c.plan.clone())
-        .unwrap_or_default();
-    let idle = state.turn.is_none();
-    let can_reset = idle && state.chat.as_ref().is_some_and(|c| !c.log.is_empty());
-    let tab = state.tab;
+    let find_keys = crate::gui::ui::keymap::command("chat-find")
+        .map_or_else(String::new, |c| c.hint(ctx.keymap));
     widgets::panel_bar(
         ui,
         theme,
         |ui| {
-            // Selects' Chats button: the conversation list. Here a
-            // conversation belongs to a plan, so the list is the plans.
-            let id = ui.make_persistent_id("assistant-chats");
-            let open = egui::Popup::is_id_open(ui.ctx(), id);
-            let button = widgets::icon_toggle_sized(
-                ui,
-                theme,
-                icons::MENU,
-                "Chats: the plan this conversation is about",
-                "",
-                open,
-                32.0,
-            );
-            let _ = egui::Popup::menu(&button)
-                .id(id)
-                .width(280.0)
-                .gap(SPACE_XS)
-                .show(|ui| {
-                    ui.horizontal(|ui| {
-                        ui.add_space(SPACE_SM);
-                        widgets::menu_heading(ui, theme, "Plans");
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            let r = ui
-                                .add_enabled_ui(can_reset, |ui| {
-                                    widgets::button_with(
-                                        ui,
-                                        theme,
-                                        widgets::ButtonKind::Ghost,
-                                        Some(icons::PLUS),
-                                        "New chat",
-                                    )
-                                })
-                                .inner;
-                            if widgets::tip(
-                                r,
-                                theme,
-                                "Start a fresh conversation (the old one is kept beside it)",
-                                "",
-                            )
-                            .clicked()
-                            {
-                                new_chat = true;
-                                ui.close();
-                            }
-                        });
-                    });
-                    widgets::menu_separator(ui, theme);
-                    ui.add_enabled_ui(idle, |ui| {
-                        for s in &stems {
-                            if widgets::menu_item(ui, theme, None, s, "", *s == current).clicked() {
-                                if *s != current {
-                                    switch_to = Some(s.clone());
-                                }
-                                ui.close();
-                            }
-                        }
-                    });
+            chats::menu(ctx, state, ui);
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                if widgets::icon_toggle_sized(
+                    ui,
+                    theme,
+                    icons::SETTINGS_2,
+                    "Assistant settings: model key, local server, autonomy",
+                    "",
+                    state.settings_open,
+                    32.0,
+                )
+                .clicked()
+                {
+                    state.settings_open = !state.settings_open;
+                }
+                if widgets::icon_toggle_sized(
+                    ui,
+                    theme,
+                    icons::HISTORY,
+                    "History: applied proposals and plan versions",
+                    "",
+                    state.tab == Tab::History,
+                    32.0,
+                )
+                .clicked()
+                {
+                    state.tab = match state.tab {
+                        Tab::Chat => Tab::History,
+                        Tab::History => Tab::Chat,
+                    };
+                }
+                let finding = state.find.is_some() && state.tab == Tab::Chat;
+                if widgets::icon_toggle_sized(
+                    ui,
+                    theme,
+                    icons::SEARCH,
+                    "Find in chat",
+                    &find_keys,
+                    finding,
+                    32.0,
+                )
+                .clicked()
+                {
+                    if finding {
+                        state.find = None;
+                    } else {
+                        chats::open_find(state);
+                    }
+                }
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    if finding {
+                        find::bar(ctx, state, ui);
+                    } else {
+                        chats::title(ctx, state, ui);
+                    }
                 });
-            let title = match tab {
-                Tab::Chat => current.clone(),
-                Tab::History => format!("History of {current}"),
-            };
-            let mut job = egui::text::LayoutJob::simple_singleline(
-                title,
-                theme::font(theme::BODY_SIZE),
-                theme::rgb(theme.text_muted),
-            );
-            job.wrap.max_width = (ui.available_width() - 32.0 * 2.0 - SPACE_SM * 2.0).max(0.0);
-            job.wrap.max_rows = 1;
-            job.wrap.break_anywhere = true;
-            ui.add_space(SPACE_XS);
-            ui.add(egui::Label::new(job).selectable(false))
-                .on_hover_text("The plan this conversation is about");
+            });
         },
-        |ui| {
-            if widgets::icon_toggle_sized(
-                ui,
-                theme,
-                icons::SETTINGS_2,
-                "Assistant settings: model key, local server, autonomy",
-                "",
-                state.settings_open,
-                32.0,
-            )
-            .clicked()
-            {
-                state.settings_open = !state.settings_open;
-            }
-            if widgets::icon_toggle_sized(
-                ui,
-                theme,
-                icons::HISTORY,
-                "History: applied proposals and plan versions",
-                "",
-                state.tab == Tab::History,
-                32.0,
-            )
-            .clicked()
-            {
-                state.tab = match state.tab {
-                    Tab::Chat => Tab::History,
-                    Tab::History => Tab::Chat,
-                };
-            }
-        },
+        |_| {},
     );
-    if new_chat && let Some(chat) = state.chat.as_mut() {
-        let old = chat.log_path();
-        let kept = old.with_file_name(format!("{}.{}.jsonl", chat.plan, model::now()));
-        // A new conversation is a new Claude Code session too.
-        state.session = None;
-        let _ = std::fs::remove_file(claude_code::session_file(&chat.work, &chat.plan));
-        if let Err(e) = std::fs::rename(&old, &kept) {
-            state.error = Some(format!("could not archive the conversation: {e}"));
-        } else {
-            *chat = open_chat(&chat.work.clone(), &chat.plan.clone());
-            state.cards.clear();
-            state.tab = Tab::Chat;
-        }
-    }
-    if let Some(plan) = switch_to
-        && let Some(project) = ctx.project.as_ref()
-    {
-        state.chat = Some(open_chat(&project.work, &plan));
-        state.cards.clear();
-        state.error = set_page_option(ctx, "plan", toml::Value::String(plan));
-    }
 }
 
 /// The settings strip: key, local server, autonomy.
@@ -1163,11 +1193,17 @@ fn composer(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                 state.dismissed = Some(state.input.clone());
             }
         });
+    } else if focused && state.mode == Mode::Chat && recall_keys(state, ui, id) {
+        // Arrow Up / Down walked the chat's earlier prompts.
     } else if focused
         && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
         && !state.input.trim().is_empty()
     {
         send = Some(state.input.clone());
+    }
+
+    if state.mode == Mode::Chat {
+        queued_rows(ctx, state, ui);
     }
 
     let blocked = blocked_reason(state);
@@ -1275,15 +1311,218 @@ fn composer(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
         state.pick = 0;
     }
 
-    if let Some(text) = send
-        && !busy
-    {
-        if let Some(reason) = blocked {
+    if let Some(text) = send {
+        if busy {
+            queue_message(ctx, state, &text);
+        } else if let Some(reason) = blocked {
             state.error = Some(reason);
         } else {
-            submit(ctx, state, ui.ctx(), &text, scope);
+            submit(ctx, state, ui.ctx(), &text, scope, true);
         }
     }
+}
+
+/// The person's earlier prompts in this chat, oldest first, as they were
+/// sent (references included).
+fn prompts(log: &[LogLine]) -> Vec<String> {
+    log.iter()
+        .filter_map(|l| match l {
+            LogLine::Msg { msg } if msg.role == Role::User => {
+                let text = msg.text();
+                let text = text.trim();
+                (!text.is_empty()).then(|| text.to_owned())
+            }
+            LogLine::Msg { .. }
+            | LogLine::Proposal { .. }
+            | LogLine::Status { .. }
+            | LogLine::Turn { .. }
+            | LogLine::Notice { .. }
+            | LogLine::Image { .. } => None,
+        })
+        .collect()
+}
+
+/// Arrow Up on an empty composer recalls the previous prompt with its
+/// references; again, the one before; Arrow Down walks back. Only while
+/// the composer is empty or still holds the recalled prompt, so editing
+/// a recalled prompt keeps the arrows for the cursor. Returns whether an
+/// arrow was used.
+fn recall_keys(state: &mut State, ui: &Ui, id: egui::Id) -> bool {
+    let Some(chat) = state.chat.as_ref() else {
+        return false;
+    };
+    let past = prompts(&chat.log);
+    let n = past.len();
+    let showing = state
+        .recall
+        .filter(|k| *k >= 1 && *k <= n)
+        .and_then(|k| past.get(n - k))
+        .is_some_and(|p| *p == state.input);
+    if !showing {
+        state.recall = None;
+    }
+    if !(showing || state.input.trim().is_empty()) || n == 0 {
+        return false;
+    }
+    let (up, down) = ui.input_mut(|i| {
+        (
+            i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
+            showing && i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
+        )
+    });
+    let at = state.recall.unwrap_or(0);
+    let next = if up {
+        (at + 1).min(n)
+    } else if down {
+        at.saturating_sub(1)
+    } else {
+        return false;
+    };
+    state.recall = (next > 0).then_some(next);
+    state.input = match state.recall {
+        Some(k) => past.get(n - k).cloned().unwrap_or_default(),
+        None => String::new(),
+    };
+    let end = state.input.chars().count();
+    let mut s = egui::text_edit::TextEditState::load(ui.ctx(), id).unwrap_or_default();
+    s.cursor.set_char_range(Some(egui::text::CCursorRange::one(
+        egui::text::CCursor::new(end),
+    )));
+    s.store(ui.ctx(), id);
+    true
+}
+
+/// Holds a message sent while a reply streams: the references staged now
+/// go with it as text, and it goes out when the turn ends.
+fn queue_message(ctx: &mut PageCtx<'_>, state: &mut State, text: &str) {
+    let typed = Reference::scan(text);
+    let extra: Vec<String> = ctx
+        .refs
+        .iter()
+        .filter(|r| !typed.iter().any(|t| t.target == r.target))
+        .map(ToString::to_string)
+        .collect();
+    let mut said = text.trim().to_owned();
+    if !extra.is_empty() {
+        said = format!("{said}\n\n{}", extra.join(" "));
+    }
+    state.queue.push(said);
+    state.input.clear();
+    state.recall = None;
+    state.dismissed = None;
+    if !ctx.refs.is_empty() {
+        ctx.actions.push(Action::ClearRefs);
+    }
+}
+
+/// "Send now": puts queued message `k` first and stops the turn, so it
+/// goes out as soon as the turn has stopped (steering the agent).
+fn send_now(state: &mut State, k: usize) {
+    if k < state.queue.len() {
+        let text = state.queue.remove(k);
+        state.queue.insert(0, text);
+    }
+    if let Some(turn) = &state.turn {
+        turn.cancel.store(true, Ordering::Relaxed);
+    }
+}
+
+/// "Cancel and edit": takes queued message `k` back into the composer.
+fn edit_queued(state: &mut State, k: usize) {
+    if k >= state.queue.len() {
+        return;
+    }
+    let text = state.queue.remove(k);
+    state.input = if state.input.trim().is_empty() {
+        text
+    } else {
+        format!("{text}\n\n{}", state.input)
+    };
+}
+
+/// Sends the oldest queued message once no turn runs. When sending is
+/// blocked, the queue goes back to the composer with the reason.
+fn send_queued(ctx: &mut PageCtx<'_>, state: &mut State, egui_ctx: &egui::Context) {
+    if state.turn.is_some() || state.queue.is_empty() || state.chat.is_none() {
+        return;
+    }
+    if let Some(reason) = blocked_reason(state) {
+        state.error = Some(reason);
+        while !state.queue.is_empty() {
+            let last = state.queue.len() - 1;
+            edit_queued(state, last);
+        }
+        return;
+    }
+    let text = state.queue.remove(0);
+    let refs = complete::merge(&[], &text);
+    let selection = ctx.selection.clone();
+    let scope = effective_scope(state, &refs, &selection);
+    submit(ctx, state, egui_ctx, &text, scope, false);
+}
+
+/// The queued messages above the composer: "Waiting to send", with "Send
+/// now" (stop the reply and send this) and "Cancel and edit".
+fn queued_rows(ctx: &PageCtx<'_>, state: &mut State, ui: &mut Ui) {
+    if state.queue.is_empty() {
+        return;
+    }
+    let theme = ctx.theme;
+    let mut now: Option<usize> = None;
+    let mut edit: Option<usize> = None;
+    for (k, text) in state.queue.iter().enumerate() {
+        let short: String = text
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .chars()
+            .take(60)
+            .collect();
+        let line = format!("Waiting to send: {short}");
+        ui.push_id(("queued", k), |ui| {
+            look::notice_row(ui, theme, &line, look::Tone::Hint, |ui| {
+                if widgets::ghost_button(ui, theme, "Cancel and edit").clicked() {
+                    edit = Some(k);
+                }
+                let r = widgets::ghost_button(ui, theme, "Send now");
+                if widgets::tip(r, theme, "Stop the reply and send this now", "").clicked() {
+                    now = Some(k);
+                }
+            });
+        });
+    }
+    ui.add_space(SPACE_XS);
+    if let Some(k) = now {
+        send_now(state, k);
+    }
+    if let Some(k) = edit {
+        edit_queued(state, k);
+    }
+}
+
+/// How full the model's context was after the chat's last turn, when the
+/// runtime reported it: tokens and the window (200k when not said).
+fn context_use(log: &[LogLine]) -> Option<(u64, u64)> {
+    log.iter().rev().find_map(|l| match l {
+        LogLine::Turn {
+            context_tokens,
+            context_window,
+            ..
+        } if *context_tokens > 0 => Some((
+            *context_tokens,
+            if *context_window > 0 {
+                *context_window
+            } else {
+                200_000
+            },
+        )),
+        LogLine::Msg { .. }
+        | LogLine::Proposal { .. }
+        | LogLine::Status { .. }
+        | LogLine::Turn { .. }
+        | LogLine::Notice { .. }
+        | LogLine::Image { .. } => None,
+    })
 }
 
 /// The scope pills under the switch: what the request may change, and the
@@ -1553,6 +1792,21 @@ fn toolbar(
                         {
                             turn.cancel.store(true, Ordering::Relaxed);
                         }
+                        // Sent now, it waits for the reply to finish.
+                        if !state.input.trim().is_empty()
+                            && widgets::filled_icon_button(
+                                ui,
+                                theme,
+                                widgets::ButtonKind::Secondary,
+                                icons::ARROW_UP,
+                                "Send when the reply is done",
+                                "Enter",
+                                32.0,
+                            )
+                            .clicked()
+                        {
+                            *send = Some(state.input.clone());
+                        }
                         ui.add_space(SPACE_XS);
                         ui.label(
                             RichText::new(format!("{:.0}s", turn.started.elapsed().as_secs_f32()))
@@ -1580,6 +1834,27 @@ fn toolbar(
                     }
                     ui.add_space(SPACE_XS);
                     model_menu(ctx, state, ui);
+                    if let Some((used, window)) =
+                        state.chat.as_ref().and_then(|c| context_use(&c.log))
+                    {
+                        let pct = (used as f64 * 100.0 / window as f64).round().min(100.0);
+                        ui.add_space(SPACE_XS);
+                        ui.label(
+                            RichText::new(format!("Context {pct:.0}%"))
+                                .font(theme::tabular(ui.ctx(), theme::SMALL_SIZE))
+                                .color(theme::rgb(if pct >= 85.0 {
+                                    theme.warning
+                                } else {
+                                    theme.text_faint
+                                })),
+                        )
+                        .on_hover_text(format!(
+                            "{} of {} tokens: how full the model's context was after the last \
+                             reply. Start a new chat when it fills up.",
+                            kilo(used),
+                            kilo(window)
+                        ));
+                    }
                 });
             });
         });
@@ -2153,23 +2428,32 @@ fn sources(ctx: &PageCtx<'_>, state: &mut State) -> complete::Sources {
 }
 
 /// Sends a message and starts the turn: on Claude Code, or on a worker
-/// thread running the in-process loop.
+/// thread running the in-process loop. `composer`: the text comes from the
+/// composer, with the staged references (cleared once it is sent); a
+/// queued message carries its references in its text and leaves the
+/// composer alone.
 fn submit(
     ctx: &mut PageCtx<'_>,
     state: &mut State,
     egui_ctx: &egui::Context,
     text: &str,
     choice: ScopeChoice,
+    composer: bool,
 ) {
     let runtime = runtime(state);
     let playhead = playhead(ctx);
+    let staged: Vec<Reference> = if composer {
+        ctx.refs.clone()
+    } else {
+        Vec::new()
+    };
     let Some(project) = ctx.project.as_ref() else {
         return;
     };
     let Some(prefs) = state.prefs.clone() else {
         return;
     };
-    let refs = complete::merge(ctx.refs, text);
+    let refs = complete::merge(&staged, text);
     let selection = ctx.selection.clone();
     let (change, keep) = scoped_shots(state, &refs, &selection);
     let Some(chat) = state.chat.as_mut() else {
@@ -2251,8 +2535,7 @@ fn submit(
     });
     let mut said = text.trim().to_owned();
     let typed = Reference::scan(text);
-    let extra: Vec<String> = ctx
-        .refs
+    let extra: Vec<String> = staged
         .iter()
         .filter(|r| !typed.iter().any(|t| t.target == r.target))
         .map(ToString::to_string)
@@ -2262,17 +2545,21 @@ fn submit(
     }
     blocks.push(Block::Text { text: said.clone() });
     let msg = Msg::new(Role::User, blocks);
-    if let Some(e) = chat.push(LogLine::Msg { msg }) {
+    let work = chat.work.clone();
+    let chat_id = chat.id().to_owned();
+    // Titled after its first message and listed before its log grows.
+    chats::first_message(state, text);
+    if let Some(chat) = state.chat.as_mut()
+        && let Some(e) = chat.push(LogLine::Msg { msg })
+    {
         state.error = Some(e);
     }
-    let work = chat.work.clone();
-    let stem = chat.plan.clone();
 
     let cancel = Arc::new(AtomicBool::new(false));
     let started = match runtime {
         Runtime::ClaudeCode(exe) => {
             let message = format!("{reminder}\n\n{said}");
-            start_claude(state, egui_ctx, exe, &work, &stem, &message)
+            start_claude(state, egui_ctx, exe, &work, &chat_id, &message)
         }
         Runtime::Api(model) => {
             let Some(key) = prefs.key() else {
@@ -2304,10 +2591,13 @@ fn submit(
                 claude,
             });
             set_lock(state, true);
-            state.input.clear();
-            state.dismissed = None;
-            if !ctx.refs.is_empty() {
-                ctx.actions.push(Action::ClearRefs);
+            if composer {
+                state.input.clear();
+                state.dismissed = None;
+                state.recall = None;
+                if !ctx.refs.is_empty() {
+                    ctx.actions.push(Action::ClearRefs);
+                }
             }
         }
         Err(e) => state.error = Some(e),
@@ -2386,19 +2676,19 @@ fn start_claude(
     egui_ctx: &egui::Context,
     exe: PathBuf,
     work: &Path,
-    plan: &str,
+    chat: &str,
     message: &str,
 ) -> Started {
-    let key = (work.to_path_buf(), plan.to_owned());
+    let key = (work.to_path_buf(), chat.to_owned());
     if state
         .session
         .as_ref()
         .is_none_or(|s| s.key != key || !s.alive())
     {
         state.session = None;
-        let cfg = claude_config(exe, work, plan)?;
+        let cfg = claude_config(exe, work, chat)?;
         let repaint = egui_ctx.clone();
-        state.session = Some(claude_code::Session::start(&cfg, plan, move || {
+        state.session = Some(claude_code::Session::start(&cfg, chat, move || {
             repaint.request_repaint();
         })?);
     }
@@ -2411,7 +2701,7 @@ fn start_claude(
 
 /// Writes the session's MCP config, prompt and skills, and reads the
 /// session to resume.
-fn claude_config(exe: PathBuf, work: &Path, plan: &str) -> Result<claude_code::Config, String> {
+fn claude_config(exe: PathBuf, work: &Path, chat_id: &str) -> Result<claude_code::Config, String> {
     let fail = |what: &str, e: &dyn std::fmt::Display| format!("could not prepare {what}: {e}");
     let skills = skills_dir().ok_or("no configuration folder for the skills")?;
     let skills = skills::install(&skills).map_err(|e| fail("the skills", &e))?;
@@ -2424,7 +2714,7 @@ fn claude_config(exe: PathBuf, work: &Path, plan: &str) -> Result<claude_code::C
     let prompt_file = chat.join("claude-prompt.md");
     let prompt = context::claude_code(&skills.display().to_string(), &skills::listing(&skills));
     std::fs::write(&prompt_file, prompt).map_err(|e| fail("the prompt", &e))?;
-    let resume = std::fs::read_to_string(claude_code::session_file(work, plan))
+    let resume = std::fs::read_to_string(claude_code::session_file(work, chat_id))
         .ok()
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty());
@@ -2494,6 +2784,7 @@ fn conversation(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
         .as_ref()
         .filter(|_| state.turn.is_none())
         .map(|a| a.id.clone());
+    let mut hits = find::Hits::of(state.find.as_ref(), theme);
 
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -2515,7 +2806,7 @@ fn conversation(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                     for (i, line) in log.iter().enumerate() {
                         match line {
                             LogLine::Msg { msg } => match msg.role {
-                                Role::User => user_bubble(ctx, ui, msg),
+                                Role::User => user_bubble(ctx, ui, msg, hits.as_mut()),
                                 Role::Assistant => {
                                     for (k, b) in msg.blocks.iter().enumerate() {
                                         match b {
@@ -2537,7 +2828,7 @@ fn conversation(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                                             }
                                             Block::Text { text } => {
                                                 if let Some(r) =
-                                                    message(ctx, ui, ("msg", i, k), text, msg.ts)
+                                                    message(ctx, ui, ("msg", i, k), text, msg.ts, hits.as_mut())
                                                 {
                                                     open = Some(r);
                                                 }
@@ -2613,6 +2904,7 @@ fn conversation(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                                 output_tokens,
                                 cached_tokens,
                                 cost_usd,
+                                ..
                             } => {
                                 let cost = cost_usd
                                     .filter(|c| *c > 0.0)
@@ -2705,7 +2997,7 @@ fn conversation(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                         }
                         if !turn.text.is_empty() {
                             ui.add_space(SPACE_SM);
-                            markdown_label(ctx, ui, &link_labels(&turn.text));
+                            markdown_label(ctx, ui, &link_labels(&turn.text), None);
                         }
                         if turn.thinking.is_empty() {
                             let what = if turn.text.is_empty() && turn.tools.is_empty() {
@@ -2729,6 +3021,9 @@ fn conversation(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                     }
                 });
         });
+    if let Some(f) = state.find.as_mut() {
+        f.scroll = hits.is_some_and(|h| h.scroll) && f.scroll;
+    }
     if let Some(text) = send
         && state.turn.is_none()
     {
@@ -2738,7 +3033,7 @@ fn conversation(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
             let refs = complete::merge(ctx.refs, &text);
             let selection = ctx.selection.clone();
             let scope = effective_scope(state, &refs, &selection);
-            submit(ctx, state, ui.ctx(), &text, scope);
+            submit(ctx, state, ui.ctx(), &text, scope, true);
         }
     }
     if let Some(r) = open {
@@ -2758,18 +3053,19 @@ fn duration(secs: f32) -> String {
 
 /// The model's text with `ave://` links: the prose in 14 px `tone-200`
 /// (link labels inline), the links under it as lime text, and the hover
-/// meta row. Returns the link clicked.
+/// meta row; find-in-chat matches highlighted. Returns the link clicked.
 fn message(
     ctx: &PageCtx<'_>,
     ui: &mut Ui,
     id: impl egui::AsIdSalt,
     text: &str,
     ts: u64,
+    hits: Option<&mut find::Hits>,
 ) -> Option<Reference> {
     let theme = ctx.theme;
     let pieces = links::split(text);
     ui.add_space(SPACE_MD);
-    let prose = markdown_label(ctx, ui, &link_labels(text)).rect;
+    let prose = markdown_label(ctx, ui, &link_labels(text), hits).rect;
     let targets: Vec<(String, Reference)> = pieces
         .iter()
         .filter_map(|p| match p {
@@ -3009,8 +3305,9 @@ fn empty_state(ctx: &PageCtx<'_>, state: &State, ui: &mut Ui, send: &mut Option<
 
 /// A message the person sent, as Selects': right-aligned, at most 85 % of
 /// the list, an outlined 10 px bubble with no fill, 14 px white text with
-/// mentions in lime, and the hover meta row under it.
-fn user_bubble(ctx: &PageCtx<'_>, ui: &mut Ui, msg: &Msg) {
+/// mentions in lime, find-in-chat matches highlighted, and the hover meta
+/// row under it.
+fn user_bubble(ctx: &PageCtx<'_>, ui: &mut Ui, msg: &Msg, mut hits: Option<&mut find::Hits>) {
     let theme = ctx.theme;
     let text = msg.text();
     let answered = msg
@@ -3023,17 +3320,24 @@ fn user_bubble(ctx: &PageCtx<'_>, ui: &mut Ui, msg: &Msg) {
     ui.add_space(SPACE_MD);
     let pad = Vec2::new(SPACE_MD, 6.0);
     let max = (ui.available_width() * 0.85 - pad.x * 2.0).max(40.0);
-    let job = look::mention_job(
+    let mut job = look::mention_job(
         theme,
         text.trim(),
         theme::LARGE_SIZE,
         theme::rgb(theme.text),
         max,
     );
+    let mut current = false;
+    if let Some(h) = hits.as_deref_mut() {
+        current = h.mark(&mut job);
+    }
     let galley = ui.painter().layout_job(job);
     let size = galley.size() + pad * 2.0;
     let (row, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), size.y), Sense::hover());
     let bubble = Rect::from_min_size(egui::pos2(row.right() - size.x, row.top()), size);
+    if let Some(h) = hits {
+        h.reveal(ui, current, bubble);
+    }
     ui.painter().rect_stroke(
         bubble,
         CornerRadius::same(theme::RADIUS_LG),
@@ -3052,8 +3356,14 @@ fn user_bubble(ctx: &PageCtx<'_>, ui: &mut Ui, msg: &Msg) {
 }
 
 /// The model's text, with bold, code and bullets: 14 px in `tone-200`,
-/// bold and headings in the foreground.
-fn markdown_label(ctx: &PageCtx<'_>, ui: &mut Ui, text: &str) -> egui::Response {
+/// bold and headings in the foreground; find-in-chat matches highlighted.
+/// Its text is [`markdown_plain`]'s.
+fn markdown_label(
+    ctx: &PageCtx<'_>,
+    ui: &mut Ui,
+    text: &str,
+    mut hits: Option<&mut find::Hits>,
+) -> egui::Response {
     let theme = ctx.theme;
     let body = look::tone_200(theme);
     let strong = theme::rgb(theme.text);
@@ -3100,11 +3410,64 @@ fn markdown_label(ctx: &PageCtx<'_>, ui: &mut Ui, text: &str) -> egui::Response 
     }
     let width = ui.available_width() - SPACE_XS * 2.0;
     job.wrap.max_width = width;
-    ui.horizontal(|ui| {
-        ui.add_space(SPACE_XS);
-        ui.add(egui::Label::new(job).wrap())
-    })
-    .inner
+    let mut current = false;
+    if let Some(h) = hits.as_deref_mut() {
+        current = h.mark(&mut job);
+    }
+    let response = ui
+        .horizontal(|ui| {
+            ui.add_space(SPACE_XS);
+            ui.add(egui::Label::new(job).wrap())
+        })
+        .inner;
+    if let Some(h) = hits {
+        h.reveal(ui, current, response.rect);
+    }
+    response
+}
+
+/// The text [`markdown_label`] lays out for `text`, for find in chat.
+fn markdown_plain(text: &str) -> String {
+    let mut out = String::new();
+    for (n, line) in markdown::parse(text.trim()).iter().enumerate() {
+        if n > 0 {
+            out.push('\n');
+        }
+        if let markdown::Kind::Bullet(_) = line.kind {
+            out.push_str("•  ");
+        }
+        for s in &line.spans {
+            out.push_str(&s.text);
+        }
+    }
+    out
+}
+
+/// Every text the conversation lays out that find in chat searches, in
+/// drawing order: the person's messages and the assistant's prose.
+fn find_texts(log: &[LogLine]) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in log {
+        let LogLine::Msg { msg } = line else {
+            continue;
+        };
+        match msg.role {
+            Role::User => {
+                let text = msg.text();
+                if !text.trim().is_empty() {
+                    out.push(text.trim().to_owned());
+                }
+            }
+            Role::Assistant => {
+                for b in &msg.blocks {
+                    if let Block::Text { text } = b {
+                        out.push(markdown_plain(&link_labels(text)));
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 /// The card's state for proposal `id`, computed if needed.
@@ -3935,7 +4298,7 @@ mod tests {
         let mut h = harness(work);
         for label in [
             "Fix what the check flags",
-            "Chats: the plan this conversation is about",
+            "Chats",
             "History: applied proposals and plan versions",
             "Assistant settings: model key, local server, autonomy",
             "Chat",
@@ -4010,6 +4373,245 @@ mod tests {
             !send.accesskit_node().is_disabled(),
             "typed text can be sent"
         );
+        Ok(())
+    }
+
+    type Harness = egui_kittest::Harness<'static, Option<crate::gui::app::App>>;
+
+    /// The chat panel's state in the harness.
+    fn panel(h: &mut Harness) -> anyhow::Result<&mut super::State> {
+        h.state_mut()
+            .as_mut()
+            .map(|app| &mut app.pages.assistant)
+            .ok_or_else(|| anyhow::anyhow!("no app"))
+    }
+
+    /// Clicks the node labelled `label` (the leftmost, if several).
+    fn click(h: &mut Harness, label: &str) -> anyhow::Result<()> {
+        h.query_all_by_label(label)
+            .min_by(|a, b| a.rect().left().total_cmp(&b.rect().left()))
+            .ok_or_else(|| anyhow::anyhow!("nothing labelled {label:?}"))?
+            .click();
+        h.run_steps(4);
+        Ok(())
+    }
+
+    /// Appends `line` to the old per-plan log of `reel-a`.
+    fn say(work: &std::path::Path, role: Role, text: &str) -> anyhow::Result<()> {
+        let msg = Msg::new(role, vec![Block::Text { text: text.into() }]);
+        super::store::append(
+            &super::store::chat_path(work, "reel-a"),
+            &LogLine::Msg { msg },
+        )
+    }
+
+    #[test]
+    fn an_old_per_plan_log_opens_as_a_chat_titled_after_its_plan() -> anyhow::Result<()> {
+        let (_dir, work) = night(true)?;
+        let mut h = harness(work.clone());
+        let state = panel(&mut h)?;
+        let chat = state
+            .chat
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("no chat open"))?;
+        assert_eq!(chat.meta.title, "reel-a", "titled after its plan");
+        assert_eq!(chat.meta.plan, "reel-a", "about its plan");
+        assert_eq!(chat.log.len(), 1, "the old log's message is there");
+        assert!(
+            super::store::index_path(&work).exists(),
+            "the chat index was written"
+        );
+        click(&mut h, "Chats")?;
+        assert!(
+            h.query_by_label("Recent chats").is_some(),
+            "the Chats menu lists the chats"
+        );
+        assert!(
+            h.query_by_label("Rename reel-a").is_some(),
+            "the migrated chat is a row with its actions"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn new_chat_then_rename_and_archive_from_the_list() -> anyhow::Result<()> {
+        let (_dir, work) = night(true)?;
+        let mut h = harness(work.clone());
+        click(&mut h, "Chats")?;
+        click(&mut h, "New chat")?;
+        let state = panel(&mut h)?;
+        let fresh = state
+            .chat
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("no chat open"))?;
+        assert!(fresh.log.is_empty(), "a new chat starts empty");
+        assert_eq!(fresh.meta.title, super::store::UNTITLED, "untitled");
+        assert_eq!(state.tabs.len(), 2, "the old chat and the new one are tabs");
+        h.run_steps(3);
+        // (The timeline's plan tab is called "Close reel-a" too.)
+        assert!(
+            h.query_by_label("Close New chat").is_some(),
+            "a wide panel shows the open chats as tabs"
+        );
+
+        // Rename the old chat from the list.
+        click(&mut h, "Chats")?;
+        click(&mut h, "Rename reel-a")?;
+        if let Some(r) = panel(&mut h)?.renaming.as_mut() {
+            r.draft = "Opening".into();
+        }
+        h.run_steps(3);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(3);
+        let state = panel(&mut h)?;
+        assert!(state.renaming.is_none(), "Enter keeps the title");
+        let index = state
+            .chats
+            .as_ref()
+            .map(|(_, i)| i.clone())
+            .ok_or_else(|| anyhow::anyhow!("no index"))?;
+        let old = index
+            .chats
+            .iter()
+            .find(|c| c.title == "Opening")
+            .ok_or_else(|| anyhow::anyhow!("not renamed: {index:?}"))?;
+        assert!(old.renamed, "a renamed chat is never auto-titled");
+
+        // Archive it: it leaves the recent list and the tabs.
+        if !h.query_by_label("Recent chats").is_some() {
+            click(&mut h, "Chats")?;
+        }
+        click(&mut h, "Archive Opening")?;
+        let state = panel(&mut h)?;
+        let saved = super::store::load_index(&work);
+        assert!(
+            saved.get(&old.id).is_some_and(|c| c.archived),
+            "archived on disk: {saved:?}"
+        );
+        assert!(!state.tabs.contains(&old.id), "its tab closed");
+        assert!(
+            h.query_by_label("Archived chats (1)").is_some(),
+            "the list offers the archived chats"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn find_in_chat_counts_matches_and_steps_through_them() -> anyhow::Result<()> {
+        let (_dir, work) = night(true)?;
+        say(&work, Role::User, "make the drop hit harder")?;
+        say(
+            &work,
+            Role::Assistant,
+            "The **drop** lands on bar 9; two drop shots follow it.",
+        )?;
+        let mut h = harness(work);
+        super::chats::open_find(panel(&mut h)?);
+        h.run_steps(3);
+        if let Some(f) = panel(&mut h)?.find.as_mut() {
+            f.query = "DROP".into();
+        }
+        h.run_steps(3);
+        assert!(
+            h.query_by_label("1/3").is_some(),
+            "three matches, first current"
+        );
+        click(&mut h, "Next match")?;
+        assert!(h.query_by_label("2/3").is_some(), "next moves the counter");
+        click(&mut h, "Previous match")?;
+        click(&mut h, "Previous match")?;
+        assert!(h.query_by_label("3/3").is_some(), "previous wraps round");
+        click(&mut h, "Close find")?;
+        assert!(panel(&mut h)?.find.is_none(), "the bar closes");
+        Ok(())
+    }
+
+    #[test]
+    fn a_message_sent_while_streaming_waits_and_send_now_steers() -> anyhow::Result<()> {
+        use super::agent::Event;
+        let (_dir, work) = night(true)?;
+        let mut h = harness(work);
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        {
+            let state = panel(&mut h)?;
+            // Answered by a local server that is not there: the message is
+            // still logged, which is what this test reads.
+            state.prefs = Some(super::store::Prefs {
+                model: Some("local".into()),
+                api_key: None,
+                local_url: Some("http://127.0.0.1:9".into()),
+            });
+            state.turn = Some(super::Turn {
+                rx,
+                cancel: cancel.clone(),
+                started: std::time::Instant::now(),
+                text: String::new(),
+                thinking: String::new(),
+                tools: Vec::new(),
+                claude: false,
+            });
+            state.input = "and trim the ending".into();
+        }
+        h.run_steps(3);
+        click(&mut h, "Send when the reply is done")?;
+        let state = panel(&mut h)?;
+        assert_eq!(
+            state.queue,
+            vec!["and trim the ending".to_owned()],
+            "queued"
+        );
+        assert!(state.input.is_empty(), "the composer is free again");
+        assert!(
+            h.query_by_label("Waiting to send: and trim the ending")
+                .is_some(),
+            "the queued message shows as waiting"
+        );
+        click(&mut h, "Send now")?;
+        assert!(
+            cancel.load(std::sync::atomic::Ordering::Relaxed),
+            "Send now stops the reply"
+        );
+        tx.send(Event::Done {
+            secs: 1.0,
+            model: "test".into(),
+            usage: super::provider::Usage::default(),
+            cost: None,
+        })?;
+        h.run_steps(4);
+        let state = panel(&mut h)?;
+        assert!(state.queue.is_empty(), "the queue was sent");
+        let chat = state
+            .chat
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("no chat"))?;
+        assert_eq!(
+            super::prompts(&chat.log).last().map(String::as_str),
+            Some("and trim the ending"),
+            "the queued message went out once the turn stopped"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn arrow_up_on_an_empty_composer_recalls_the_last_prompt() -> anyhow::Result<()> {
+        let (_dir, work) = night(true)?;
+        let mut h = harness(work);
+        h.query_all_by_role(egui::accesskit::Role::MultilineTextInput)
+            .min_by(|a, b| a.rect().left().total_cmp(&b.rect().left()))
+            .ok_or_else(|| anyhow::anyhow!("no composer"))?
+            .focus();
+        h.run_steps(3);
+        h.key_press(egui::Key::ArrowUp);
+        h.run_steps(3);
+        assert_eq!(
+            panel(&mut h)?.input,
+            "tighten @shot:reel-a#1 please",
+            "the last prompt, its reference included"
+        );
+        h.key_press(egui::Key::ArrowDown);
+        h.run_steps(3);
+        assert!(panel(&mut h)?.input.is_empty(), "Down walks back to empty");
         Ok(())
     }
 }
