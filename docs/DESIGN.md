@@ -155,6 +155,33 @@ should lay digits out in fixed cells (or use `theme::mono`).
   **Viewer owners: keep the top 48 px of the two corners free of controls
   that matter.** The timeline folds to a 24 px labelled rail.
 - **Status bar**: 24 px, panel colour, hairline above, 11 px text.
+- **Which panel is focused**: `workspace::panel_focused(ctx, key)` says
+  whether the panel `key` (`"timeline"`, `"viewer"`, …) took the last
+  pointer-down. A panel that paints a selection asks it to pick the
+  selection outline: the key colour when focused, white otherwise.
+
+## Home and export pieces (`pages/night/parts.rs`)
+
+Compositions of the tokens and components above that only the Home pages
+(start, wizard, processing, night page) and the export panel use, so they
+live beside them rather than in `widgets`. Reach for them before drawing
+your own on those pages.
+
+| Need | Use | Notes |
+|---|---|---|
+| a centred column | `parts::centred(ui, max, \|ui\| ..)` | at most `max` wide, centred in the space |
+| a quiet label over a group | `parts::label(ui, theme, text)` | 12 px Medium, muted |
+| a section | `parts::section(ui, theme, title, description)` | hairline above, 14 px Medium title, one muted sentence |
+| a muted line | `parts::muted(ui, theme, text)` | 12 px, wraps |
+| a form row | `parts::form_row(ui, theme, label, \|ui\| ..)` | 12 px muted label in a `LABEL_WIDTH` (132) column, the control beside it, one 28 px line |
+| a read-only path | `parts::path_box(..)` | a field cut from the left to fit, leading icon, amber when the file is gone, full path as tooltip |
+| run progress | `parts::progress_bar(ui, theme, id, fraction)`, `parts::paint_progress(ui, theme, rect, id, fraction)` | 8 px, fully rounded, ink 80 % on ink 10 % (not the key colour); eases |
+| a toast in the column | `parts::notice(ui, theme, Kind::Warning, text)` | panel surface, hairline, icon in its colour, dismiss button; returns whether dismissed. `Kind::{Info, Success, Warning, Danger}` |
+| one status line | `parts::status_line(ui, theme, kind, text)` | icon and text in the kind's colour |
+| a step's mark | `parts::mark(ui, theme, rect, Mark::Running)` | `Mark::{Queued, Running, Done, Failed, Stopped, Skipped}`; a spinner while running |
+| a frame | `parts::thumb(thumbs, ui, theme, rect, Some((path, t)))` | 2 px corners, ink 10 % hairline; a raised fill when there is no frame |
+| a list row's fill | `parts::row_fill(ui, theme, &response, selected)` | selected row colour, or ink 8 % under the pointer, 8 px corners |
+| elapsed / remaining time | `parts::clock(secs)` | `1:05`, `12:40`, `1:02:03` |
 
 ## Components: which to use for what
 
@@ -163,6 +190,8 @@ should lay digits out in fixed cells (or use `theme::mono`).
 | a panel's top row | `panel_header(ui, theme, "Title", \|ui\| { right-side controls })` | title drawn as the open tab pill; right side laid out right to left |
 | a panel's top row with several views | `panel_bar(ui, theme, \|ui\| { tab_strip(..); }, \|ui\| { .. })` | |
 | views of one panel | `tab_strip(ui, theme, &mut current, &[(A, "A"), (B, "B")])` | 28 px pills, 12 px Medium, open one ink 12 % |
+| a toolbar under a panel header | `toolbar_row(ui, height, &mut cx, \|ui, cx\| { left }, \|ui, cx\| { right })` | borderless, 2 px between items; `right` is laid out first (right to left) so it always fits, `left` gets the rest, clipped short of it; both sides share `cx` |
+| a menu trigger that names its current choice | `dropdown_button(ui, theme, "Best", "Sort by", open)` | ghost, 28 px, 12 px Medium, muted until hovered or `open`, trailing chevron; hand the response to `egui::Popup::menu` |
 | an icon-only action | `icon_btn(ui, theme, icons::X, "Close", keys)` | 28 px, radius 8, muted icon, ink-12 % hover; tooltip with `kbd` keys; `keys` may be `""` |
 | an icon toggle | `icon_toggle(ui, theme, glyph, label, keys, on)` | `icon_toggle_sized(.., size)` for 32/36 px |
 | a text action | `ghost_button`, `outline_button`, `primary_button`, `key_button` | 28 px, SemiBold 12, radius 8 |
@@ -196,9 +225,9 @@ Sizes: `icons::SIZE` 16 (default, in 28–36 px buttons), `icons::SMALL` 14
 
 | Area | Constants |
 |---|---|
-| playback | `PLAY`, `PAUSE`, `SKIP_BACK`, `SKIP_FORWARD`, `STEP_BACK`, `STEP_FORWARD`, `REPEAT`, `VOLUME`, `VOLUME_X`, `MAXIMIZE`, `MAXIMIZE_2`, `MINIMIZE_2` |
+| playback | `PLAY`, `PAUSE`, `SQUARE` (stop), `SKIP_BACK`, `SKIP_FORWARD`, `STEP_BACK`, `STEP_FORWARD`, `REPEAT`, `VOLUME`, `VOLUME_X`, `MAXIMIZE`, `MAXIMIZE_2`, `MINIMIZE_2` |
 | editing | `SCISSORS`, `SPLIT`, `POINTER`, `HAND`, `MAGNET`, `MOVE_HORIZONTAL`, `ARROW_LEFT_RIGHT`, `UNDO`, `REDO`, `ZOOM_IN`, `ZOOM_OUT`, `CROP`, `RATIO`, `LANDSCAPE`, `PORTRAIT`, `SMARTPHONE`, `MONITOR` |
-| media | `FILM`, `VIDEO`, `CLAPPERBOARD`, `IMAGE`, `FILE_VIDEO`, `FILE_TEXT`, `MUSIC`, `AUDIO_LINES`, `AUDIO_WAVEFORM`, `HEADPHONES`, `CAPTIONS`, `TYPE`, `LAYERS`, `FLAME`, `ZAP` |
+| media | `FILM`, `VIDEO`, `CLAPPERBOARD`, `IMAGE`, `FILE_VIDEO`, `FILE_TEXT`, `MUSIC`, `AUDIO_LINES`, `AUDIO_WAVEFORM`, `HEADPHONES` (solo a track), `CAPTIONS`, `TYPE`, `LAYERS`, `FLAME`, `ZAP` |
 | people and review | `USERS`, `USER`, `STAR`, `FLAG`, `HEART`, `THUMBS_UP`, `THUMBS_DOWN`, `TAG`, `BOOKMARK`, `PIN`, `EYE`, `EYE_OFF`, `LOCK`, `LOCK_OPEN`, `GAUGE` |
 | chat and AI | `MESSAGE_SQUARE`, `MESSAGE_SQUARE_TEXT`, `SEND`, `SEND_HORIZONTAL`, `ARROW_UP`, `PAPERCLIP`, `AT_SIGN`, `SPARKLES`, `SPARKLE`, `WAND`, `BOT` |
 | layout | `PANEL_LEFT`, `PANEL_RIGHT`, `PANEL_BOTTOM`, `PANEL_LEFT_CLOSE`, `PANEL_LEFT_OPEN`, `PANEL_RIGHT_CLOSE`, `PANEL_RIGHT_OPEN`, `PANEL_BOTTOM_CLOSE`, `PANEL_BOTTOM_OPEN`, `PANELS_LEFT_BOTTOM`, `GRID`, `LAYOUT_GRID`, `LIST`, `COLUMNS`, `COLUMNS_3`, `COMPARE` |

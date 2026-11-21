@@ -192,7 +192,7 @@ pub(super) fn activate(ctx: &mut PageCtx<'_>, state: &mut State, meta: store::Ch
         state.tabs.retain(|t| *t != gone);
     }
     state.chat = Some(open_chat(&work, meta));
-    state.cards.clear();
+    super::reopened(state);
     state.tab = Tab::Chat;
     state.recall = None;
     state.renaming = None;

@@ -1528,6 +1528,29 @@ fn end_card_for(project: &Project, aspect: Aspect) -> String {
         .unwrap_or_default()
 }
 
+/// The job the "Draft new…" window starts for a name, aspect and length,
+/// with the form's other fields at their defaults (the night's end card for
+/// the aspect, two card bars): its label and the `ave plan` command. The
+/// assistant's first-cut card starts the same job.
+pub(crate) fn draft_job(
+    project: &Project,
+    name: &str,
+    aspect: Aspect,
+    seconds: f32,
+) -> (String, crate::commands::Cmd) {
+    (
+        format!("plan {name}"),
+        crate::commands::Cmd::Plan {
+            name: name.to_owned(),
+            work: project.work.clone(),
+            aspect: aspect_key(aspect).to_owned(),
+            seconds,
+            end_card: end_card_for(project, aspect),
+            card_bars: 2,
+        },
+    )
+}
+
 /// Whether `name` is a usable plan file name.
 fn valid_name(name: &str) -> bool {
     !name.is_empty()
@@ -1779,6 +1802,12 @@ fn keys(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &egui::Ui, hovere
         }
         if plain(Key::T) {
             state.tool = Tool::Slip;
+        }
+        if ui.input_mut(|i| crate::gui::ui::keymap::consume(i, "tool-zoom", s.preset)) {
+            state.tool = Tool::Zoom;
+        }
+        if ui.input_mut(|i| crate::gui::ui::keymap::consume(i, "tool-hand", s.preset)) {
+            state.tool = Tool::Hand;
         }
         if ui.input(|i| i.key_pressed(Key::Z) && i.modifiers.shift && !i.modifiers.command) {
             state.view.fit = true;

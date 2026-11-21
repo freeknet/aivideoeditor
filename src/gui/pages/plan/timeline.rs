@@ -68,6 +68,8 @@ const NAME_AT: Vec2 = Vec2::new(6.0, 4.0);
 const NAME_SIZE: f32 = 11.0;
 /// A clip's name: white at 70 %.
 const NAME_ALPHA: u8 = 179;
+/// Room a clip's name needs beside its text: 6 px inset each side.
+const NAME_ROOM: f32 = 12.0;
 /// Below this width a clip is a sliver: no thumbnails, waveform or name.
 const MIN_CLIP_W: f32 = 8.0;
 /// Clips at least this wide show trim handles under the pointer.
@@ -106,8 +108,15 @@ const PIN_W: f32 = 12.0;
 const PIN_H: f32 = 16.0;
 /// Pointer distance that grabs a pin.
 const PIN_GRAB: f32 = 6.0;
-/// A waveform column this loud (of full scale) is marked as clipped.
-const CLIPPED: f32 = 0.9999;
+/// A waveform bar's pitch: one peak bucket every 2 px, as Selects.
+const BAR_STEP: f32 = 2.0;
+/// A waveform bar's width inside its pitch, leaving a hairline gap.
+const BAR_W: f32 = 1.5;
+/// A waveform bar's opacity over the clip gradient, so a loud master
+/// reads as a shape rather than a white wall.
+const BAR_ALPHA: f32 = 0.55;
+/// The red mark over a column whose source samples clipped.
+const CLIP_MARK_H: f32 = 3.0;
 /// Pointer distance that grabs an edit point.
 const EDGE_GRAB: f32 = 4.0;
 
@@ -408,31 +417,56 @@ pub(super) fn paint_clip_border(painter: &egui::Painter, block: Rect, label: Lab
 
 /// A clip's name at its top-left, 11 px white at 70 % over a soft shadow,
 /// clipped to the clip; `left` is where the visible part starts.
-pub(super) fn paint_name(painter: &egui::Painter, block: Rect, left: f32, text: &str) {
+///
+/// The name is drawn only when it fits: the visible part of the clip must
+/// be at least the text's width plus [`NAME_ROOM`]. Failing that `short`
+/// (the shot number) is drawn if it fits, else nothing, so short clips
+/// never show a cut-off stub of a name.
+pub(super) fn paint_name(
+    painter: &egui::Painter,
+    block: Rect,
+    left: f32,
+    text: &str,
+    short: Option<&str>,
+) {
     if block.width() < MIN_CLIP_W * 2.0 || block.height() < NAME_SIZE + 8.0 {
         return;
     }
-    let area = Rect::from_min_max(
-        pos2(block.left().max(left), block.top()),
-        pos2(block.right() - NAME_AT.x, block.bottom()),
-    );
+    let area = Rect::from_min_max(pos2(block.left().max(left), block.top()), block.max);
+    let font = theme::font(NAME_SIZE);
+    let fits = |t: &str| {
+        let galley = painter.layout_no_wrap(t.to_owned(), font.clone(), Color32::WHITE);
+        name_fits(area.width(), galley.size().x)
+    };
+    let Some(shown) = [Some(text), short]
+        .into_iter()
+        .flatten()
+        .find(|t| !t.is_empty() && fits(t))
+    else {
+        return;
+    };
     let clip = painter.with_clip_rect(area.intersect(painter.clip_rect()));
     let at = pos2(area.left() + NAME_AT.x, block.top() + NAME_AT.y);
-    let font = theme::font(NAME_SIZE);
     clip.text(
         at + vec2(0.0, 1.0),
         Align2::LEFT_TOP,
-        text,
+        shown,
         font.clone(),
         Color32::from_black_alpha(217),
     );
     clip.text(
         at,
         Align2::LEFT_TOP,
-        text,
+        shown,
         font,
         Color32::from_white_alpha(NAME_ALPHA),
     );
+}
+
+/// Whether a name `text_w` wide fits a clip whose visible part is
+/// `visible_w` wide: the text plus [`NAME_ROOM`] of inset.
+fn name_fits(visible_w: f32, text_w: f32) -> bool {
+    visible_w >= text_w + NAME_ROOM
 }
 
 /// The selection outline: 2 px, radius 3, 1 px inside the clip; the key
@@ -977,6 +1011,7 @@ fn video(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut Ui, lay: &L
             block,
             lanes.left(),
             &format!("{}  {}", k + 1, shot.clip),
+            Some(&(k + 1).to_string()),
         );
         if s.sel.contains(&k) {
             paint_selected(&v1_paint, block, outline);
@@ -1066,7 +1101,13 @@ fn video(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut Ui, lay: &L
             || "none set".to_owned(),
             |f| f.to_string_lossy().into_owned(),
         );
-        paint_name(&v1_paint, block, lanes.left(), &format!("End card  {file}"));
+        paint_name(
+            &v1_paint,
+            block,
+            lanes.left(),
+            &format!("End card  {file}"),
+            Some("End card"),
+        );
         if dim {
             v1_paint.rect_filled(
                 block,
@@ -1346,15 +1387,17 @@ fn audio(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut Ui, lay: &L
         .map(|(path, _)| state.waves.get(ui.ctx(), path))
     {
         Some(Wave::Ready(peaks)) => {
-            let bars = Color32::from_white_alpha((255.0 * media) as u8);
+            let bars = Color32::from_white_alpha((255.0 * BAR_ALPHA * media) as u8);
             let red = theme::rgb(t.danger);
-            let lane = inner.height();
+            // Full scale reaches the strip the clip's name sits in, not
+            // over it, so the name stays legible over a loud master.
+            let lane = (inner.height() - NAME_AT.y - NAME_SIZE - 4.0).max(inner.height() * 0.5);
             let from = inner.left().max(lay.lanes.left()).floor();
             let to = inner.right().min(lay.lanes.right());
             let mut x = from;
             while x < to {
                 let ta = music_origin + m.t(x);
-                let tb = music_origin + m.t(x + 2.0);
+                let tb = music_origin + m.t(x + BAR_STEP);
                 if let Some(level) = peaks.level(ta, tb)
                     && level > 1e-3
                 {
@@ -1362,23 +1405,24 @@ fn audio(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut Ui, lay: &L
                     paint.rect_filled(
                         Rect::from_min_max(
                             pos2(x, inner.bottom() - h),
-                            pos2(x + 1.0, inner.bottom()),
+                            pos2(x + BAR_W, inner.bottom()),
                         ),
                         CornerRadius::ZERO,
                         bars,
                     );
-                    if level >= CLIPPED {
-                        paint.rect_filled(
-                            Rect::from_min_max(
-                                pos2(x, inner.top()),
-                                pos2(x + 2.0, inner.top() + 3.0),
-                            ),
-                            CornerRadius::ZERO,
-                            red,
-                        );
-                    }
                 }
-                x += 2.0;
+                // Real clipping in the source samples, not loudness.
+                if peaks.clipped(ta, tb) {
+                    paint.rect_filled(
+                        Rect::from_min_max(
+                            pos2(x, inner.top()),
+                            pos2(x + BAR_STEP, inner.top() + CLIP_MARK_H),
+                        ),
+                        CornerRadius::ZERO,
+                        red,
+                    );
+                }
+                x += BAR_STEP;
             }
         }
         Some(Wave::Loading) => {
@@ -1393,7 +1437,7 @@ fn audio(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut Ui, lay: &L
         .file_name()
         .map(|f| f.to_string_lossy().into_owned())
         .unwrap_or_default();
-    paint_name(&paint, block, lay.lanes.left(), &file);
+    paint_name(&paint, block, lay.lanes.left(), &file, None);
 }
 
 /// The ruler: clock ticks, then the marker lane with the song's bars, the
@@ -1851,21 +1895,21 @@ fn island(state: &mut State, s: &Shown<'_>, ui: &mut Ui, rect: Rect, lay: &Layou
             Tool::Select,
             icons::POINTER,
             "Selection: click, drag to reorder, drag an edit to roll",
-            "V",
+            "tool-select",
         ),
         (
             Tool::Slip,
             icons::MOVE_HORIZONTAL,
             "Slip: drag a shot to move its in-point (or Alt-drag)",
-            "T",
+            "tool-slip",
         ),
         (
             Tool::Zoom,
             icons::ZOOM_IN,
             "Zoom: click to zoom in, Alt-click to zoom out",
-            "",
+            "tool-zoom",
         ),
-        (Tool::Hand, icons::HAND, "Hand: drag to scroll", ""),
+        (Tool::Hand, icons::HAND, "Hand: drag to scroll", "tool-hand"),
     ];
     let n = tools.len() as f32;
     let pad = theme::SPACE_XS;
@@ -1890,7 +1934,11 @@ fn island(state: &mut State, s: &Shown<'_>, ui: &mut Ui, rect: Rect, lay: &Layou
         egui::StrokeKind::Inside,
     );
     let _ = ui.interact(frame, id.with("island"), Sense::hover());
-    for (k, (tool, glyph, label, keys)) in tools.into_iter().enumerate() {
+    for (k, (tool, glyph, label, command)) in tools.into_iter().enumerate() {
+        // The keys come from the table, so a preset's keys show here too.
+        let keys = crate::gui::ui::keymap::chord(command, s.preset)
+            .map(crate::gui::ui::keymap::format_chord)
+            .unwrap_or_default();
         let offset = k as f32 * (ISLAND_BUTTON + 1.0);
         let min = if vertical {
             frame.min + vec2(pad, pad + offset)
@@ -1909,7 +1957,7 @@ fn island(state: &mut State, s: &Shown<'_>, ui: &mut Ui, rect: Rect, lay: &Layou
             );
         }
         icons::paint(painter, r, glyph, icons::SIZE, theme::rgb(t.text));
-        if widgets::tip(resp, t, label, keys).clicked() {
+        if widgets::tip(resp, t, label, &keys).clicked() {
             state.tool = tool;
         }
     }
@@ -1917,7 +1965,15 @@ fn island(state: &mut State, s: &Shown<'_>, ui: &mut Ui, rect: Rect, lay: &Layou
 
 #[cfg(test)]
 mod tests {
-    use super::{Map, clock, major_step, minor_step, timecode};
+    use super::{Map, clock, major_step, minor_step, name_fits, timecode};
+
+    #[test]
+    fn a_name_needs_its_width_plus_twelve_px() -> anyhow::Result<()> {
+        assert!(name_fits(52.0, 40.0), "exactly text + 12 fits");
+        assert!(!name_fits(51.5, 40.0), "half a pixel short does not");
+        assert!(!name_fits(20.0, 40.0), "a short clip never draws the name");
+        Ok(())
+    }
 
     #[test]
     fn the_mapping_round_trips() -> anyhow::Result<()> {
