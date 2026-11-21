@@ -17,8 +17,9 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
+use super::parts;
 use crate::gui::pages::PageCtx;
-use crate::gui::ui::{theme, widgets};
+use crate::gui::ui::{icons, theme, widgets};
 use crate::recipe::{self, Deliverable, Recipe, Source};
 
 /// The recipe as loaded for the open night.
@@ -126,23 +127,8 @@ impl State {
     }
 }
 
-/// A section title with a muted line under it.
-fn section(ctx: &PageCtx<'_>, ui: &mut egui::Ui, title: &str, sub: &str) {
-    widgets::title(ui, ctx.theme, title);
-    widgets::muted(ui, ctx.theme, sub);
-    ui.add_space(theme::SPACE_SM);
-}
-
-/// A path shortened from the left to about `max` characters.
-fn short(path: &Path, max: usize) -> String {
-    let s = path.display().to_string();
-    let n = s.chars().count();
-    if n <= max {
-        return s;
-    }
-    let tail: String = s.chars().skip(n - max + 1).collect();
-    format!("…{tail}")
-}
+/// The widest the settings' form rows grow.
+const FORM_WIDTH: f32 = 760.0;
 
 /// What a settings row's buttons asked for.
 enum RowAction {
@@ -152,46 +138,41 @@ enum RowAction {
     Clear,
 }
 
-/// One settings row: label, path (or a hint), Change… and Clear.
+/// One settings row: the label, the path as a read-only field (or
+/// `placeholder`), "Change…", and a clear button when `clearable`.
 fn path_row(
     ctx: &PageCtx<'_>,
     ui: &mut egui::Ui,
     label: &str,
+    glyph: char,
     path: Option<&Path>,
-    hint: &str,
+    placeholder: &str,
     clearable: bool,
 ) -> Option<RowAction> {
+    let theme = ctx.theme;
     let mut action = None;
-    ui.label(egui::RichText::new(label).color(theme::rgb(ctx.theme.text_muted)));
-    match path {
-        Some(p) => {
-            let missing = !p.exists();
-            let color = if missing {
-                ctx.theme.warning
+    parts::form_row(ui, theme, label, |ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = theme::SPACE_XS;
+            if clearable && path.is_some() {
+                if widgets::icon_btn(ui, theme, icons::X, &format!("Clear {label}"), "").clicked() {
+                    action = Some(RowAction::Clear);
+                }
             } else {
-                ctx.theme.text
-            };
-            let text = if missing {
-                format!("{} (missing)", short(p, 64))
-            } else {
-                short(p, 70)
-            };
-            ui.label(egui::RichText::new(text).color(theme::rgb(color)))
-                .on_hover_text(p.display().to_string());
-        }
-        None => {
-            ui.label(egui::RichText::new(hint).color(theme::rgb(ctx.theme.text_faint)));
-        }
-    }
-    ui.horizontal(|ui| {
-        if ui.button("Change…").clicked() {
-            action = Some(RowAction::Change);
-        }
-        if clearable && path.is_some() && ui.button("Clear").clicked() {
-            action = Some(RowAction::Clear);
-        }
+                ui.add_space(theme::CONTROL_HEIGHT + theme::SPACE_XS);
+            }
+            if widgets::outline_button(ui, theme, "Change\u{2026}")
+                .on_hover_text(format!("Choose the {}", label.to_lowercase()))
+                .clicked()
+            {
+                action = Some(RowAction::Change);
+            }
+            ui.add_space(theme::SPACE_XS);
+            let width = ui.available_width();
+            parts::path_box(ui, theme, glyph, path, placeholder, width);
+        });
     });
-    ui.end_row();
+    ui.add_space(theme::SPACE_XS + 2.0);
     action
 }
 
@@ -205,9 +186,9 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
 
 /// Footage, track and one end card per aspect the recipe uses.
 fn settings_rows(ctx: &mut PageCtx<'_>, state: &State, ui: &mut egui::Ui) {
-    section(
-        ctx,
+    parts::section(
         ui,
+        ctx.theme,
         "Night settings",
         "Saved in the night's ave.toml. A new night starts with last week's.",
     );
@@ -235,50 +216,50 @@ fn settings_rows(ctx: &mut PageCtx<'_>, state: &State, ui: &mut egui::Ui) {
         .collect();
 
     let mut change: Option<(String, RowAction)> = None;
-    egui::Grid::new("night-settings")
-        .num_columns(3)
-        .spacing([theme::SPACE_LG, theme::SPACE_SM])
-        .striped(false)
-        .show(ui, |ui| {
+    ui.scope(|ui| {
+        ui.set_max_width(FORM_WIDTH);
+        if let Some(a) = path_row(
+            ctx,
+            ui,
+            "Footage folder",
+            icons::FOLDER,
+            footage.as_deref(),
+            "Not set: pick the folder of clips",
+            false,
+        ) {
+            change = Some(("footage".to_owned(), a));
+        }
+        if let Some(a) = path_row(
+            ctx,
+            ui,
+            "Music track",
+            icons::MUSIC,
+            track.as_deref(),
+            "Not set: pick the approved track",
+            true,
+        ) {
+            change = Some(("track".to_owned(), a));
+        }
+        for key in &keys {
+            let label = format!("End card {key}");
+            let hint = if used.contains(key) {
+                "Not set: these deliverables end without a card"
+            } else {
+                "Not set (no deliverable uses it)"
+            };
             if let Some(a) = path_row(
                 ctx,
                 ui,
-                "Footage folder",
-                footage.as_deref(),
-                "not set: pick the folder of clips",
-                false,
-            ) {
-                change = Some(("footage".to_owned(), a));
-            }
-            if let Some(a) = path_row(
-                ctx,
-                ui,
-                "Music track",
-                track.as_deref(),
-                "not set: pick the approved track",
+                &label,
+                icons::IMAGE,
+                cards.get(key).map(PathBuf::as_path),
+                hint,
                 true,
             ) {
-                change = Some(("track".to_owned(), a));
+                change = Some((format!("card:{key}"), a));
             }
-            for key in &keys {
-                let label = format!("End card {key}");
-                let hint = if used.contains(key) {
-                    "not set: the deliverables in this shape end without a card"
-                } else {
-                    "not set (no deliverable uses it)"
-                };
-                if let Some(a) = path_row(
-                    ctx,
-                    ui,
-                    &label,
-                    cards.get(key).map(PathBuf::as_path),
-                    hint,
-                    true,
-                ) {
-                    change = Some((format!("card:{key}"), a));
-                }
-            }
-        });
+        }
+    });
     let Some((what, action)) = change else { return };
     let fallback = ctx.project.as_ref().map(|p| recipe::night_dir(&p.work));
     let start = |p: Option<&Path>| {
@@ -344,11 +325,21 @@ fn settings_rows(ctx: &mut PageCtx<'_>, state: &State, ui: &mut egui::Ui) {
     }
 }
 
+/// A recipe table's column heading: 11 px Medium, muted.
+fn head(ui: &mut egui::Ui, theme: &crate::theme::Palette, text: &str) {
+    ui.label(
+        egui::RichText::new(text)
+            .font(theme::medium(ui.ctx(), theme::SMALL_SIZE))
+            .color(theme::rgb(theme.text_muted)),
+    );
+}
+
 /// The deliverables table and the recipe-wide naming and output options.
 fn recipe_table(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
     let Some(loaded) = state.loaded.as_ref() else {
         return;
     };
+    let theme = ctx.theme;
     let from = match loaded.source {
         Source::Night => "Saved in the night's recipe.toml.",
         Source::UserDefault => {
@@ -356,19 +347,19 @@ fn recipe_table(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
         }
         Source::BuiltIn => "The built-in week; saved to this night on the first edit.",
     };
-    section(
-        ctx,
+    parts::section(
         ui,
+        theme,
         "Deliverables",
         &format!(
             "What this night produces. Each deliverable is drafted as the plan of the same name. {from}"
         ),
     );
     for w in &loaded.warnings {
-        ui.colored_label(theme::rgb(ctx.theme.warning), w);
+        parts::status_line(ui, theme, parts::Kind::Warning, w);
     }
     if let Some(e) = &state.error {
-        ui.colored_label(theme::rgb(ctx.theme.danger), e);
+        parts::status_line(ui, theme, parts::Kind::Danger, e);
     }
     let card_keys: Vec<String> = ctx
         .project
@@ -380,15 +371,15 @@ fn recipe_table(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
     };
     let names = recipe::Names::for_work(&loaded.work);
     let out = loaded.recipe.output_dir(&loaded.work, &names);
-    let theme = ctx.theme;
     let mut changed = false;
     let mut remove: Option<usize> = None;
     let recipe_view = loaded.recipe.clone();
     egui::Grid::new("night-recipe")
         .num_columns(7)
-        .spacing([theme::SPACE_MD, theme::SPACE_XS])
+        .spacing([theme::SPACE_SM, theme::SPACE_XS + 2.0])
+        .min_row_height(theme::CONTROL_HEIGHT)
         .show(ui, |ui| {
-            for head in [
+            for text in [
                 "Id",
                 "Shape",
                 "Length",
@@ -397,33 +388,54 @@ fn recipe_table(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
                 "Delivers as",
                 "",
             ] {
-                ui.label(
-                    egui::RichText::new(head)
-                        .small()
-                        .strong()
-                        .color(theme::rgb(theme.text_muted)),
-                );
+                head(ui, theme, text);
             }
             ui.end_row();
             for (i, d) in loaded.recipe.deliverables.iter_mut().enumerate() {
                 changed |= deliverable_row(ui, theme, i, d, &card_keys);
                 let name = recipe_view.filename(d, recipe::MAIN_VERSION, &names);
                 let exists = out.join(&name).is_file();
-                let color = if exists {
-                    theme.success
-                } else {
-                    theme.text_muted
-                };
-                ui.label(egui::RichText::new(&name).color(theme::rgb(color)))
-                    .on_hover_text(if exists {
-                        "Already delivered (a new render replaces it)"
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = theme::SPACE_XS + 2.0;
+                    if exists {
+                        icons::icon(
+                            ui,
+                            icons::CIRCLE_CHECK,
+                            icons::SMALL,
+                            theme::rgb(theme.success),
+                        );
                     } else {
-                        "Not delivered yet"
-                    });
-                if ui
-                    .small_button("✕")
-                    .on_hover_text("Remove this deliverable")
-                    .clicked()
+                        icons::icon(
+                            ui,
+                            icons::CIRCLE,
+                            icons::SMALL,
+                            theme::rgb(theme.text_faint),
+                        );
+                    }
+                    ui.label(
+                        egui::RichText::new(&name)
+                            .font(theme::font(theme::BODY_SIZE))
+                            .color(theme::rgb(if exists {
+                                theme.text
+                            } else {
+                                theme.text_muted
+                            })),
+                    )
+                })
+                .response
+                .on_hover_text(if exists {
+                    "Already delivered (a new render replaces it)"
+                } else {
+                    "Not delivered yet"
+                });
+                if widgets::icon_btn(
+                    ui,
+                    theme,
+                    icons::TRASH,
+                    &format!("Remove deliverable {}", i + 1),
+                    "",
+                )
+                .clicked()
                 {
                     remove = Some(i);
                 }
@@ -438,7 +450,16 @@ fn recipe_table(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
     }
     ui.add_space(theme::SPACE_SM);
     ui.horizontal(|ui| {
-        if ui.button("+ Add deliverable").clicked() {
+        ui.spacing_mut().item_spacing.x = theme::SPACE_SM;
+        if widgets::button_with(
+            ui,
+            theme,
+            widgets::ButtonKind::Outline,
+            Some(icons::PLUS),
+            "Add deliverable",
+        )
+        .clicked()
+        {
             let mut n = loaded.recipe.deliverables.len() + 1;
             let mut id = format!("cut-{n}");
             while loaded.recipe.get(&id).is_some() {
@@ -452,42 +473,70 @@ fn recipe_table(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
             ));
             changed = true;
         }
-        if ui
-            .button("Reset to the Flow Night week")
-            .on_hover_text("Three reels, a story, a feed cut, a wide cut and a recap")
-            .clicked()
+        if widgets::button_with(
+            ui,
+            theme,
+            widgets::ButtonKind::Ghost,
+            Some(icons::ROTATE_CCW),
+            "Reset to the Flow Night week",
+        )
+        .on_hover_text("Three reels, a story, a feed cut, a wide cut and a recap")
+        .clicked()
         {
             loaded.recipe.deliverables = Recipe::default().deliverables;
             changed = true;
         }
     });
-    ui.add_space(theme::SPACE_MD);
-    egui::Grid::new("night-recipe-options")
-        .num_columns(2)
-        .spacing([theme::SPACE_LG, theme::SPACE_SM])
-        .show(ui, |ui| {
-            ui.label(egui::RichText::new("File names").color(theme::rgb(theme.text_muted)));
-            ui.horizontal(|ui| {
-                changed |= ui
-                    .add(
-                        egui::TextEdit::singleline(&mut loaded.recipe.filename)
-                            .desired_width(200.0)
-                            .hint_text(recipe::DEFAULT_FILENAME),
+    ui.add_space(theme::SPACE_XL);
+    parts::section(
+        ui,
+        theme,
+        "Output",
+        "How the night's videos are named, where they go and how they are encoded.",
+    );
+    ui.scope(|ui| {
+        ui.set_max_width(FORM_WIDTH);
+        parts::form_row(ui, theme, "File names", |ui| {
+            let field = ui
+                .allocate_ui(egui::vec2(280.0, theme::CONTROL_HEIGHT), |ui| {
+                    widgets::text_field(
+                        ui,
+                        theme,
+                        &mut loaded.recipe.filename,
+                        recipe::DEFAULT_FILENAME,
                     )
                     .accessible_name("File names")
-                    .changed();
-                ui.label(
-                    egui::RichText::new("{night} {id} {aspect} {version} {date}")
-                        .small()
-                        .color(theme::rgb(theme.text_faint)),
-                );
-            });
-            ui.end_row();
-            ui.label(egui::RichText::new("Output folder").color(theme::rgb(theme.text_muted)));
-            ui.horizontal(|ui| {
-                ui.label(short(&out, 60))
-                    .on_hover_text(out.display().to_string());
-                if ui.button("Change…").clicked() {
+                })
+                .inner;
+            changed |= widgets::tip(
+                field,
+                theme,
+                "Fill-ins: {night} {id} {aspect} {version} {date}",
+                "",
+            )
+            .changed();
+        });
+        ui.add_space(theme::SPACE_XS + 2.0);
+        parts::form_row(ui, theme, "Output folder", |ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = theme::SPACE_XS;
+                if loaded.recipe.output_dir.is_some() {
+                    if widgets::icon_btn(
+                        ui,
+                        theme,
+                        icons::ROTATE_CCW,
+                        "Back to the default output folder",
+                        "",
+                    )
+                    .clicked()
+                    {
+                        loaded.recipe.output_dir = None;
+                        changed = true;
+                    }
+                } else {
+                    ui.add_space(theme::CONTROL_HEIGHT + theme::SPACE_XS);
+                }
+                if widgets::outline_button(ui, theme, "Change\u{2026}").clicked() {
                     let night = recipe::night_dir(&loaded.work);
                     if let Some(dir) = rfd::FileDialog::new()
                         .set_title("Where the night's videos go")
@@ -503,30 +552,32 @@ fn recipe_table(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
                         changed = true;
                     }
                 }
-                if loaded.recipe.output_dir.is_some() && ui.button("Default").clicked() {
-                    loaded.recipe.output_dir = None;
-                    changed = true;
-                }
+                ui.add_space(theme::SPACE_XS);
+                let width = ui.available_width();
+                parts::path_box(ui, theme, icons::FOLDER, Some(&out), "", width);
             });
-            ui.end_row();
-            ui.label(egui::RichText::new("Encoder").color(theme::rgb(theme.text_muted)));
-            ui.horizontal(|ui| {
-                for choice in recipe::EncoderChoice::ALL {
-                    changed |= ui
-                        .selectable_value(&mut loaded.recipe.encoder, choice, choice.label())
-                        .changed();
-                }
-            });
-            ui.end_row();
-            ui.label(egui::RichText::new("Timeline").color(theme::rgb(theme.text_muted)));
-            changed |= ui
-                .checkbox(
+        });
+        ui.add_space(theme::SPACE_XS + 2.0);
+        parts::form_row(ui, theme, "Encoder", |ui| {
+            let items: Vec<(recipe::EncoderChoice, &str)> = recipe::EncoderChoice::ALL
+                .iter()
+                .map(|c| (*c, c.label()))
+                .collect();
+            changed |= widgets::segmented(ui, theme, &mut loaded.recipe.encoder, &items);
+        });
+        ui.add_space(theme::SPACE_XS + 2.0);
+        parts::form_row(ui, theme, "Timeline", |ui| {
+            ui.allocate_ui(egui::vec2(360.0, theme::CONTROL_HEIGHT), |ui| {
+                changed |= widgets::switch(
+                    ui,
+                    theme,
                     &mut loaded.recipe.otio,
                     "Also export an OTIO timeline with each render",
                 )
                 .changed();
-            ui.end_row();
+            });
         });
+    });
     if changed {
         state.dirty = true;
     }
@@ -545,14 +596,12 @@ fn deliverable_row(
 ) -> bool {
     let mut changed = false;
     changed |= ui
-        .add(
-            // min_size: a TextEdit in a Grid shrinks to the remembered column width
-            // (the header's), so desired_width alone leaves it clipped.
-            egui::TextEdit::singleline(&mut d.id)
-                .desired_width(80.0)
-                .min_size(egui::vec2(80.0, 0.0)),
-        )
-        .accessible_name(format!("Deliverable {} id", i + 1))
+        .allocate_ui(egui::vec2(96.0, theme::CONTROL_HEIGHT), |ui| {
+            ui.set_min_width(96.0);
+            widgets::text_field(ui, theme, &mut d.id, "id")
+                .accessible_name(format!("Deliverable {} id", i + 1))
+        })
+        .inner
         .changed();
     egui::ComboBox::from_id_salt(("recipe-aspect", i))
         .width(64.0)
@@ -595,13 +644,13 @@ fn deliverable_row(
         .response
         .accessible_name(format!("Deliverable {} end card", i + 1));
     let mut template = d.filename.clone().unwrap_or_default();
-    let response = ui.add(
-        egui::TextEdit::singleline(&mut template)
-            .desired_width(140.0)
-            .min_size(egui::vec2(140.0, 0.0))
-            .hint_text(egui::RichText::new("recipe default").color(theme::rgb(theme.text_faint))),
-    );
-    let response = response.accessible_name(format!("Deliverable {} file name", i + 1));
+    let response = ui
+        .allocate_ui(egui::vec2(160.0, theme::CONTROL_HEIGHT), |ui| {
+            ui.set_min_width(160.0);
+            widgets::text_field(ui, theme, &mut template, "recipe default")
+                .accessible_name(format!("Deliverable {} file name", i + 1))
+        })
+        .inner;
     if response.changed() {
         d.filename = Some(template).filter(|t| !t.trim().is_empty());
         changed = true;

@@ -23,6 +23,16 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   and Lucide buttons, edge-to-edge panels with one hairline between them and a focus
   outline on the panel last clicked, 40 px panel headers, a 44 px icon rail for the
   folded chat and glass buttons over the viewer for a folded browser or inspector.
+- Home and Export in the Selects style: the start page is one centred column with
+  "What are we making?" in a composer box (paperclip and send ask for the footage),
+  prompt templates as pills in category rows (two new ones: who performed tonight, a
+  15 s story), a dashed drop zone, a whole-window drop overlay and the nights as 40 px
+  rows with frames and status badges; the get-started wizard is a stepper over one
+  stepped card; the processing page is a centred step list (spinner or check per step,
+  8 px progress bars, remaining time, Stop as an outline button); the night page's
+  settings and recipe are form rows with path fields, text fields, a segmented encoder
+  and a switch; the export panel lists deliverables with status badges, versions as
+  tickable chips and icon buttons for each file. Lucide icons replace every glyph.
 
 - Timeline playback ends like the render: after the last shot the viewer holds the
   plan's end card for the render's span (`card_bar` to `end_bar`, `Plan::card_span`)

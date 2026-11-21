@@ -1,18 +1,20 @@
 // ============================================================================
 // Module:       gui::pages::night::processing
-// Description:  The processing page: overall bars per analysis step, elapsed
-//               and remaining time, cancel, "Open editor" once indexing is
-//               done, and every clip's status and progress.
+// Description:  The processing page: a centred step list (spinner or check
+//               per analysis step), elapsed and remaining time, Stop, "Open
+//               editor" once indexing is done, and every clip's status.
 //
 // Dependencies: egui; crate::{jobs, project}, crate::gui::pages::night::{
-//               pipeline, scan, wizard}
+//               parts, pipeline, scan, wizard}
 // ============================================================================
 
 //! Processing.
 //!
-//! After Selects' processing view: one bar per step the approval queued,
-//! each with its own remaining time, the run's elapsed and remaining time,
-//! and Stop. Below, every clip: its frame, name, length, where it stands
+//! After Selects' processing view, as a centred column: a card listing the
+//! steps the approval queued, each with a spinner, check or cross, a bar
+//! while it runs and its own remaining time; the run's elapsed and
+//! remaining time; and Stop as an outline button. Below, every clip as a
+//! 40 px row: its frame, name, length, where it stands
 //! (queued, analysing, indexed, captioned, failed and why) and, while
 //! captions run, how many of its segments are done.
 //!
@@ -28,11 +30,12 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
+use super::parts::{self, clock};
 use super::{pipeline, scan, wizard::Planned};
 use crate::commands::ItemState;
 use crate::gui::app::{Action, Page};
 use crate::gui::pages::PageCtx;
-use crate::gui::ui::{theme, widgets};
+use crate::gui::ui::{icons, theme, widgets};
 use crate::jobs::{Job, Status};
 use crate::project::{self, ClipRow, RowState};
 
@@ -150,16 +153,6 @@ pub(crate) fn remaining(steps: &[(Phase, f32)]) -> f32 {
         .sum()
 }
 
-/// "1:05", "12:40", "1:02:03".
-fn clock(secs: f64) -> String {
-    let s = secs.max(0.0).round() as u64;
-    if s >= 3600 {
-        format!("{}:{:02}:{:02}", s / 3600, s % 3600 / 60, s % 60)
-    } else {
-        format!("{}:{:02}", s / 60, s % 60)
-    }
-}
-
 /// Overlays the running jobs' live reports on the rows.
 fn live(rows: &mut [ClipRow], index: Option<&Job>, caption: Option<&Job>) {
     if let Some(job) = index.filter(|j| j.status == Status::Running) {
@@ -203,6 +196,9 @@ pub(crate) enum Outcome {
     Back,
 }
 
+/// The column's widest.
+const COLUMN: f32 = 640.0;
+
 /// Draws the page.
 pub(crate) fn draw(
     ctx: &mut PageCtx<'_>,
@@ -210,7 +206,6 @@ pub(crate) fn draw(
     queue: &mut pipeline::State,
     ui: &mut egui::Ui,
 ) -> Option<Outcome> {
-    let theme = ctx.theme;
     let (name, work, footage) = ctx
         .project
         .as_ref()
@@ -259,71 +254,6 @@ pub(crate) fn draw(
     let indexed = ctx.project.as_ref().is_some_and(|p| p.index.is_some());
     let editor_ready = indexed && !index_pending;
     let active = queue.active();
-
-    let mut outcome = None;
-    ui.horizontal(|ui| {
-        ui.vertical(|ui| {
-            ui.label(
-                egui::RichText::new(if active {
-                    format!("Analysing {name}")
-                } else {
-                    format!("{name}: analysis")
-                })
-                .font(theme::font(theme::HEADING_SIZE + 4.0))
-                .color(theme::rgb(theme.text))
-                .strong(),
-            );
-            let line = match (&run, active) {
-                (Some(r), true) => format!(
-                    "{} elapsed \u{b7} about {} left",
-                    clock(r.started.elapsed().as_secs_f64()),
-                    project::duration_text(left)
-                ),
-                (Some(r), false) => format!(
-                    "Finished after {}",
-                    clock(r.started.elapsed().as_secs_f64())
-                ),
-                (None, true) => "Running".to_owned(),
-                (None, false) => "Nothing running. What each clip has been through:".to_owned(),
-            };
-            widgets::muted(ui, theme, &line);
-        });
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let open = ui
-                .add_enabled_ui(editor_ready, |ui| {
-                    widgets::button(ui, theme, "Open editor", widgets::Emphasis::Primary)
-                })
-                .inner
-                .on_hover_text("Captions keep running in the background")
-                .on_disabled_hover_text("Unlocks when indexing finishes")
-                .clicked();
-            if open {
-                ctx.actions.push(Action::Go(Page::Review));
-            }
-            if active
-                && widgets::button(ui, theme, "Stop", widgets::Emphasis::Secondary)
-                    .on_hover_text(
-                        "Stop after the clip or segment in hand; what is finished is kept, \
-                         and the next run picks up from there",
-                    )
-                    .clicked()
-            {
-                queue.cancel(ctx.jobs);
-            }
-            if widgets::button(ui, theme, "Night page", widgets::Emphasis::Secondary).clicked() {
-                outcome = Some(Outcome::Back);
-            }
-        });
-    });
-    if let Some(why) = queue.stopped() {
-        ui.add_space(theme::SPACE_SM);
-        ui.colored_label(theme::rgb(theme.warning), why);
-    }
-    ui.add_space(theme::SPACE_LG);
-    if !phases.is_empty() {
-        steps(ctx, ui, &phases);
-        ui.add_space(theme::SPACE_LG);
-    }
     let scanned = state.scan.for_work(&work).cloned();
     let mut rows = match &scanned {
         Some(s) => project::clip_rows(
@@ -343,112 +273,228 @@ pub(crate) fn draw(
         .filter(|j| j.status == Status::Running)
         .map(|j| j.progress.working().map(str::to_owned).collect())
         .unwrap_or_default();
-    clips(ctx, ui, &rows, &analysing, scanned.is_none());
+
+    let theme = ctx.theme;
+    let mut outcome = None;
+    parts::centred(ui, COLUMN, |ui| {
+        ui.add_space((ui.clip_rect().height() * 0.08).clamp(theme::SPACE_XL, 72.0));
+        ui.vertical_centered(|ui| {
+            ui.spacing_mut().item_spacing.y = theme::SPACE_XS;
+            ui.label(
+                egui::RichText::new(if active {
+                    format!("Analysing {name}")
+                } else {
+                    format!("{name}: analysis")
+                })
+                .font(theme::semibold(ui.ctx(), theme::HEADING_SIZE + 4.0))
+                .color(theme::rgb(theme.text)),
+            );
+            let line = match (&run, active) {
+                (Some(r), true) => format!(
+                    "{} elapsed \u{b7} about {} left",
+                    clock(r.started.elapsed().as_secs_f64()),
+                    project::duration_text(left)
+                ),
+                (Some(r), false) => format!(
+                    "Finished after {}",
+                    clock(r.started.elapsed().as_secs_f64())
+                ),
+                (None, true) => "Running".to_owned(),
+                (None, false) => "Nothing running. What each clip has been through:".to_owned(),
+            };
+            ui.label(
+                egui::RichText::new(line)
+                    .font(theme::tabular(ui.ctx(), theme::BODY_SIZE))
+                    .color(theme::rgb(theme.text_muted)),
+            );
+        });
+        ui.add_space(theme::SPACE_XL);
+        if let Some(why) = queue.stopped() {
+            parts::notice(ui, theme, parts::Kind::Warning, why);
+            ui.add_space(theme::SPACE_MD);
+        }
+        if !phases.is_empty() {
+            steps(ctx, ui, &phases);
+            ui.add_space(theme::SPACE_LG);
+        }
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = theme::SPACE_SM;
+            if widgets::button_with(
+                ui,
+                theme,
+                widgets::ButtonKind::Ghost,
+                Some(icons::CHEVRON_LEFT),
+                "Night page",
+            )
+            .clicked()
+            {
+                outcome = Some(Outcome::Back);
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = theme::SPACE_SM;
+                let open = ui
+                    .add_enabled_ui(editor_ready, |ui| {
+                        widgets::button_with(
+                            ui,
+                            theme,
+                            widgets::ButtonKind::Key,
+                            None,
+                            "Open editor",
+                        )
+                    })
+                    .inner
+                    .on_hover_text("Captions keep running in the background")
+                    .on_disabled_hover_text("Unlocks when indexing finishes")
+                    .clicked();
+                if open {
+                    ctx.actions.push(Action::Go(Page::Review));
+                }
+                if active
+                    && widgets::outline_button(ui, theme, "Stop")
+                        .on_hover_text(
+                            "Stop after the clip or segment in hand; what is finished is kept, \
+                             and the next run picks up from there",
+                        )
+                        .clicked()
+                {
+                    queue.cancel(ctx.jobs);
+                }
+            });
+        });
+        ui.add_space(theme::SPACE_XL + theme::SPACE_SM);
+        clips(ctx, ui, &rows, &analysing, scanned.is_none());
+        ui.add_space(theme::SPACE_XL * 2.0);
+    });
     outcome
 }
 
-/// The per-step bars.
+/// A step's mark, the line on its right, and its done fraction.
+fn look(step: &Planned, phase: &Phase) -> (parts::Mark, String, Option<f32>) {
+    match phase {
+        Phase::Queued => (
+            parts::Mark::Queued,
+            format!("\u{2248} {}", project::duration_text(step.secs)),
+            None,
+        ),
+        Phase::Running {
+            fraction,
+            left,
+            text,
+            ..
+        } => (
+            parts::Mark::Running,
+            match left {
+                Some(l) => format!("{text} \u{b7} {} left", project::duration_text(*l)),
+                None => text.clone(),
+            },
+            Some(fraction.unwrap_or(0.0)),
+        ),
+        Phase::Done(took, skipped) => (
+            parts::Mark::Done,
+            if *skipped > 0 {
+                format!(
+                    "took {} \u{b7} {skipped} skipped",
+                    project::duration_text(*took)
+                )
+            } else {
+                format!("took {}", project::duration_text(*took))
+            },
+            None,
+        ),
+        Phase::Failed(e) => (parts::Mark::Failed, e.clone(), None),
+        Phase::Cancelled => (parts::Mark::Stopped, "stopped by you".to_owned(), None),
+        Phase::Skipped => (parts::Mark::Skipped, "did not run".to_owned(), None),
+    }
+}
+
+/// The step list: a card of rows, each with its mark (spinner, check,
+/// cross), its name, where it stands on the right and, while it runs, a
+/// progress bar.
 fn steps(ctx: &PageCtx<'_>, ui: &mut egui::Ui, phases: &[(Planned, Phase)]) {
+    // A step's row, and the extra a running one takes for its bar.
+    const ROW: f32 = 44.0;
+    const BAR_ROW: f32 = 16.0;
     let theme = ctx.theme;
     egui::Frame::new()
         .fill(theme::rgb(theme.panel))
-        .stroke(egui::Stroke::new(1.0, theme::rgb(theme.border)))
-        .corner_radius(egui::CornerRadius::same(theme::RADIUS_LG))
-        .inner_margin(theme::margin(theme::SPACE_MD))
+        .stroke(theme::ink_line(theme))
+        .corner_radius(egui::CornerRadius::same(theme::RADIUS_XL))
+        .inner_margin(theme::margin_xy(theme::SPACE_LG, theme::SPACE_XS))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            for (step, phase) in phases {
-                let (word, color, fraction, detail) = match phase {
-                    Phase::Queued => (
-                        "queued",
-                        theme.text_faint,
-                        0.0,
-                        format!("\u{2248} {}", project::duration_text(step.secs)),
-                    ),
-                    Phase::Running {
-                        fraction,
-                        left,
-                        text,
-                        ..
-                    } => (
-                        "running",
-                        theme.accent,
-                        fraction.unwrap_or(0.0),
-                        match left {
-                            Some(l) => format!("{text} \u{b7} {} left", project::duration_text(*l)),
-                            None => text.clone(),
-                        },
-                    ),
-                    Phase::Done(took, skipped) => (
-                        "done",
-                        theme.success,
-                        1.0,
-                        if *skipped > 0 {
-                            format!(
-                                "took {} \u{b7} {skipped} skipped",
-                                project::duration_text(*took)
-                            )
-                        } else {
-                            format!("took {}", project::duration_text(*took))
-                        },
-                    ),
-                    Phase::Failed(e) => ("failed", theme.danger, 0.0, e.clone()),
-                    Phase::Cancelled => {
-                        ("stopped", theme.warning, 0.0, "stopped by you".to_owned())
-                    }
-                    Phase::Skipped => ("skipped", theme.text_faint, 0.0, "did not run".to_owned()),
+            ui.spacing_mut().item_spacing.y = 0.0;
+            for (i, (step, phase)) in phases.iter().enumerate() {
+                let (mark, detail, fraction) = look(step, phase);
+                let height = ROW + if fraction.is_some() { BAR_ROW } else { 0.0 };
+                let width = ui.available_width();
+                let (rect, response) =
+                    ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+                if i > 0 {
+                    ui.painter()
+                        .hline(rect.x_range(), rect.top(), theme::ink_line(theme));
+                }
+                let y = rect.top() + ROW / 2.0;
+                let mark_rect = egui::Rect::from_center_size(
+                    egui::pos2(rect.left() + icons::SIZE / 2.0, y),
+                    egui::Vec2::splat(icons::SIZE),
+                );
+                parts::mark(ui, theme, mark_rect, mark);
+                let done = matches!(mark, parts::Mark::Done | parts::Mark::Running);
+                let x = mark_rect.right() + theme::SPACE_MD;
+                let detail_galley = ui.painter().layout_no_wrap(
+                    detail.clone(),
+                    theme::tabular(ui.ctx(), theme::BODY_SIZE),
+                    theme::rgb(theme.text_muted),
+                );
+                let full_w = detail_galley.size().x;
+                let detail_w = full_w.min((rect.width() * 0.55).max(0.0));
+                let detail_rect = egui::Rect::from_min_max(
+                    egui::pos2(rect.right() - detail_w, rect.top()),
+                    egui::pos2(rect.right(), rect.top() + ROW),
+                );
+                let detail_color = if matches!(mark, parts::Mark::Failed) {
+                    theme::rgb(theme.danger)
+                } else {
+                    theme::rgb(theme.text_muted)
                 };
-                ui.horizontal(|ui| {
-                    let (rect, _) =
-                        ui.allocate_exact_size(egui::vec2(150.0, 20.0), egui::Sense::hover());
-                    ui.painter().circle_filled(
-                        egui::pos2(rect.left() + 4.0, rect.center().y),
-                        4.0,
-                        theme::rgb(color),
+                ui.painter().with_clip_rect(detail_rect).galley(
+                    egui::pos2(detail_rect.left(), y - detail_galley.size().y / 2.0),
+                    detail_galley,
+                    detail_color,
+                );
+                ui.painter().text(
+                    egui::pos2(x, y),
+                    egui::Align2::LEFT_CENTER,
+                    &step.title,
+                    theme::font(theme::LARGE_SIZE),
+                    theme::rgb(if done || mark == parts::Mark::Failed {
+                        theme.text
+                    } else {
+                        theme.text_muted
+                    }),
+                );
+                if let Some(f) = fraction {
+                    let bar = egui::Rect::from_min_size(
+                        egui::pos2(x, rect.top() + ROW - 4.0),
+                        egui::vec2(rect.right() - x, 8.0),
                     );
-                    ui.painter().text(
-                        egui::pos2(rect.left() + 14.0, rect.center().y),
-                        egui::Align2::LEFT_CENTER,
-                        &step.title,
-                        theme::font(theme::BODY_SIZE),
-                        theme::rgb(theme.text),
+                    parts::paint_progress(
+                        ui,
+                        theme,
+                        bar,
+                        egui::Id::unique(("processing-step", &step.label)),
+                        f,
                     );
-                    let (rect, _) =
-                        ui.allocate_exact_size(egui::vec2(70.0, 20.0), egui::Sense::hover());
-                    ui.painter().text(
-                        rect.left_center(),
-                        egui::Align2::LEFT_CENTER,
-                        word,
-                        theme::font(theme::BODY_SIZE - 2.0),
-                        theme::rgb(theme.text_muted),
-                    );
-                    let bar_w = (ui.available_width() - 300.0).max(80.0);
-                    ui.allocate_ui(egui::vec2(bar_w, 20.0), |ui| {
-                        ui.set_width(bar_w);
-                        ui.add_space(7.0);
-                        widgets::meter(
-                            ui,
-                            theme,
-                            egui::Id::unique(("processing-step", &step.label)),
-                            fraction,
-                            color,
-                        );
-                    });
-                    ui.label(
-                        egui::RichText::new(detail)
-                            .small()
-                            .color(theme::rgb(theme.text_muted)),
-                    );
-                    if matches!(phase, Phase::Running { fraction: None, .. }) {
-                        ui.add(egui::Spinner::new().size(12.0));
-                    }
-                });
-                ui.add_space(theme::SPACE_XS);
+                }
+                if detail_w < full_w {
+                    response.on_hover_text(detail);
+                }
             }
         });
 }
 
-/// The per-clip list.
+/// The per-clip list: a label with the counts, then a 40 px row per clip
+/// (frame, name, length, captions done, a badge for where it stands).
 fn clips(
     ctx: &mut PageCtx<'_>,
     ui: &mut egui::Ui,
@@ -466,7 +512,8 @@ fn clips(
         .iter()
         .fold((0, 0), |a, r| (a.0 + r.captions.0, a.1 + r.captions.1));
     ui.horizontal(|ui| {
-        widgets::title(ui, theme, &format!("Clips \u{b7} {}", rows.len()));
+        ui.set_min_height(theme::CONTROL_HEIGHT);
+        parts::label(ui, theme, &format!("Clips \u{b7} {}", rows.len()));
         let mut summary = format!("{done} indexed");
         if captions.1 > 0 {
             summary.push_str(&format!(
@@ -477,116 +524,117 @@ fn clips(
         if failed > 0 {
             summary.push_str(&format!(" \u{b7} {failed} failed"));
         }
-        widgets::muted(ui, theme, &summary);
-        if reading {
-            ui.add(egui::Spinner::new().size(12.0));
-        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(
+                egui::RichText::new(summary)
+                    .font(theme::tabular(ui.ctx(), theme::BODY_SIZE))
+                    .color(theme::rgb(theme.text_muted)),
+            );
+            if reading {
+                ui.add(
+                    egui::Spinner::new()
+                        .size(icons::SMALL - 2.0)
+                        .color(theme::rgb(theme.text_muted)),
+                );
+            }
+        });
     });
-    ui.add_space(theme::SPACE_SM);
-    let height = 46.0;
+    ui.add_space(theme::SPACE_XS);
+    ui.spacing_mut().item_spacing.y = 2.0;
     for row in rows {
         let width = ui.available_width();
-        let (rect, response) =
-            ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+        let (rect, response) = ui.allocate_exact_size(
+            egui::vec2(width, super::recent::ROW_HEIGHT),
+            egui::Sense::hover(),
+        );
         if !ui.is_rect_visible(rect) {
             continue;
         }
+        parts::row_fill(ui, theme, &response, false);
         let working = analysing.contains(&row.id);
-        let painter = ui.painter();
-        if response.hovered() {
-            painter.rect_filled(
-                rect,
-                egui::CornerRadius::same(theme::RADIUS),
-                theme::rgb(theme.hover),
-            );
-        }
-        painter.line_segment(
-            [rect.left_bottom(), rect.right_bottom()],
-            egui::Stroke::new(1.0, theme::rgb(theme.border)),
-        );
         let thumb = egui::Rect::from_min_size(
-            rect.left_top() + egui::vec2(theme::SPACE_XS, 5.0),
-            egui::vec2(64.0, 36.0),
+            egui::pos2(rect.left() + theme::SPACE_XS + 2.0, rect.center().y - 13.5),
+            egui::vec2(48.0, 27.0),
         );
         let t = row.duration.map_or(1.0, |d| d * 0.4);
-        ctx.thumbs
-            .paint(ui, thumb, &row.path, t, 0.5, theme::rgb(theme.raised));
-        let painter = ui.painter();
+        parts::thumb(ctx.thumbs, ui, theme, thumb, Some((row.path.as_path(), t)));
         let y = rect.center().y;
-        let x = thumb.right() + theme::SPACE_MD;
-        painter.text(
-            egui::pos2(x, y),
-            egui::Align2::LEFT_CENTER,
-            &row.id,
-            theme::font(theme::BODY_SIZE),
-            theme::rgb(theme.text),
-        );
-        painter.text(
-            egui::pos2(x + 170.0, y),
-            egui::Align2::LEFT_CENTER,
-            row.duration.map_or_else(|| "\u{2014}".to_owned(), clock),
-            theme::font(theme::BODY_SIZE - 1.0),
-            theme::rgb(theme.text_muted),
-        );
-        let (word, color) = if working {
-            ("analysing", theme.accent)
+        let (word, tone) = if working {
+            ("analysing", widgets::Tone::Neutral)
         } else {
             match row.state {
-                RowState::Pending => ("queued", theme.text_faint),
-                RowState::Indexed => ("indexed", theme.warning),
-                RowState::Captioned => ("captioned", theme.success),
-                RowState::Failed => ("failed", theme.danger),
+                RowState::Pending => ("queued", widgets::Tone::Neutral),
+                RowState::Indexed => ("indexed", widgets::Tone::Neutral),
+                RowState::Captioned => ("captioned", widgets::Tone::Success),
+                RowState::Failed => ("failed", widgets::Tone::Danger),
             }
         };
-        let sx = x + 250.0;
-        painter.circle_filled(egui::pos2(sx + 4.0, y), 4.0, theme::rgb(color));
-        painter.text(
-            egui::pos2(sx + 14.0, y),
-            egui::Align2::LEFT_CENTER,
-            word,
-            theme::font(theme::BODY_SIZE - 1.0),
-            theme::rgb(theme.text),
-        );
-        let px = sx + 120.0;
-        let bar_w = (rect.right() - px - theme::SPACE_MD).clamp(60.0, 260.0);
-        if let Some(reason) = &row.reason {
-            let galley = painter.layout(
-                reason.clone(),
-                theme::font(theme::BODY_SIZE - 2.0),
-                theme::rgb(theme.danger),
-                rect.right() - px - theme::SPACE_MD,
+        let badge_w =
+            super::recent::paint_badge(ui, theme, rect.right() - theme::SPACE_SM, y, word, tone);
+        let mut right = rect.right() - theme::SPACE_SM - badge_w - theme::SPACE_MD;
+        if working && row.captions.1 == 0 {
+            let spin = egui::Rect::from_center_size(
+                egui::pos2(right - icons::SMALL / 2.0, y),
+                egui::Vec2::splat(icons::SMALL),
             );
-            painter.galley(
-                egui::pos2(px, y - galley.size().y / 2.0),
-                galley,
-                theme::rgb(theme.danger),
-            );
-        } else if row.captions.1 > 0 {
-            let bar = egui::Rect::from_min_size(egui::pos2(px, y - 3.0), egui::vec2(bar_w, 6.0));
-            let f = row.captions.0 as f32 / row.captions.1 as f32;
-            painter.rect_filled(bar, egui::CornerRadius::same(3), theme::rgb(theme.hover));
-            painter.rect_filled(
-                egui::Rect::from_min_size(bar.min, egui::vec2(bar.width() * f, bar.height())),
-                egui::CornerRadius::same(3),
-                theme::rgb(if f >= 1.0 {
-                    theme.success
-                } else {
-                    theme.accent
-                }),
-            );
-            painter.text(
-                egui::pos2(bar.right() + theme::SPACE_SM, y),
-                egui::Align2::LEFT_CENTER,
-                format!("{}/{} captioned", row.captions.0, row.captions.1),
-                theme::font(theme::BODY_SIZE - 2.0),
+            parts::mark(ui, theme, spin, parts::Mark::Running);
+            right = spin.left() - theme::SPACE_MD;
+        }
+        if row.reason.is_none() && row.captions.1 > 0 {
+            let count = format!("{}/{}", row.captions.0, row.captions.1);
+            let galley = ui.painter().layout_no_wrap(
+                count,
+                theme::tabular(ui.ctx(), theme::SMALL_SIZE),
                 theme::rgb(theme.text_muted),
             );
-        } else if working {
-            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(
-                egui::Rect::from_center_size(egui::pos2(px + 8.0, y), egui::vec2(16.0, 16.0)),
-            ));
-            child.add(egui::Spinner::new().size(12.0));
+            let text_x = right - galley.size().x;
+            ui.painter().galley(
+                egui::pos2(text_x, y - galley.size().y / 2.0),
+                galley,
+                theme::rgb(theme.text_muted),
+            );
+            let bar = egui::Rect::from_min_size(
+                egui::pos2(text_x - theme::SPACE_SM - 96.0, y - 3.0),
+                egui::vec2(96.0, 6.0),
+            );
+            parts::paint_progress(
+                ui,
+                theme,
+                bar,
+                egui::Id::unique(("processing-clip", &row.id)),
+                row.captions.0 as f32 / row.captions.1 as f32,
+            );
+            right = bar.left() - theme::SPACE_MD;
         }
+        let x = thumb.right() + theme::SPACE_SM + 2.0;
+        let room = egui::Rect::from_min_max(
+            egui::pos2(x, rect.top()),
+            egui::pos2(right.max(x), rect.bottom()),
+        );
+        let painter = ui.painter().with_clip_rect(room.intersect(ui.clip_rect()));
+        let name = painter.layout_no_wrap(
+            row.id.clone(),
+            theme::font(theme::LARGE_SIZE),
+            theme::rgb(theme.text),
+        );
+        let name_w = name.size().x;
+        painter.galley(
+            egui::pos2(x, y - name.size().y / 2.0),
+            name,
+            theme::rgb(theme.text),
+        );
+        let length = row.duration.map_or_else(|| "\u{2014}".to_owned(), clock);
+        let after = match &row.reason {
+            Some(reason) => (format!("{length} \u{b7} {reason}"), theme.danger),
+            None => (length, theme.text_muted),
+        };
+        painter.text(
+            egui::pos2(x + name_w + theme::SPACE_SM, y),
+            egui::Align2::LEFT_CENTER,
+            after.0,
+            theme::tabular(ui.ctx(), theme::BODY_SIZE),
+            theme::rgb(after.1),
+        );
         if let Some(reason) = &row.reason {
             response.on_hover_text(reason);
         }

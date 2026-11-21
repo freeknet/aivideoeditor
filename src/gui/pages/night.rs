@@ -29,6 +29,7 @@
 //! See `docs/research/05-selects-ui.md` §1 and §3 and
 //! `docs/research/02-ui-and-workflow.md` §6 and §9.3.
 
+pub(crate) mod parts;
 pub(crate) mod pipeline;
 pub(crate) mod processing;
 pub(crate) mod recent;
@@ -41,7 +42,7 @@ use std::path::PathBuf;
 
 use super::PageCtx;
 use crate::gui::app::{Action, Page};
-use crate::gui::ui::{theme, widgets};
+use crate::gui::ui::{icons, theme, widgets};
 
 /// Which Home view shows while a night is open.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -116,28 +117,21 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
     }
     if state.view == View::Processing {
         full_width(ctx, ui, "home-processing", |ctx, ui| {
-            egui::Frame::new()
-                .inner_margin(theme::margin_xy(theme::SPACE_XL, theme::SPACE_LG))
-                .show(ui, |ui| {
-                    let outcome =
-                        processing::draw(ctx, &mut state.processing, &mut state.pipeline, ui);
-                    if outcome == Some(processing::Outcome::Back) {
-                        state.view = View::Night;
-                    }
-                });
+            let outcome = processing::draw(ctx, &mut state.processing, &mut state.pipeline, ui);
+            if outcome == Some(processing::Outcome::Back) {
+                state.view = View::Night;
+            }
         });
         return;
     }
-    let line = egui::Stroke::new(1.0, theme::rgb(ctx.theme.border));
     egui::Panel::left("home-recent")
         .resizable(true)
-        .default_size(300.0)
-        .size_range(240.0..=420.0)
+        .default_size(320.0)
+        .size_range(260.0..=440.0)
         .frame(
             egui::Frame::new()
                 .fill(theme::rgb(ctx.theme.panel))
-                .stroke(line)
-                .inner_margin(theme::margin(theme::SPACE_MD)),
+                .inner_margin(theme::margin(theme::PANEL_INSET)),
         )
         .show(ui, |ui| {
             if let Some(footage) = recent::draw(ctx, &mut state.recent, ui) {
@@ -152,11 +146,16 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     egui::Frame::new()
-                        .inner_margin(theme::margin_xy(theme::SPACE_XL, theme::SPACE_LG))
-                        .show(ui, |ui| main(ctx, state, ui));
+                        .inner_margin(theme::margin_xy(theme::SPACE_XL, theme::SPACE_XL))
+                        .show(ui, |ui| {
+                            parts::centred(ui, NIGHT_COLUMN, |ui| main(ctx, state, ui));
+                        });
                 });
         });
 }
+
+/// The night page's column at its widest: room for the six pipeline steps.
+const NIGHT_COLUMN: f32 = 1120.0;
 
 /// A full-width Home view in a vertical scroll area.
 fn full_width(
@@ -178,16 +177,13 @@ fn full_width(
 /// The start page, and what its choices set going.
 fn start_page(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
     if let Some(notice) = state.notice.clone() {
-        egui::Frame::new()
-            .inner_margin(theme::margin_xy(theme::SPACE_XL, theme::SPACE_SM))
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.colored_label(theme::rgb(ctx.theme.warning), &notice);
-                    if ui.small_button("\u{2715}").clicked() {
-                        state.notice = None;
-                    }
-                });
-            });
+        let theme = ctx.theme;
+        ui.add_space(theme::SPACE_LG);
+        parts::centred(ui, 720.0, |ui| {
+            if parts::notice(ui, theme, notice_kind(&notice), &notice) {
+                state.notice = None;
+            }
+        });
     }
     match start::draw(ctx, &mut state.start, &mut state.recent, ui) {
         Some(start::Outcome::NewNight(footage)) => new_night(ctx, state, &footage),
@@ -280,7 +276,17 @@ fn main(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
     clips(ctx, state, ui);
 }
 
-/// "Not analysed yet: get started", or "analysing: view progress".
+/// How a notice line reads: a failure, or news.
+fn notice_kind(text: &str) -> parts::Kind {
+    if text.starts_with("Could not") {
+        parts::Kind::Danger
+    } else {
+        parts::Kind::Info
+    }
+}
+
+/// "Not analysed yet: get started", or "analysing: view progress", as a
+/// quiet card with the one key button of the page.
 fn banner(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
     let Some((work, indexed)) = ctx
         .project
@@ -295,30 +301,70 @@ fn banner(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
     }
     let theme = ctx.theme;
     egui::Frame::new()
-        .fill(theme::rgb(theme.accent_soft))
+        .fill(theme::rgb(theme.panel))
+        .stroke(theme::ink_line(theme))
         .corner_radius(egui::CornerRadius::same(theme::RADIUS_LG))
-        .inner_margin(theme::margin(theme::SPACE_MD))
+        .inner_margin(theme::margin_xy(theme::SPACE_LG, theme::SPACE_MD))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(if busy {
-                        "Analysis is running."
-                    } else {
-                        "This night has not been analysed yet."
-                    })
-                    .color(theme::rgb(theme.text)),
-                );
+                ui.spacing_mut().item_spacing.x = theme::SPACE_MD;
+                let rect = ui
+                    .allocate_exact_size(egui::Vec2::splat(icons::SIZE), egui::Sense::hover())
+                    .0;
+                if busy {
+                    parts::mark(ui, theme, rect, parts::Mark::Running);
+                } else {
+                    icons::paint(
+                        ui.painter(),
+                        rect,
+                        icons::SPARKLES,
+                        icons::SIZE,
+                        theme::rgb(theme.text_muted),
+                    );
+                }
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    ui.label(
+                        egui::RichText::new(if busy {
+                            "Analysis is running"
+                        } else {
+                            "This night has not been analysed yet"
+                        })
+                        .font(theme::medium(ui.ctx(), theme::LARGE_SIZE))
+                        .color(theme::rgb(theme.text)),
+                    );
+                    parts::muted(
+                        ui,
+                        theme,
+                        if busy {
+                            "Open the editor once indexing is done; captions carry on behind it."
+                        } else {
+                            "Footage, music and deliverables, then approve what runs."
+                        },
+                    );
+                });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if busy {
-                        if widgets::button(ui, theme, "View progress", widgets::Emphasis::Primary)
-                            .clicked()
+                        if widgets::button_with(
+                            ui,
+                            theme,
+                            widgets::ButtonKind::Outline,
+                            Some(icons::ACTIVITY),
+                            "View progress",
+                        )
+                        .clicked()
                         {
                             state.view = View::Processing;
                         }
-                    } else if widgets::button(ui, theme, "Get started", widgets::Emphasis::Primary)
-                        .on_hover_text("Footage, music, deliverables, then approve the analysis")
-                        .clicked()
+                    } else if widgets::button_with(
+                        ui,
+                        theme,
+                        widgets::ButtonKind::Key,
+                        Some(icons::SPARKLES),
+                        "Get started",
+                    )
+                    .clicked()
                     {
                         let previous = state.recent.last_night(Some(&work));
                         state.start_wizard(work.clone(), previous, Vec::new());
@@ -326,7 +372,7 @@ fn banner(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
                 });
             });
         });
-    ui.add_space(theme::SPACE_LG);
+    ui.add_space(theme::SPACE_XL);
 }
 
 /// The night's name, where it lives, and the way into the workspace.
@@ -334,59 +380,94 @@ fn header(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
     let Some((name, work)) = ctx.project.as_ref().map(|p| (p.name(), p.work.clone())) else {
         return;
     };
+    let theme = ctx.theme;
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
             ui.label(
                 egui::RichText::new(&name)
-                    .font(theme::font(theme::HEADING_SIZE + 4.0))
-                    .color(theme::rgb(ctx.theme.text))
-                    .strong(),
+                    .font(theme::semibold(ui.ctx(), theme::HEADING_SIZE + 4.0))
+                    .color(theme::rgb(theme.text)),
             );
-            widgets::muted(ui, ctx.theme, &work.display().to_string());
+            ui.label(
+                egui::RichText::new(work.display().to_string())
+                    .font(theme::font(theme::BODY_SIZE))
+                    .color(theme::rgb(theme.text_muted)),
+            );
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if widgets::button(ui, ctx.theme, "Open editor", widgets::Emphasis::Primary)
-                .on_hover_text("The workspace: shots, viewer, timeline (Ctrl+2)")
-                .clicked()
+            ui.spacing_mut().item_spacing.x = theme::SPACE_SM;
+            let editor_keys = crate::gui::ui::keymap::command("go-shots")
+                .map(|c| c.hint(ctx.keymap))
+                .unwrap_or_default();
+            let open = widgets::button_sized(
+                ui,
+                theme,
+                widgets::ButtonKind::Primary,
+                None,
+                "Open editor",
+                theme::BAR_CONTROL - 4.0,
+            );
+            if widgets::tip(
+                open,
+                theme,
+                "The workspace: shots, viewer, timeline",
+                &editor_keys,
+            )
+            .clicked()
             {
                 ctx.actions.push(Action::Go(Page::Review));
             }
-            if widgets::button(ui, ctx.theme, "Export…", widgets::Emphasis::Secondary).clicked() {
+            if widgets::button_sized(
+                ui,
+                theme,
+                widgets::ButtonKind::Outline,
+                Some(icons::SHARE),
+                "Export\u{2026}",
+                theme::BAR_CONTROL - 4.0,
+            )
+            .clicked()
+            {
                 ctx.actions.push(Action::Go(Page::Deliver));
             }
-            if widgets::button(ui, ctx.theme, "Reveal", widgets::Emphasis::Secondary)
-                .on_hover_text("Show the work folder in Explorer")
-                .clicked()
+            if widgets::icon_btn(
+                ui,
+                theme,
+                icons::FOLDER_OPEN,
+                "Show the work folder in Explorer",
+                "",
+            )
+            .clicked()
             {
                 super::deliver::files::open_folder(&work);
             }
         });
     });
     if let Some(notice) = state.notice.clone() {
-        ui.add_space(theme::SPACE_SM);
-        let mut dismiss = false;
-        egui::Frame::new()
-            .fill(theme::rgb(ctx.theme.accent_soft))
-            .corner_radius(egui::CornerRadius::same(theme::RADIUS))
-            .inner_margin(theme::margin(theme::SPACE_SM))
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(&notice).color(theme::rgb(ctx.theme.text)));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        dismiss = ui.small_button("✕").clicked();
-                    });
-                });
-            });
-        if dismiss {
+        ui.add_space(theme::SPACE_MD);
+        if parts::notice(ui, theme, notice_kind(&notice), &notice) {
             state.notice = None;
         }
     }
     if let Some(p) = ctx.project.as_ref() {
         for w in &p.warnings {
-            ui.colored_label(theme::rgb(ctx.theme.warning), w);
+            ui.add_space(theme::SPACE_XS);
+            ui.horizontal(|ui| {
+                icons::icon(
+                    ui,
+                    icons::TRIANGLE_ALERT,
+                    icons::SMALL,
+                    theme::rgb(theme.warning),
+                );
+                ui.label(
+                    egui::RichText::new(w)
+                        .font(theme::font(theme::BODY_SIZE))
+                        .color(theme::rgb(theme.warning)),
+                );
+            });
         }
     }
-    ui.add_space(theme::SPACE_LG);
+    ui.add_space(theme::SPACE_XL);
 }
 
 /// A strip of the night's clips: click one to skim it in the viewer.
@@ -399,27 +480,46 @@ fn clips(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
         .iter()
         .map(|c| (c.id.clone(), PathBuf::from(&c.path), c.probe.duration))
         .collect();
-    widgets::title(ui, ctx.theme, &format!("Clips · {}", clips.len()));
-    ui.add_space(theme::SPACE_XS);
-    let placeholder = theme::rgb(ctx.theme.raised);
+    let theme = ctx.theme;
+    parts::section(ui, theme, &format!("Clips \u{b7} {}", clips.len()), "");
     egui::ScrollArea::horizontal()
         .id_salt("night-clips")
         .show(ui, |ui| {
             ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = theme::SPACE_SM;
                 for (i, (id, path, duration)) in clips.iter().enumerate() {
                     let (rect, response) =
                         ui.allocate_exact_size(egui::vec2(128.0, 72.0), egui::Sense::click());
+                    response.widget_info(|| {
+                        egui::WidgetInfo::selected(
+                            egui::Role::Button,
+                            true,
+                            state.preview == Some(i),
+                            id,
+                        )
+                    });
                     if ui.is_rect_visible(rect) {
-                        ctx.thumbs
-                            .paint(ui, rect, path, duration * 0.5, 0.5, placeholder);
-                    }
-                    if state.preview == Some(i) {
-                        ui.painter().rect_stroke(
+                        parts::thumb(
+                            ctx.thumbs,
+                            ui,
+                            theme,
                             rect,
-                            egui::CornerRadius::same(4),
-                            egui::Stroke::new(2.0, theme::rgb(ctx.theme.accent)),
-                            egui::StrokeKind::Inside,
+                            Some((path.as_path(), duration * 0.5)),
                         );
+                        let lift = widgets::hover_t(ui, response.id, response.hovered());
+                        if state.preview == Some(i) || lift > 0.0 {
+                            let ink = if state.preview == Some(i) {
+                                theme::rgb(theme.text)
+                            } else {
+                                theme::ink(theme, (f32::from(theme::INK_20) * lift) as u8 * 2)
+                            };
+                            ui.painter().rect_stroke(
+                                rect,
+                                egui::CornerRadius::same(theme::RADIUS_XS),
+                                egui::Stroke::new(1.5, ink),
+                                egui::StrokeKind::Inside,
+                            );
+                        }
                     }
                     if response.on_hover_text(id).clicked() {
                         state.preview = Some(i);
@@ -431,9 +531,9 @@ fn clips(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
         });
     let loaded = matches!(ctx.player.source(), crate::gui::player::Source::Clip { .. });
     if state.preview.is_some() && loaded {
-        ui.add_space(theme::SPACE_SM);
+        ui.add_space(theme::SPACE_MD);
         let width = ui.available_width().min(640.0);
-        let background = theme::rgb(ctx.theme.raised);
+        let background = theme::rgb(theme.raised);
         ctx.player.show(
             ui,
             ctx.thumbs,

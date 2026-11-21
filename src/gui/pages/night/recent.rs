@@ -22,7 +22,7 @@ use crossbeam_channel::Receiver;
 
 use crate::gui::app::Action;
 use crate::gui::pages::PageCtx;
-use crate::gui::ui::{theme, widgets};
+use crate::gui::ui::{icons, theme, widgets};
 use crate::recipe::{self, Recipe};
 
 /// How far a night got.
@@ -321,172 +321,261 @@ pub(crate) fn set_up(
     })
 }
 
-/// Draws the column. Returns a footage folder the user picked for a new
-/// night, for the page to set up.
+/// Draws the column beside the open night: a header with New night, Open
+/// and Rescan, then the nights. Returns a footage folder the user picked
+/// for a new night, for the page to set up.
 pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) -> Option<PathBuf> {
     refresh(ctx, state, false);
-    let mut notice = None;
+    let mut picked = None;
     let theme = ctx.theme;
-    ui.horizontal(|ui| {
-        if widgets::button(ui, theme, "New night…", widgets::Emphasis::Primary)
-            .on_hover_text(
-                "Pick this week's footage folder; the recipe, end cards and track \
-                 settings come from last week",
-            )
-            .clicked()
-        {
-            notice = pick_footage(ctx, state);
+    let open_keys = crate::gui::ui::keymap::command("open-night")
+        .map(|c| c.hint(ctx.keymap))
+        .unwrap_or_default();
+    let mut rescan = false;
+    widgets::panel_header(ui, theme, "Nights", |ui| {
+        if state.scanning.is_some() {
+            ui.add_space(theme::SPACE_XS);
+            ui.add(
+                egui::Spinner::new()
+                    .size(icons::SMALL)
+                    .color(theme::rgb(theme.text_muted)),
+            );
+            ui.add_space(theme::SPACE_XS);
+        } else if widgets::icon_btn(ui, theme, icons::REFRESH, "Rescan the nights", "").clicked() {
+            rescan = true;
         }
-        if widgets::button(ui, theme, "Open…", widgets::Emphasis::Secondary)
-            .on_hover_text("Open a night's footage folder or _ave folder (Ctrl+O)")
-            .clicked()
+        if widgets::icon_btn(
+            ui,
+            theme,
+            icons::FOLDER_OPEN,
+            "Open a night's footage or _ave folder",
+            &open_keys,
+        )
+        .clicked()
         {
             ctx.actions.push(Action::PickProject);
         }
+        if widgets::icon_btn(
+            ui,
+            theme,
+            icons::PLUS,
+            "New night: pick this week's footage folder",
+            "",
+        )
+        .clicked()
+        {
+            picked = pick_footage(ctx, state);
+        }
     });
-    ui.add_space(theme::SPACE_MD);
-    ui.horizontal(|ui| {
-        ui.label(
-            egui::RichText::new("RECENT NIGHTS")
-                .small()
-                .strong()
-                .color(theme::rgb(theme.text_muted)),
-        );
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if state.scanning.is_some() {
-                ui.add(egui::Spinner::new().size(12.0));
-            } else if ui
-                .small_button("↻")
-                .on_hover_text("Rescan the nights")
-                .clicked()
-            {
-                refresh(ctx, state, true);
-            }
-        });
-    });
+    if rescan {
+        refresh(ctx, state, true);
+    }
     ui.add_space(theme::SPACE_XS);
     if state.list.is_empty() {
-        let text = if state.scanning.is_some() {
-            "Looking for nights…"
-        } else {
-            "Nights you open show up here, with last week's beside them."
-        };
-        widgets::muted(ui, theme, text);
-        return notice;
+        let scanning = state.scanning.is_some();
+        widgets::empty_state(
+            ui,
+            theme,
+            if scanning {
+                icons::LOADER
+            } else {
+                icons::FOLDER
+            },
+            if scanning {
+                "Looking for nights"
+            } else {
+                "No other nights"
+            },
+            if scanning {
+                ""
+            } else {
+                "Nights you open show up here, with last week's beside them."
+            },
+            |_| {},
+        );
+        return picked;
     }
     let open = ctx.project.as_ref().map(|p| p.work.clone());
     egui::ScrollArea::vertical()
         .id_salt("home-recent-list")
         .auto_shrink([false, false])
         .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
             for night in state.list.clone() {
-                row(
-                    ctx,
-                    ui,
-                    &night,
-                    open.as_deref() == Some(night.work.as_path()),
-                );
+                let here = open.as_deref() == Some(night.work.as_path());
+                if row(ctx, ui, &night, here) && !here {
+                    ctx.actions.push(Action::OpenProject(night.work.clone()));
+                }
             }
         });
-    notice
+    picked
 }
 
-/// One night in the list.
-fn row(ctx: &mut PageCtx<'_>, ui: &mut egui::Ui, night: &Summary, open: bool) {
+/// How tall a night's row is.
+pub(crate) const ROW_HEIGHT: f32 = 40.0;
+
+/// The badge a night's progress shows: its word and tone.
+fn badge(progress: Progress) -> (&'static str, widgets::Tone) {
+    let tone = match progress {
+        Progress::Delivered => widgets::Tone::Success,
+        Progress::New => widgets::Tone::Warning,
+        Progress::Indexed | Progress::Captioned | Progress::Planned => widgets::Tone::Neutral,
+    };
+    (progress.label(), tone)
+}
+
+/// Paints a badge (as `widgets::pill` draws one) with its right edge at
+/// `right`, centred on `y`; returns its width.
+pub(crate) fn paint_badge(
+    ui: &egui::Ui,
+    theme: &crate::theme::Palette,
+    right: f32,
+    y: f32,
+    text: &str,
+    tone: widgets::Tone,
+) -> f32 {
+    let (fill, ink) = match tone {
+        widgets::Tone::Neutral => (
+            theme::ink(theme, theme::INK_10),
+            theme::rgb(theme.text_muted),
+        ),
+        widgets::Tone::Key => (
+            theme::translucent(theme.accent, 38),
+            theme::rgb(theme.accent),
+        ),
+        widgets::Tone::Success => (
+            theme::translucent(theme.success, 38),
+            theme::rgb(theme.success),
+        ),
+        widgets::Tone::Warning => (
+            theme::translucent(theme.warning, 38),
+            theme::rgb(theme.warning),
+        ),
+        widgets::Tone::Danger => (
+            theme::translucent(theme.danger, 38),
+            theme::rgb(theme.danger),
+        ),
+    };
+    let galley = ui.painter().layout_no_wrap(
+        text.to_owned(),
+        theme::medium(ui.ctx(), theme::SMALL_SIZE),
+        ink,
+    );
+    let size = egui::vec2(
+        galley.size().x + theme::SPACE_SM + theme::SPACE_XS,
+        theme::SPACE_LG + theme::SPACE_XS,
+    );
+    let rect = egui::Rect::from_min_size(egui::pos2(right - size.x, y - size.y / 2.0), size);
+    ui.painter()
+        .rect_filled(rect, egui::CornerRadius::same(theme::RADIUS), fill);
+    ui.painter()
+        .galley(rect.center() - galley.size() / 2.0, galley, ink);
+    size.x
+}
+
+/// One night as a list row, [`ROW_HEIGHT`] tall: its frame, its name, the
+/// clip and delivery counts in muted text, and a badge for how far it got;
+/// ink 8 % under the pointer, the selected-row fill when `open`. A context
+/// menu opens it, shows it in Explorer or drops it from the recent list.
+/// Returns whether it was clicked (or opened from its menu).
+pub(crate) fn row(ctx: &mut PageCtx<'_>, ui: &mut egui::Ui, night: &Summary, open: bool) -> bool {
     let theme = ctx.theme;
     let width = ui.available_width();
-    let height = 64.0;
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
-    let lift = widgets::hover_t(ui, response.id, response.hovered());
-    let fill = if open {
-        theme.selection
-    } else {
-        theme.panel.lerp(theme.hover, lift)
-    };
-    ui.painter().rect_filled(
-        rect,
-        egui::CornerRadius::same(theme::RADIUS),
-        theme::rgb(fill),
-    );
-    if open {
-        let bar = egui::Rect::from_min_size(
-            rect.left_top() + egui::vec2(0.0, theme::SPACE_SM),
-            egui::vec2(theme::SELECTION_BAR, height - theme::SPACE_SM * 2.0),
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(width, ROW_HEIGHT), egui::Sense::click());
+    response
+        .widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, open, &night.name));
+    if ui.is_rect_visible(rect) {
+        super::parts::row_fill(ui, theme, &response, open);
+        let thumb = egui::Rect::from_min_size(
+            egui::pos2(rect.left() + theme::SPACE_XS + 2.0, rect.center().y - 13.5),
+            egui::vec2(48.0, 27.0),
         );
-        ui.painter()
-            .rect_filled(bar, egui::CornerRadius::same(2), theme::rgb(theme.accent));
+        super::parts::thumb(
+            ctx.thumbs,
+            ui,
+            theme,
+            thumb,
+            night.thumb.as_ref().map(|(p, t)| (p.as_path(), *t)),
+        );
+        let (word, tone) = badge(night.progress);
+        let badge_w = paint_badge(
+            ui,
+            theme,
+            rect.right() - theme::SPACE_SM,
+            rect.center().y,
+            word,
+            tone,
+        );
+        let x = thumb.right() + theme::SPACE_SM + 2.0;
+        let text_room = egui::Rect::from_min_max(
+            egui::pos2(x, rect.top()),
+            egui::pos2(
+                rect.right() - theme::SPACE_SM * 2.0 - badge_w,
+                rect.bottom(),
+            ),
+        );
+        let painter = ui
+            .painter()
+            .with_clip_rect(text_room.intersect(ui.clip_rect()));
+        let name = painter.layout_no_wrap(
+            night.name.clone(),
+            theme::font(theme::LARGE_SIZE),
+            theme::rgb(theme.text),
+        );
+        let name_w = name.size().x;
+        painter.galley(
+            egui::pos2(x, rect.center().y - name.size().y / 2.0),
+            name,
+            theme::rgb(theme.text),
+        );
+        let mut meta = if night.clips > 0 {
+            format!("{} clips", night.clips)
+        } else {
+            "no footage yet".to_owned()
+        };
+        if night.delivered.0 > 0 && night.progress != Progress::Delivered {
+            meta.push_str(&format!(
+                " \u{b7} {}/{} out",
+                night.delivered.0, night.delivered.1
+            ));
+        }
+        painter.text(
+            egui::pos2(x + name_w + theme::SPACE_SM, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            meta,
+            theme::font(theme::BODY_SIZE),
+            theme::rgb(theme.text_muted),
+        );
     }
-    let thumb = egui::Rect::from_min_size(
-        rect.left_top() + egui::vec2(theme::SPACE_SM, theme::SPACE_SM),
-        egui::vec2(85.0, height - theme::SPACE_SM * 2.0),
-    );
-    if let Some((path, t)) = &night.thumb {
-        ctx.thumbs
-            .paint(ui, thumb, path, *t, 0.5, theme::rgb(theme.raised));
-    } else {
-        ui.painter()
-            .rect_filled(thumb, egui::CornerRadius::same(4), theme::rgb(theme.raised));
-    }
-    let x = thumb.right() + theme::SPACE_SM;
-    let painter = ui.painter();
-    painter.text(
-        egui::pos2(x, rect.top() + 10.0),
-        egui::Align2::LEFT_TOP,
-        &night.name,
-        theme::font(theme::BODY_SIZE),
-        theme::rgb(theme.text),
-    );
-    let sub = if night.clips > 0 {
-        format!("{} clips", night.clips)
-    } else {
-        "no footage yet".to_owned()
-    };
-    let sub = if night.delivered.0 > 0 && night.progress != Progress::Delivered {
-        format!("{sub} · {}/{} out", night.delivered.0, night.delivered.1)
-    } else {
-        sub
-    };
-    painter.text(
-        egui::pos2(x, rect.top() + 29.0),
-        egui::Align2::LEFT_TOP,
-        sub,
-        theme::font(theme::BODY_SIZE - 2.0),
-        theme::rgb(theme.text_muted),
-    );
-    let (dot, label) = match night.progress {
-        Progress::Delivered => (theme.success, night.progress.label()),
-        Progress::Planned | Progress::Captioned => (theme.accent, night.progress.label()),
-        Progress::Indexed => (theme.warning, night.progress.label()),
-        Progress::New => (theme.text_faint, night.progress.label()),
-    };
-    let y = rect.top() + 47.0;
-    painter.circle_filled(egui::pos2(x + 3.5, y), 3.5, theme::rgb(dot));
-    painter.text(
-        egui::pos2(x + 11.0, y),
-        egui::Align2::LEFT_CENTER,
-        label,
-        theme::font(theme::BODY_SIZE - 3.0),
-        theme::rgb(theme.text_muted),
-    );
     let tip = if night.date.is_empty() || night.name.starts_with(&night.date) {
         night.work.display().to_string()
     } else {
-        format!("{} · {}", night.date, night.work.display())
+        format!("{} \u{b7} {}", night.date, night.work.display())
     };
     let response = response.on_hover_text(tip);
-    if response.clicked() && !open {
-        ctx.actions.push(Action::OpenProject(night.work.clone()));
-    }
+    let mut clicked = response.clicked();
     response.context_menu(|ui| {
-        if ui.button("Open").clicked() {
-            ctx.actions.push(Action::OpenProject(night.work.clone()));
+        if widgets::menu_item(ui, theme, Some(icons::FOLDER_OPEN), "Open", "", false).clicked() {
+            clicked = true;
             ui.close();
         }
-        if ui.button("Show in Explorer").clicked() {
+        if widgets::menu_item(
+            ui,
+            theme,
+            Some(icons::EXTERNAL_LINK),
+            "Show in Explorer",
+            "",
+            false,
+        )
+        .clicked()
+        {
             crate::gui::pages::deliver::files::open_folder(&recipe::night_dir(&night.work));
             ui.close();
         }
-        if ui.button("Remove from recent").clicked() {
+        widgets::menu_separator(ui, theme);
+        if widgets::menu_item(ui, theme, Some(icons::X), "Remove from recent", "", false).clicked()
+        {
             let key = night.work.display().to_string();
             if let Some(list) = ctx.config.recent_projects.as_mut() {
                 list.retain(|p| *p != key);
@@ -494,7 +583,7 @@ fn row(ctx: &mut PageCtx<'_>, ui: &mut egui::Ui, night: &Summary, open: bool) {
             ui.close();
         }
     });
-    ui.add_space(2.0);
+    clicked
 }
 
 #[cfg(test)]
