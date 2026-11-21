@@ -27,7 +27,7 @@ use crate::project::Project;
 use crate::refs::{Reference, Target};
 use crate::theme::Palette;
 
-use super::rows::{self, META, SMALL, text};
+use super::rows::{self, SMALL, text};
 use super::usage::{self, Plans};
 
 /// Something a click in the inspector asked for.
@@ -106,18 +106,19 @@ fn picture(
     cx: f32,
     ops: &mut Vec<Op>,
 ) {
-    let width = ui.available_width();
+    // Selects' rows stop 8 px short of the panel's right edge.
+    let width = ui.available_width() - theme::SPACE_SM;
     let height = (width * 9.0 / 16.0).min(220.0);
     let (rect, response) = ui.allocate_exact_size(vec2(width, height), Sense::click());
     let path = v.path(clip);
     let mid = f64::from(t0 + t1) / 2.0;
-    thumbs.paint(ui, rect, &path, mid, 0.5, theme::rgb(v.palette.hover));
+    thumbs.paint(ui, rect, &path, mid, 0.5, theme::rgb(v.palette.raised));
     // Where the action is: a hairline at cx.
     let x = rect.left() + rect.width() * cx.clamp(0.0, 1.0);
     ui.painter().vline(
         x,
         rect.y_range(),
-        egui::Stroke::new(1.0, theme::translucent(v.palette.accent, 160)),
+        egui::Stroke::new(1.0, egui::Color32::from_white_alpha(110)),
     );
     if response
         .on_hover_text("Open in the viewer (the line marks the action centre)")
@@ -137,19 +138,18 @@ pub(super) fn segment(
 ) {
     let g = &seg.seg;
     picture(v, ui, thumbs, &seg.clip, (g.start, g.end), g.cx, ops);
-    ui.add_space(theme::SPACE_XS);
-    ui.label(text(&seg.id, theme::TITLE_SIZE - 2.0, theme::rgb(v.palette.text)).strong());
-    ui.label(text(
-        format!(
+    rows::title(
+        ui,
+        v.palette,
+        &seg.id,
+        &format!(
             "{} · {:.2}–{:.2} s ({:.1} s)",
             seg.clip,
             g.start,
             g.end,
             g.end - g.start
         ),
-        META,
-        theme::rgb(v.palette.text_muted),
-    ));
+    );
     measurements(v, ui, seg);
     caption(v, ui, seg);
     who(v, ui, &seg.clip, g.start, ops);
@@ -346,7 +346,8 @@ fn clip_strip(v: &View<'_>, ui: &mut Ui, clip: &str, current: Option<&str>, ops:
     let Some(info) = index.clip(clip) else {
         return;
     };
-    rows::section(ui, p, "Clip");
+    let segs: Vec<&Scored> = index.segments.iter().filter(|s| s.clip == clip).collect();
+    rows::section_with(ui, p, "Clip", &format!("{} segments", segs.len()));
     rows::row(
         ui,
         p,
@@ -361,19 +362,21 @@ fn clip_strip(v: &View<'_>, ui: &mut Ui, clip: &str, current: Option<&str>, ops:
             info.probe.vcodec
         ),
     );
-    let segs: Vec<&Scored> = index.segments.iter().filter(|s| s.clip == clip).collect();
     let total = info
         .probe
         .duration
         .max(f64::from(segs.last().map_or(0.0, |s| s.seg.end)))
         .max(0.1) as f32;
-    let width = ui.available_width();
-    let (rect, _) = ui.allocate_exact_size(vec2(width, 22.0), Sense::hover());
+    ui.add_space(theme::SPACE_XS);
+    let width = ui.available_width() - theme::SPACE_SM;
+    let (rect, _) = ui.allocate_exact_size(vec2(width, theme::COMPACT_HEIGHT), Sense::hover());
     for s in &segs {
         let x0 = rect.left() + rect.width() * (s.seg.start / total);
         let x1 = rect.left() + rect.width() * (s.seg.end / total);
         let r = Rect::from_x_y_ranges(x0..=(x1 - 1.0).max(x0 + 1.0), rect.y_range());
-        let fill = p.hover.lerp(p.accent, s.q.clamp(0.0, 1.0));
+        // Brighter is better: a neutral ramp, so the key colour stays for
+        // what is selected.
+        let fill = p.raised.lerp(p.text_muted, s.q.clamp(0.0, 1.0));
         let id = ui.scope_id().with(("strip", &s.id));
         let response = ui.interact(r, id, Sense::click());
         ui.painter()
@@ -389,12 +392,12 @@ fn clip_strip(v: &View<'_>, ui: &mut Ui, clip: &str, current: Option<&str>, ops:
             ui.painter().rect_stroke(
                 r,
                 egui::CornerRadius::same(2),
-                egui::Stroke::new(1.5, theme::rgb(p.text)),
+                egui::Stroke::new(1.5, theme::rgb(p.accent)),
                 egui::StrokeKind::Inside,
             );
         }
         let hover = format!(
-            "{} · {:.1}–{:.1} s · q{:.2}{}",
+            "{} · {:.1}–{:.1} s · q{:.2}{}\nBrighter is higher quality; an amber underline is a flag.",
             s.id,
             s.seg.start,
             s.seg.end,
@@ -417,14 +420,6 @@ fn clip_strip(v: &View<'_>, ui: &mut Ui, clip: &str, current: Option<&str>, ops:
             ));
         }
     }
-    ui.label(text(
-        format!(
-            "{} segments · brighter = higher quality · amber underline = flagged",
-            segs.len()
-        ),
-        META - 1.0,
-        theme::rgb(p.text_faint),
-    ));
 }
 
 /// A range or frame of a clip: the picture, then the segment under it.
@@ -439,13 +434,18 @@ pub(super) fn range(
     let seg = v.segment_at(clip, (t0 + t1) / 2.0);
     let cx = seg.map_or(0.5, |s| s.seg.cx);
     picture(v, ui, thumbs, clip, (t0, t1.max(t0 + 0.04)), cx, ops);
-    ui.add_space(theme::SPACE_XS);
     let title = if (t1 - t0).abs() < 0.01 {
         format!("{clip} @ {t0:.2} s")
     } else {
         format!("{clip} {t0:.2}–{t1:.2} s ({:.1} s)", t1 - t0)
     };
-    ui.label(text(title, theme::TITLE_SIZE - 2.0, theme::rgb(v.palette.text)).strong());
+    let under = seg.map_or_else(String::new, |seg| {
+        format!(
+            "Segment {} ({:.1}–{:.1} s)",
+            seg.id, seg.seg.start, seg.seg.end
+        )
+    });
+    rows::title(ui, v.palette, &title, &under);
     if let Some(index) = v.project.index.as_ref() {
         let over: Vec<&Scored> = index
             .segments
@@ -464,15 +464,6 @@ pub(super) fn range(
         }
     }
     if let Some(seg) = seg {
-        ui.add_space(theme::SPACE_XS);
-        ui.label(text(
-            format!(
-                "Segment {} ({:.1}–{:.1} s)",
-                seg.id, seg.seg.start, seg.seg.end
-            ),
-            META,
-            theme::rgb(v.palette.text_muted),
-        ));
         measurements(v, ui, seg);
         caption(v, ui, seg);
     }
@@ -522,15 +513,7 @@ pub(super) fn shot(
         shot.cx,
         ops,
     );
-    ui.add_space(theme::SPACE_XS);
-    ui.label(
-        text(
-            format!("{plan_name} · shot {slot}"),
-            theme::TITLE_SIZE - 2.0,
-            theme::rgb(p.text),
-        )
-        .strong(),
-    );
+    rows::title(ui, p, &format!("{plan_name} · shot {slot}"), "");
     let beats_before: usize = plan.shots.iter().take(slot - 1).map(|s| s.beats).sum();
     let bar = plan.start_bar + beats_before / 4;
     let beat = beats_before % 4 + 1;
@@ -559,7 +542,7 @@ pub(super) fn shot(
         ),
     );
     if bar == plan.drop_bar && beat == 1 {
-        rows::row_colored(ui, p, "", "lands on the drop", theme::rgb(p.accent));
+        rows::row(ui, p, "", "lands on the drop");
     }
     rows::row(ui, p, "Crop cx", format!("{:.2}", shot.cx));
     let who = v.project.people.who(shot);
@@ -617,18 +600,18 @@ pub(super) fn bars(v: &View<'_>, ui: &mut Ui, from: usize, to: usize) {
     } else {
         format!("Bars {from}–{to}")
     };
-    ui.label(text(title, theme::TITLE_SIZE - 2.0, theme::rgb(p.text)).strong());
-    ui.label(text(
-        format!(
+    rows::title(
+        ui,
+        p,
+        &title,
+        &format!(
             "{t0:.2}–{t1:.2} s ({:.2} s) of {}",
             t1 - t0,
             Path::new(&m.path)
                 .file_name()
                 .map_or_else(|| m.path.clone(), |n| n.to_string_lossy().into_owned())
         ),
-        META,
-        theme::rgb(p.text_muted),
-    ));
+    );
     rows::section(ui, p, "Music");
     rows::row(
         ui,
@@ -675,7 +658,7 @@ pub(super) fn bars(v: &View<'_>, ui: &mut Ui, from: usize, to: usize) {
         .map(|d| format!("bar {} @{:.1}s (score {:.2})", d.bar, d.t, d.score))
         .collect();
     if !drops.is_empty() {
-        rows::row_colored(ui, p, "Drops", drops.join(" · "), theme::rgb(p.accent));
+        rows::row(ui, p, "Drops", drops.join(" · "));
     }
 }
 
@@ -688,7 +671,6 @@ pub(super) fn person(
     ops: &mut Vec<Op>,
 ) {
     let p = v.palette;
-    ui.label(text(name, theme::TITLE_SIZE - 2.0, theme::rgb(p.text)).strong());
     let keys = v.project.people.keys_of(name);
     let segs: Vec<&Scored> = v
         .project
@@ -701,11 +683,13 @@ pub(super) fn person(
                 .collect()
         })
         .unwrap_or_default();
-    ui.label(text(
-        format!("{} entries · {} segments", keys.len(), segs.len()),
-        META,
-        theme::rgb(p.text_muted),
-    ));
+    rows::title(
+        ui,
+        p,
+        name,
+        &format!("{} entries · {} segments", keys.len(), segs.len()),
+    );
+    ui.add_space(theme::SPACE_XS);
     // The best few frames.
     let mut best = segs.clone();
     best.sort_by(|a, b| b.q.total_cmp(&a.q));
@@ -798,7 +782,7 @@ pub(super) fn person(
 /// A whole plan.
 pub(super) fn plan(v: &View<'_>, ui: &mut Ui, name: &str, ops: &mut Vec<Op>) {
     let p = v.palette;
-    ui.label(text(name, theme::TITLE_SIZE - 2.0, theme::rgb(p.text)).strong());
+    rows::title(ui, p, name, "");
     let Some(plan) = v.plans.get(name) else {
         rows::row_colored(
             ui,

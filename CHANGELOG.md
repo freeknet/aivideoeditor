@@ -33,6 +33,14 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   settings and recipe are form rows with path fields, text fields, a segmented encoder
   and a switch; the export panel lists deliverables with status badges, versions as
   tickable chips and icon buttons for each file. Lucide icons replace every glyph.
+- The viewer and inspector in Selects' style. The viewer drops its toolbar: the
+  picture is letterboxed on the panel above a 48 px transport with a 4 px knobless
+  scrub bar on its top edge (I/O range and shot boundaries on it), Lucide skip, play
+  and loop buttons, a `1x` speed menu, a centred `HH:MM:SS:FF / HH:MM:SS:FF` timecode
+  in fixed digit cells, and a gear menu holding aspect, guides, the info overlay,
+  preview quality and volume. The inspector gets an Inspector | Facts tab header,
+  12 px label/value rows under hairline sections, neutral links and quality colours,
+  and centred empty states.
 
 - Timeline playback ends like the render: after the last shot the viewer holds the
   plan's end card for the render's span (`card_bar` to `end_bar`, `Plan::card_span`)

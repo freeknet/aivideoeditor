@@ -1,19 +1,24 @@
 // ============================================================================
 // Module:       gui::pages::viewer
-// Description:  The viewer in the workspace centre: the shared player on a
-//               black stage, framed for the chosen aspect, with safe-area
-//               guides, an info overlay, transport and the viewer's keys.
+// Description:  The viewer in the workspace centre, as Selects' Preview: the
+//               shared player letterboxed on the panel, safe-area guides, an
+//               info overlay, the transport with a settings menu, and the
+//               viewer's keys.
 //
-// Dependencies: egui; crate::gui::{pages, player}, crate::refs
+// Dependencies: egui; crate::gui::{pages, player, ui}, crate::refs
 // ============================================================================
 
 //! The viewer region.
 //!
-//! A slim toolbar (what is loaded; aspect 16:9 / 9:16 / 4:5; guides; preview
-//! quality), the stage, and the transport bar. Narrow aspects show the crop
-//! around the source's `cx`; *Full frame* shows the whole frame with the
-//! outside of the crop dimmed instead. Options persist per night in
-//! `ave.toml` under `[pages.viewer]`.
+//! No header row (Selects has none): the picture fills the panel above a
+//! 48 px transport whose top edge is the scrub bar. The framing options
+//! (aspect 16:9 / 9:16 / 4:5, guides, the info overlay, preview quality and
+//! the volume) live in the gear menu at the right of the transport.
+//! Narrow aspects show the crop around the source's `cx`; *Full frame*
+//! shows the whole frame with the outside of the crop dimmed instead.
+//! Options persist per night in `ave.toml` under `[pages.viewer]`. The top
+//! 48 px of both corners stay free: the folded browser's and inspector's
+//! glass buttons float there.
 //!
 //! Keys (when no text field has focus): the player's transport keys (Space,
 //! J/K/L, ←/→, Shift+←/→, I, O, Alt+X, `/`, Ctrl+L), plus `Alt+R` to
@@ -28,8 +33,9 @@ use std::path::Path;
 use super::PageCtx;
 use crate::gui::app::Action;
 use crate::gui::player::{self, Framing, Player, Source, clock, transport};
-use crate::gui::ui::{keymap, theme};
+use crate::gui::ui::{icons, keymap, theme, widgets};
 use crate::refs::{Reference, Target};
+use crate::theme::Palette;
 
 /// The output aspect the viewer frames for.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -44,7 +50,7 @@ pub(crate) enum Aspect {
 }
 
 impl Aspect {
-    /// Every aspect, in switcher order.
+    /// Every aspect, in menu order.
     const ALL: [Self; 3] = [Self::Wide, Self::Vertical, Self::Feed];
 
     /// Width over height.
@@ -56,12 +62,30 @@ impl Aspect {
         }
     }
 
-    /// Switcher label (also the settings value).
+    /// Menu label (also the settings value).
     fn label(self) -> &'static str {
         match self {
             Self::Wide => "16:9",
             Self::Vertical => "9:16",
             Self::Feed => "4:5",
+        }
+    }
+
+    /// The icon beside the label in the menu.
+    fn icon(self) -> char {
+        match self {
+            Self::Wide => icons::LANDSCAPE,
+            Self::Vertical => icons::SMARTPHONE,
+            Self::Feed => icons::PORTRAIT,
+        }
+    }
+
+    /// What the aspect is for.
+    fn hint(self) -> &'static str {
+        match self {
+            Self::Wide => "The master",
+            Self::Vertical => "Reels and stories",
+            Self::Feed => "The feed",
         }
     }
 
@@ -155,8 +179,8 @@ impl State {
     }
 }
 
-/// Height of the toolbar and of the transport.
-const BAR: f32 = 30.0;
+/// Room left under the picture for the scrub bar, which overlaps it.
+const SCRUB_ROOM: f32 = theme::SPACE_XS;
 
 /// Draws the viewer into the centre.
 pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
@@ -165,26 +189,25 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
         state.width = player::PREVIEW_WIDTH;
     }
     ctx.player.set_preview_width(state.width);
-    if toolbar(ctx, state, ui) {
-        state.save(ctx);
-    }
     let size = egui::vec2(
         ui.available_width(),
-        (ui.available_height() - BAR - theme::SPACE_XS).max(80.0),
+        (ui.available_height() - transport::reserved(ui) - SCRUB_ROOM).max(80.0),
     );
-    let background = theme::rgb(ctx.theme.raised);
+    // A frame still decoding shows as the video surface, forced dark.
+    let surface = theme::rgb(ctx.theme.app);
     let framing = Framing {
         aspect: state.aspect.ratio(),
         ghost: state.ghost && state.aspect != Aspect::Wide,
     };
     let shown = ctx
         .player
-        .show_framed(ui, ctx.thumbs, size, framing, background);
+        .show_framed(ui, ctx.thumbs, size, framing, surface);
+    let stage = shown.response.rect;
     let has_picture = matches!(
         ctx.player.source(),
         Source::Clip { .. } | Source::Sequence { .. }
     );
-    let painter = ui.painter_at(shown.response.rect);
+    let painter = ui.painter_at(stage);
     if has_picture {
         if state.safe {
             overlays::paint_safe(&painter, shown.frame);
@@ -192,28 +215,33 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
         if state.social && state.aspect == Aspect::Vertical {
             overlays::paint_social(&painter, shown.frame);
         }
+        if state.width < player::PREVIEW_WIDTH {
+            overlays::paint_reduced(&painter, shown.frame);
+        }
     }
     if state.info {
         overlays::paint_info(&painter, shown.frame, &info_lines(ctx.player));
     }
     if matches!(ctx.player.source(), Source::Empty) {
-        painter.text(
-            shown.response.rect.center(),
-            egui::Align2::CENTER_CENTER,
-            "Select a shot, a plan or a stretch of music to play it here",
-            egui::FontId::proportional(13.0),
-            theme::rgb(ctx.theme.text_faint),
+        let mut empty = ui.new_child(egui::UiBuilder::new().max_rect(stage));
+        widgets::empty_state(
+            &mut empty,
+            ctx.theme,
+            icons::CLAPPERBOARD,
+            "Nothing to play",
+            "Select a shot, a plan or a stretch of music to play it here.",
+            |_| {},
         );
     }
-    ui.add_space(theme::SPACE_XS);
-    let style = transport::Style {
-        accent: theme::rgb(ctx.theme.accent),
-        text: theme::rgb(ctx.theme.text),
-        muted: theme::rgb(ctx.theme.text_muted),
-        track: theme::rgb(ctx.theme.border_strong),
-        hover: theme::rgb(ctx.theme.hover),
-    };
-    transport::bar(ctx.player, ui, &style);
+    ui.add_space(SCRUB_ROOM);
+    let palette = ctx.theme;
+    let mut changed = false;
+    transport::bar(ctx.player, ui, palette, |ui, player| {
+        changed = settings(ui, palette, state, player);
+    });
+    if changed {
+        state.save(ctx);
+    }
     if ctx.keys_free(ui) {
         ctx.player.handle_keys(ui, ctx.keymap);
         let preset = ctx.keymap;
@@ -234,118 +262,92 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
     sync_selection(ctx, state);
 }
 
-/// The toolbar; returns whether an option changed.
-fn toolbar(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) -> bool {
+/// The gear at the right of the transport and its menu: aspect, guides,
+/// the info overlay, preview quality and volume, the current ones checked.
+/// Returns whether an option that persists changed.
+fn settings(ui: &mut egui::Ui, theme: &Palette, state: &mut State, p: &mut Player) -> bool {
+    let id = ui.scope_id().with("viewer-settings");
+    let open = egui::Popup::is_id_open(ui.ctx(), id);
+    let response = transport::button(ui, theme, icons::SETTINGS, "Preview settings", "", open);
     let mut changed = false;
-    let muted = theme::rgb(ctx.theme.text_muted);
-    ui.allocate_ui_with_layout(
-        egui::vec2(ui.available_width(), BAR),
-        egui::Layout::left_to_right(egui::Align::Center),
-        |ui| {
-            ui.spacing_mut().item_spacing.x = theme::SPACE_XS;
-            // The label gives way to the controls when the centre is narrow
-            // (export or a wide browser docked), instead of drawing under them.
-            if ui.available_width() > 640.0 {
-                ui.label(
-                    egui::RichText::new(source_label(ctx.player))
-                        .size(12.0)
-                        .color(muted),
-                );
+    let _ = egui::Popup::menu(&response)
+        .id(id)
+        .width(240.0)
+        .gap(theme::SPACE_XS)
+        .align(egui::RectAlign::TOP_END)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            heading(ui, theme, "Frame");
+            for aspect in Aspect::ALL {
+                let on = state.aspect == aspect;
+                if widgets::menu_item(ui, theme, Some(aspect.icon()), aspect.label(), "", on)
+                    .on_hover_text(aspect.hint())
+                    .clicked()
+                    && !on
+                {
+                    state.aspect = aspect;
+                    changed = true;
+                }
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.spacing_mut().item_spacing.x = theme::SPACE_XS;
-                let current = QUALITIES
-                    .iter()
-                    .find(|(w, _)| *w == state.width)
-                    .map_or("Custom", |(_, l)| *l);
-                egui::ComboBox::from_id_salt("viewer-quality")
-                    .selected_text(egui::RichText::new(current).size(11.0))
-                    .width(92.0)
-                    .show_ui(ui, |ui| {
-                        for (w, label) in QUALITIES {
-                            if ui.selectable_value(&mut state.width, w, label).changed() {
-                                changed = true;
-                            }
-                        }
-                    })
-                    .response
-                    .on_hover_text(
-                        "Preview decode width (playback always uses proxies-sized frames)",
-                    );
-                ui.separator();
-                changed |= chip(
-                    ctx,
-                    ui,
-                    "Info",
-                    &mut state.info,
-                    "Overlay info (Ctrl+Shift+I)",
-                );
-                if state.aspect == Aspect::Vertical {
-                    changed |= chip(
-                        ctx,
-                        ui,
-                        "UI zones",
-                        &mut state.social,
-                        "TikTok / Reels interface zones",
-                    );
+            widgets::menu_separator(ui, theme);
+            heading(ui, theme, "Guides");
+            changed |= check(ui, theme, "Safe margins", "", &mut state.safe)
+                .on_hover_text("Title and action safe areas")
+                .clicked();
+            if state.aspect == Aspect::Vertical {
+                changed |= check(ui, theme, "UI zones", "", &mut state.social)
+                    .on_hover_text("Where TikTok and Reels draw over a vertical video")
+                    .clicked();
+            }
+            if state.aspect != Aspect::Wide {
+                changed |= check(ui, theme, "Full frame", "", &mut state.ghost)
+                    .on_hover_text("Show the whole frame with the crop outlined")
+                    .clicked();
+            }
+            changed |= check(ui, theme, "Info overlay", "Ctrl+Shift+I", &mut state.info).clicked();
+            widgets::menu_separator(ui, theme);
+            heading(ui, theme, "Preview quality");
+            for (width, label) in QUALITIES {
+                let on = state.width == width;
+                if widgets::menu_item(ui, theme, None, label, "", on)
+                    .on_hover_text("Decode width of the preview")
+                    .clicked()
+                    && !on
+                {
+                    state.width = width;
+                    changed = true;
                 }
-                if state.aspect != Aspect::Wide {
-                    changed |= chip(
-                        ctx,
-                        ui,
-                        "Full frame",
-                        &mut state.ghost,
-                        "Show the whole frame with the crop outlined",
-                    );
-                }
-                changed |= chip(
-                    ctx,
-                    ui,
-                    "Safe",
-                    &mut state.safe,
-                    "Title and action safe areas",
-                );
-                ui.separator();
-                for aspect in Aspect::ALL.into_iter().rev() {
-                    let mut on = state.aspect == aspect;
-                    if chip(ctx, ui, aspect.label(), &mut on, "Frame for this aspect") && on {
-                        state.aspect = aspect;
-                        changed = true;
-                    }
-                }
-            });
-        },
-    );
+            }
+            widgets::menu_separator(ui, theme);
+            transport::volume_rows(ui, theme, p);
+        });
     changed
 }
 
-/// A small toggle chip; returns whether it was clicked (and flips `on`).
-fn chip(ctx: &PageCtx<'_>, ui: &mut egui::Ui, label: &str, on: &mut bool, tip: &str) -> bool {
-    let text = egui::RichText::new(label)
-        .size(11.0)
-        .color(theme::rgb(if *on {
-            ctx.theme.text
-        } else {
-            ctx.theme.text_muted
-        }));
-    let fill = if *on {
-        theme::rgb(ctx.theme.selection)
-    } else {
-        egui::Color32::TRANSPARENT
-    };
-    let button = egui::Button::new(text)
-        .fill(fill)
-        .stroke(egui::Stroke::new(1.0, theme::rgb(ctx.theme.border)))
-        .corner_radius(egui::CornerRadius::same(4))
-        .min_size(egui::vec2(0.0, 22.0));
-    let clicked = ui.add(button).on_hover_text(tip).clicked();
-    if clicked {
-        *on = !*on;
-    }
-    clicked
+/// A menu section's label, inset to line up with the items' text.
+fn heading(ui: &mut egui::Ui, theme: &Palette, text: &str) {
+    ui.horizontal(|ui| {
+        ui.add_space(theme::SPACE_SM);
+        widgets::menu_heading(ui, theme, text);
+    });
 }
 
-/// What is loaded, for the toolbar.
+/// A menu item that flips `on` when clicked, checked while on.
+fn check(
+    ui: &mut egui::Ui,
+    theme: &Palette,
+    label: &str,
+    keys: &str,
+    on: &mut bool,
+) -> egui::Response {
+    let response = widgets::menu_item(ui, theme, None, label, keys, *on);
+    if response.clicked() {
+        *on = !*on;
+    }
+    response
+}
+
+/// What is loaded, for the info overlay.
 fn source_label(player: &Player) -> String {
     match player.source() {
         Source::Empty => "Viewer".to_owned(),
@@ -366,7 +368,7 @@ fn source_label(player: &Player) -> String {
 /// The info overlay's lines.
 fn info_lines(player: &Player) -> Vec<String> {
     let fps = player.fps();
-    let mut lines = Vec::new();
+    let mut lines = vec![source_label(player)];
     if let Some(here) = player.here() {
         lines.push(format!("clip   {}", clip_id(&here.path)));
         lines.push(format!(
