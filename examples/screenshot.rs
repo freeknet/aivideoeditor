@@ -17,7 +17,9 @@
 //!
 //! With a night open it also shoots the timeline's A/B compare
 //! (`plan-compare.png`): it opens the tab strip's "Compare" menu and picks
-//! the first other plan, or else the latest earlier version.
+//! the first other plan, or else the latest earlier version. It also
+//! shoots the inspector's Shot list tab on the plan page
+//! (`plan-shot-list.png`), with the second shot selected.
 
 use aivideoeditor::gui::app::{Action, App, Page};
 use aivideoeditor::gui::ui::layout::ViewMode;
@@ -25,6 +27,9 @@ use egui_kittest::kittest::Queryable;
 
 /// The shot that opens the timeline's compare view.
 const COMPARE: &str = "plan-compare";
+
+/// The shot that opens the inspector's Shot list tab.
+const SHOT_LIST: &str = "plan-shot-list";
 
 /// One picture: its name, the actions that set it up, then the keys
 /// pressed once the app is up.
@@ -72,6 +77,11 @@ fn main() -> anyhow::Result<()> {
     }
     if night.is_some() {
         shots.push((COMPARE.to_owned(), vec![Action::Go(Page::Plan)], Vec::new()));
+        shots.push((
+            SHOT_LIST.to_owned(),
+            vec![Action::Go(Page::Plan)],
+            Vec::new(),
+        ));
     }
     // The Shots browser's review modes, entered by their keys the way a
     // user would (they need a night: without one the tab is empty).
@@ -131,6 +141,9 @@ fn main() -> anyhow::Result<()> {
         if name == COMPARE {
             open_compare(&mut harness)?;
         }
+        if name == SHOT_LIST {
+            open_shot_list(&mut harness)?;
+        }
         let unnamed = harness.unnamed_widgets();
         if !unnamed.is_empty() {
             anyhow::bail!(
@@ -174,6 +187,23 @@ fn open_compare(harness: &mut egui_kittest::Harness<'_, Option<App>>) -> anyhow:
         anyhow::bail!("nothing to compare with: one plan and no earlier version");
     }
     for _ in 0..20 {
+        harness.run_steps(15);
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+    Ok(())
+}
+
+/// Opens the inspector's Shot list tab and selects the second shot.
+fn open_shot_list(harness: &mut egui_kittest::Harness<'_, Option<App>>) -> anyhow::Result<()> {
+    harness
+        .query_by_label("Shot list")
+        .ok_or_else(|| anyhow::anyhow!("no Shot list tab in the inspector"))?
+        .click();
+    harness.run_steps(4);
+    if let Some(row) = harness.query_by_label("Shot 2") {
+        row.click();
+    }
+    for _ in 0..10 {
         harness.run_steps(15);
         std::thread::sleep(std::time::Duration::from_millis(150));
     }

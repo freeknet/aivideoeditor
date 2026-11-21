@@ -1,16 +1,17 @@
 // ============================================================================
 // Module:       gui::pages::inspector
 // Description:  The inspector, as Selects' right side panel: an Inspector |
-//               Facts tab header, then everything known about the selection
-//               (numbers, caption, flags, who, where it is used), or the
-//               exact facts the chat would receive for it.
+//               Facts | Shot list tab header, then everything known about the
+//               selection (numbers, caption, flags, who, where it is used),
+//               the exact facts the chat would receive for it, or the open
+//               plan read as text.
 //
 // Dependencies: egui; crate::{refs, gui::pages, gui::ui}
 // ============================================================================
 
 //! The inspector, docked on the workspace's right.
 //!
-//! The 40 px header holds two tab pills. **Inspector** shows whatever
+//! The 40 px header holds three tab pills. **Inspector** shows whatever
 //! `ctx.selection` holds, whichever region selected it:
 //!
 //! - a **segment**, **range** or **frame**: a frame cropped where the action
@@ -28,10 +29,13 @@
 //! Links (a person, a shot, a segment in the strip) replace the selection,
 //! so every other region follows. **Facts** shows the exact facts the chat
 //! would receive for the selection. With nothing selected, either tab is a
-//! centred empty state.
+//! centred empty state. **Shot list** is Selects' Transcript for a cut: the
+//! open plan's shots in order under their song sections, each with its
+//! caption and note ([`shot_list`]).
 
 mod details;
 mod rows;
+mod shot_list;
 mod usage;
 
 use super::PageCtx;
@@ -49,6 +53,8 @@ pub(crate) enum Tab {
     Inspector,
     /// The facts the chat receives for it.
     Facts,
+    /// The open plan, shot by shot.
+    ShotList,
 }
 
 /// The inspector's own state.
@@ -56,6 +62,7 @@ pub(crate) enum Tab {
 pub(crate) struct State {
     plans: usage::Plans,
     tab: Tab,
+    shots: shot_list::State,
 }
 
 /// Draws the inspector into its panel.
@@ -69,7 +76,11 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
                 ui,
                 ctx.theme,
                 &mut state.tab,
-                &[(Tab::Inspector, "Inspector"), (Tab::Facts, "Facts")],
+                &[
+                    (Tab::Inspector, "Inspector"),
+                    (Tab::Facts, "Facts"),
+                    (Tab::ShotList, "Shot list"),
+                ],
             );
         },
         |ui| {
@@ -84,6 +95,10 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
             }
         },
     );
+    if state.tab == Tab::ShotList {
+        shot_list::draw(ctx, &mut state.plans, &mut state.shots, ui);
+        return;
+    }
     if ctx.selection.is_empty() {
         widgets::empty_state(
             ui,
@@ -134,6 +149,7 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
                         (Tab::Inspector, [one]) => single(&view, ui, ctx.thumbs, one, &mut ops),
                         (Tab::Inspector, many) => list(&view, ui, many, &mut ops),
                         (Tab::Facts, items) => facts(&view, ui, items),
+                        (Tab::ShotList, _) => {}
                     }
                 });
         });
