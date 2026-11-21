@@ -53,7 +53,8 @@ use std::path::{Path, PathBuf};
 use super::PageCtx;
 use crate::gui::app::Action;
 use crate::gui::ui::keymap::{self, Preset};
-use crate::gui::ui::theme::{self, SPACE_SM, SPACE_XS};
+use crate::gui::ui::theme::{self, SPACE_LG, SPACE_SM, SPACE_XS};
+use crate::gui::ui::{icons, widgets};
 use crate::index::Index;
 use crate::refs::{Modifier, Reference, Target};
 use crate::search::marks::{Marks, Verdict};
@@ -85,6 +86,17 @@ impl Sort {
         Self::Fire,
         Self::Motion,
     ];
+
+    /// The dropdown's label: one word.
+    fn short(self) -> &'static str {
+        match self {
+            Self::Best => "Best",
+            Self::Quality => "Quality",
+            Self::Time => "Time",
+            Self::Fire => "Fire",
+            Self::Motion => "Motion",
+        }
+    }
 
     /// The menu label.
     fn label(self) -> &'static str {
@@ -181,7 +193,7 @@ impl Default for Options {
             group: false,
             cutoff: 0.0,
             scrub: true,
-            card: 150.0,
+            card: 160.0,
         }
     }
 }
@@ -374,6 +386,8 @@ pub(super) enum Do {
     SurveyRemove(Option<usize>),
     /// Survey: the next (`1`) or previous (`-1`) group.
     Group(isize),
+    /// Put the cursor in the top bar's search.
+    FocusSearch,
 }
 
 /// Everything the grid and the list draw from.
@@ -394,6 +408,11 @@ pub(super) struct Paint<'a> {
     pub(super) scrub: bool,
     /// The segment id under the tape's playhead.
     pub(super) playing: Option<&'a str>,
+    /// The tab has the keyboard (the last click landed in it): the
+    /// selection outline is the key colour, grey otherwise.
+    pub(super) focused: bool,
+    /// The keyboard preset, for the keys tooltips quote.
+    pub(super) preset: Preset,
 }
 
 /// Draws the tab.
@@ -440,11 +459,13 @@ fn body(
     {
         let project = ctx.project.as_ref()?;
         let Some(index) = project.index.as_ref() else {
-            ui.add_space(SPACE_SM);
-            crate::gui::ui::widgets::muted(
+            widgets::empty_state(
                 ui,
                 ctx.theme,
-                "No shot log yet. Run Index on the Home screen, then come back here to cull.",
+                icons::FILM,
+                "No shot log yet",
+                "Run Index on the Home screen, then cull here.",
+                |_| {},
             );
             return None;
         };
@@ -460,7 +481,6 @@ fn body(
             index.segments.len(),
             dos,
         );
-        mode_bar(ui, ctx.theme, state, dos);
         let selected: HashSet<String> = selected_ids(ctx.selection).into_iter().collect();
         if keys_free {
             keys(ui, state, dos);
@@ -478,6 +498,8 @@ fn body(
             cursor: state.cursor.as_deref(),
             scrub: state.opts.scrub,
             playing,
+            focused: !state.inactive,
+            preset: state.preset,
         };
         let mut survey_cols = None;
         match &state.mode {
@@ -748,8 +770,14 @@ fn id_at(state: &State, item: usize) -> Option<String> {
         .cloned()
 }
 
-/// The header: count, order, view, grouping, cut-off, smart searches and
-/// the query's chips. Returns whether a view option changed.
+/// Height of the toolbar under the tab strip: the workspace leaves 4 px
+/// under the strip, so the two make Selects' 40 px toolbar.
+const TOOLBAR_H: f32 = theme::PANEL_HEADER_HEIGHT - SPACE_XS;
+
+/// The toolbar under the tab strip, Selects' Project toolbar: filter,
+/// order and smart searches on the left (or, in a review mode, where it
+/// stands), the review modes and the view toggle on the right; then the
+/// query's chips while searching. Returns whether a view option changed.
 fn header(
     ui: &mut egui::Ui,
     theme: &Palette,
@@ -760,198 +788,450 @@ fn header(
     dos: &mut Vec<Do>,
 ) -> bool {
     let before = state.opts.clone();
-    let small = |text: &str| egui::RichText::new(text).size(12.0);
-    ui.spacing_mut().item_spacing = egui::vec2(SPACE_SM, SPACE_XS);
-    ui.spacing_mut().interact_size.y = 20.0;
-    ui.spacing_mut().button_padding = egui::vec2(6.0, 1.0);
-    ui.horizontal(|ui| {
-        let shown = state.items.len();
-        let stacks = state
-            .items
-            .iter()
-            .filter(|i| matches!(i.stack, Stack::Top { .. }))
-            .count();
-        ui.label(
-            egui::RichText::new(format!("{} shots", state.matched))
-                .size(12.0)
-                .strong()
-                .color(theme::rgb(theme.text)),
-        );
-        let mut detail = if query.is_empty() {
-            String::new()
-        } else {
-            format!("of {total}")
-        };
-        if state.matched != shown && !state.opts.group {
-            detail.push_str(&format!(" · {} above cut-off", shown));
-        }
-        if state.opts.group && stacks > 0 {
-            detail.push_str(&format!(" · {stacks} stacks"));
-        }
-
-        if picks + rejects > 0 {
-            detail.push_str(&format!(" · {picks} picked · {rejects} rejected"));
-        }
-        ui.label(small(detail.trim_start_matches(" · ")).color(theme::rgb(theme.text_muted)));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            for (view, label, tip) in [
-                (View::List, "☰", "List view"),
-                (View::Grid, "▦", "Grid view"),
+    let width = visible_width(ui);
+    let sort_label = if state.opts.sort == Sort::Best && !query.ranks() {
+        "Best"
+    } else {
+        state.opts.sort.short()
+    };
+    let sort_w = ui
+        .painter()
+        .layout_no_wrap(
+            sort_label.to_owned(),
+            theme::medium(ui.ctx(), theme::BODY_SIZE),
+            egui::Color32::PLACEHOLDER,
+        )
+        .size()
+        .x
+        + icons::SMALL
+        + SPACE_XS
+        + SPACE_SM * 2.0;
+    let button = theme::CONTROL_HEIGHT + 2.0;
+    let left_core = button * 2.0 + sort_w + 2.0;
+    let modes_full = button * 5.0 + SPACE_SM + 1.0;
+    let browsing = state.mode == Mode::Browse;
+    // Narrow panes fold the review modes into one menu, then drop search.
+    let fold_modes = left_core + modes_full + SPACE_XS > width;
+    let right_w = if fold_modes {
+        button * 3.0 + SPACE_SM + 1.0
+    } else {
+        modes_full
+    };
+    let search = browsing && left_core + right_w + button + SPACE_XS <= width;
+    let room = width - left_core - right_w - if search { button } else { 0.0 } - SPACE_SM;
+    let error = state.error.clone();
+    widgets::toolbar_row(
+        ui,
+        TOOLBAR_H,
+        &mut (&mut *state, &mut *dos),
+        |ui, (state, dos)| {
+            if browsing {
+                if search
+                    && widgets::icon_btn(
+                        ui,
+                        theme,
+                        icons::SEARCH,
+                        "Search shots",
+                        &keys_of("search", state.preset),
+                    )
+                    .clicked()
+                {
+                    dos.push(Do::FocusSearch);
+                }
+                filter_menu(ui, theme, state, (picks, rejects));
+                sort_menu(ui, theme, state, sort_label);
+                smart_menu(ui, theme, dos);
+                count(ui, theme, state, query, total, room);
+            } else {
+                mode_status(ui, theme, state, dos);
+            }
+        },
+        |ui, (state, dos)| {
+            for (view, glyph, label) in [
+                (View::List, icons::LIST, "List view"),
+                (View::Grid, icons::LAYOUT_GRID, "Grid view"),
             ] {
-                if ui
-                    .selectable_label(state.opts.view == view, small(label))
-                    .on_hover_text(tip)
+                if widgets::icon_toggle(ui, theme, glyph, label, "", state.opts.view == view)
                     .clicked()
                 {
                     state.opts.view = view;
                 }
             }
-            if ui
-                .selectable_label(state.opts.group, small("Stacks"))
-                .on_hover_text("Group each clip's shots into one stack")
-                .clicked()
-            {
-                state.opts.group = !state.opts.group;
-            }
-        });
-    });
-    ui.horizontal_wrapped(|ui| {
-        egui::ComboBox::from_id_salt("review-sort")
-            .selected_text(small(if state.opts.sort == Sort::Best && !query.ranks() {
-                "Best (quality)"
+            widgets::bar_divider(ui, theme);
+            if fold_modes {
+                modes_menu(ui, theme, state, dos);
             } else {
-                state.opts.sort.label()
-            }))
-            .width(96.0)
-            .show_ui(ui, |ui| {
-                for s in Sort::ALL {
-                    ui.selectable_value(&mut state.opts.sort, s, s.label());
-                }
-            })
-            .response
-            .on_hover_text("Order");
-        ui.label(small("min").color(theme::rgb(theme.text_muted)));
-        ui.add(
-            egui::Slider::new(&mut state.opts.cutoff, 0.0..=0.95)
-                .step_by(0.05)
-                .fixed_decimals(2)
-                .trailing_fill(true),
-        )
-        .on_hover_text("Hide results scoring below this (quality when nothing is searched)");
-        ui.menu_button(small("Smart ▾"), |ui| {
-            for (label, q) in SMART {
-                if ui.button(*label).on_hover_text(*q).clicked() {
-                    dos.push(Do::Search((*q).to_owned()));
-                    ui.close();
+                let kind = state.mode.kind();
+                // Right to left: the last drawn is the leftmost.
+                for (k, glyph, id) in MODES.iter().rev() {
+                    let label = keymap::command(id).map_or("", |c| c.label);
+                    if widgets::icon_toggle(
+                        ui,
+                        theme,
+                        *glyph,
+                        label,
+                        &keys_of(id, state.preset),
+                        kind == *k,
+                    )
+                    .clicked()
+                    {
+                        dos.push(Do::Mode(*k));
+                    }
                 }
             }
-            ui.separator();
-            if state.opts.view == View::Grid {
-                ui.add(
-                    egui::Slider::new(&mut state.opts.card, CARD_MIN..=CARD_MAX)
-                        .text("card size")
-                        .show_value(false),
-                );
+            if let Some(err) = &error {
+                icons::icon(
+                    ui,
+                    icons::TRIANGLE_ALERT,
+                    icons::SMALL,
+                    theme::rgb(theme.warning),
+                )
+                .on_hover_text(err);
             }
-            ui.checkbox(&mut state.opts.scrub, "Hover scrub");
-        });
-        let kind = state.mode.kind();
-        for (k, label, id) in MODES {
-            if ui
-                .selectable_label(kind == k, small(label))
-                .on_hover_text(hint(id, state.preset))
-                .clicked()
-            {
-                dos.push(Do::Mode(k));
-            }
-        }
-    });
+        },
+    );
     if !query.is_empty() {
         chips(ui, theme, query, dos);
     }
-    if let Some(err) = &state.error {
-        ui.label(small(err).color(theme::rgb(theme.warning)));
-    }
-    ui.add_space(SPACE_XS);
     state.opts != before
 }
 
-/// The review modes the header offers: (mode, label, command id).
-const MODES: [(Kind, &str, &str); 3] = [
-    (Kind::Tape, "Tape", "review-tape"),
-    (Kind::Compare, "Compare", "review-compare"),
-    (Kind::Survey, "Survey", "review-survey"),
-];
-
-/// A command's label and its keys under `preset`, for a tooltip.
-fn hint(id: &str, preset: Preset) -> String {
-    keymap::command(id).map_or_else(String::new, |c| {
-        let keys = c.hint(preset);
-        if keys.is_empty() {
-            c.label.to_owned()
-        } else {
-            format!("{}  ({keys})", c.label)
-        }
-    })
+/// How many results, muted, when there is room; the details in its
+/// tooltip.
+fn count(
+    ui: &mut egui::Ui,
+    theme: &Palette,
+    state: &State,
+    query: &Query,
+    total: usize,
+    room: f32,
+) {
+    if room < 24.0 {
+        return;
+    }
+    let shown = state.items.len();
+    let stacks = state
+        .items
+        .iter()
+        .filter(|i| matches!(i.stack, Stack::Top { .. }))
+        .count();
+    let mut detail = vec![format!("{} shots", state.matched)];
+    if !query.is_empty() {
+        detail.push(format!("of {total}"));
+    }
+    if state.matched != shown && !state.opts.group {
+        detail.push(format!("{shown} above the minimum score"));
+    }
+    if state.opts.group && stacks > 0 {
+        detail.push(format!("{stacks} stacks"));
+    }
+    let text = if room >= 72.0 {
+        format!("{} shots", state.matched)
+    } else {
+        state.matched.to_string()
+    };
+    ui.add_space(SPACE_XS);
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(text)
+                .font(theme::tabular(ui.ctx(), theme::BODY_SIZE))
+                .color(theme::rgb(theme.text_muted)),
+        )
+        .truncate(),
+    )
+    .on_hover_text(detail.join(" · "));
 }
+
+/// The filter button and its popover: the minimum score, stacks, hover
+/// scrub and card size.
+fn filter_menu(
+    ui: &mut egui::Ui,
+    theme: &Palette,
+    state: &mut State,
+    (picks, rejects): (usize, usize),
+) {
+    let id = ui.make_persistent_id("review-filter");
+    let open = egui::Popup::is_id_open(ui.ctx(), id);
+    let active = state.opts.cutoff > 0.0 || state.opts.group;
+    let response = widgets::icon_toggle(
+        ui,
+        theme,
+        icons::LIST_FILTER,
+        "Filter and display",
+        "",
+        open || active,
+    );
+    let _ = egui::Popup::menu(&response)
+        .id(id)
+        .width(240.0)
+        .gap(SPACE_XS)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            ui.spacing_mut().item_spacing.y = SPACE_SM;
+            ui.spacing_mut().slider_width = 200.0;
+            pad(ui, |ui| {
+                widgets::menu_heading(ui, theme, "Minimum score");
+            });
+            pad(ui, |ui| {
+                let label = format!("Hide shots scoring under {:.2}", state.opts.cutoff);
+                ui.add(
+                    egui::Slider::new(&mut state.opts.cutoff, 0.0..=0.95)
+                        .step_by(0.05)
+                        .show_value(false)
+                        .trailing_fill(true),
+                )
+                .on_hover_text("Quality when nothing is searched")
+                .accessible_name(label.clone());
+                ui.label(
+                    egui::RichText::new(format!("{:.2}", state.opts.cutoff))
+                        .font(theme::tabular(ui.ctx(), theme::BODY_SIZE))
+                        .color(theme::rgb(theme.text_muted)),
+                );
+            });
+            widgets::menu_separator(ui, theme);
+            pad(ui, |ui| {
+                widgets::switch(ui, theme, &mut state.opts.group, "Stack each clip's shots");
+            });
+            pad(ui, |ui| {
+                widgets::switch(ui, theme, &mut state.opts.scrub, "Scrub on hover");
+            });
+            if state.opts.view == View::Grid {
+                widgets::menu_separator(ui, theme);
+                pad(ui, |ui| {
+                    widgets::menu_heading(ui, theme, "Card size");
+                });
+                pad(ui, |ui| {
+                    ui.add(
+                        egui::Slider::new(&mut state.opts.card, CARD_MIN..=CARD_MAX)
+                            .show_value(false),
+                    )
+                    .accessible_name("Card size");
+                });
+            }
+            if picks + rejects > 0 {
+                widgets::menu_separator(ui, theme);
+                pad(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new(format!("{picks} picked · {rejects} rejected"))
+                            .color(theme::rgb(theme.text_muted)),
+                    );
+                });
+            }
+        });
+}
+
+/// A row inset by a menu item's padding.
+fn pad(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+    ui.horizontal(|ui| {
+        ui.add_space(SPACE_SM);
+        add(ui);
+    });
+}
+
+/// The order, as a ghost dropdown.
+fn sort_menu(ui: &mut egui::Ui, theme: &Palette, state: &mut State, label: &str) {
+    let id = ui.make_persistent_id("review-sort");
+    let open = egui::Popup::is_id_open(ui.ctx(), id);
+    let response = widgets::dropdown_button(ui, theme, label, "Order", open);
+    let _ = egui::Popup::menu(&response)
+        .id(id)
+        .width(200.0)
+        .gap(SPACE_XS)
+        .show(|ui| {
+            pad(ui, |ui| {
+                widgets::menu_heading(ui, theme, "Order by");
+            });
+            for s in Sort::ALL {
+                if widgets::menu_item(ui, theme, None, s.label(), "", state.opts.sort == s)
+                    .clicked()
+                {
+                    state.opts.sort = s;
+                }
+            }
+        });
+}
+
+/// The saved searches.
+fn smart_menu(ui: &mut egui::Ui, theme: &Palette, dos: &mut Vec<Do>) {
+    let id = ui.make_persistent_id("review-smart");
+    let open = egui::Popup::is_id_open(ui.ctx(), id);
+    let response = widgets::icon_toggle(ui, theme, icons::SPARKLES, "Smart searches", "", open);
+    let _ = egui::Popup::menu(&response)
+        .id(id)
+        .width(220.0)
+        .gap(SPACE_XS)
+        .show(|ui| {
+            pad(ui, |ui| {
+                widgets::menu_heading(ui, theme, "Smart searches");
+            });
+            for (label, q) in SMART {
+                if widgets::menu_item(ui, theme, None, label, "", false)
+                    .on_hover_text(*q)
+                    .clicked()
+                {
+                    dos.push(Do::Search((*q).to_owned()));
+                }
+            }
+        });
+}
+
+/// The review modes folded into one menu, for a narrow pane.
+fn modes_menu(ui: &mut egui::Ui, theme: &Palette, state: &State, dos: &mut Vec<Do>) {
+    let id = ui.make_persistent_id("review-modes");
+    let open = egui::Popup::is_id_open(ui.ctx(), id);
+    let kind = state.mode.kind();
+    let glyph = MODES
+        .iter()
+        .find(|(k, _, _)| *k == kind)
+        .map_or(icons::CIRCLE_PLAY, |(_, g, _)| *g);
+    let response = widgets::icon_toggle(
+        ui,
+        theme,
+        glyph,
+        "Review modes",
+        "",
+        open || kind != Kind::Browse,
+    );
+    let _ = egui::Popup::menu(&response)
+        .id(id)
+        .width(240.0)
+        .gap(SPACE_XS)
+        .show(|ui| {
+            pad(ui, |ui| {
+                widgets::menu_heading(ui, theme, "Review");
+            });
+            for (k, glyph, cmd) in MODES {
+                let label = keymap::command(cmd).map_or("", |c| c.label);
+                if widgets::menu_item(
+                    ui,
+                    theme,
+                    Some(glyph),
+                    label,
+                    &keys_of(cmd, state.preset),
+                    kind == k,
+                )
+                .clicked()
+                {
+                    dos.push(Do::Mode(k));
+                }
+            }
+        });
+}
+
+/// The toolbar's left side in a review mode: leave, where it stands, and
+/// the mode's own controls (their keys in the tooltips).
+fn mode_status(ui: &mut egui::Ui, theme: &Palette, state: &State, dos: &mut Vec<Do>) {
+    let p = state.preset;
+    let name = match &state.mode {
+        Mode::Browse => return,
+        Mode::Tape(_) => "Tape",
+        Mode::Compare(_) => "Compare",
+        Mode::Survey(_) => "Survey",
+    };
+    if widgets::icon_btn(
+        ui,
+        theme,
+        icons::X,
+        &format!("Leave {}", name.to_lowercase()),
+        &keys_of("review-exit", p),
+    )
+    .clicked()
+    {
+        dos.push(Do::Mode(Kind::Browse));
+    }
+    match &state.mode {
+        Mode::Browse => {}
+        Mode::Tape(t) => {
+            if widgets::icon_toggle(
+                ui,
+                theme,
+                icons::ZAP,
+                keymap::command("review-fast").map_or("Fast Review", |c| c.label),
+                &keys_of("review-fast", p),
+                t.fast,
+            )
+            .clicked()
+            {
+                dos.push(Do::FastReview);
+            }
+        }
+        Mode::Compare(_) => {
+            for (glyph, label, step) in [
+                (icons::CHEVRON_LEFT, "Previous candidate", -1),
+                (icons::CHEVRON_RIGHT, "Next candidate", 1),
+            ] {
+                if widgets::icon_btn(
+                    ui,
+                    theme,
+                    glyph,
+                    label,
+                    &keys_of("review-compare-candidate", p),
+                )
+                .clicked()
+                {
+                    dos.push(Do::Candidate(step));
+                }
+            }
+            if widgets::icon_btn(
+                ui,
+                theme,
+                icons::ARROW_UP,
+                "Make the candidate the select",
+                &keys_of("review-compare-promote", p),
+            )
+            .clicked()
+            {
+                dos.push(Do::Promote);
+            }
+        }
+        Mode::Survey(_) => {
+            for (glyph, label, id, step) in [
+                (
+                    icons::CHEVRON_LEFT,
+                    "Previous group",
+                    "review-prev-group",
+                    -1,
+                ),
+                (icons::CHEVRON_RIGHT, "Next group", "review-next-group", 1),
+            ] {
+                if widgets::icon_btn(ui, theme, glyph, label, &keys_of(id, p)).clicked() {
+                    dos.push(Do::Group(step));
+                }
+            }
+        }
+    }
+    let status = match &state.mode {
+        Mode::Browse => String::new(),
+        Mode::Tape(t) => format!("Tape {} of {}", t.last.map_or(0, |k| k + 1), t.ids.len()),
+        // The lit Compare toggle says which mode this is; its buttons fill
+        // the row.
+        Mode::Compare(_) => String::new(),
+        Mode::Survey(s) => match s.group {
+            Some(g) => format!("Group {} of {}", g + 1, state.groups.len()),
+            None => format!("{} shots", s.ids.len()),
+        },
+    };
+    ui.add_space(SPACE_XS);
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(status)
+                .font(theme::medium(ui.ctx(), theme::BODY_SIZE))
+                .color(theme::rgb(theme.text)),
+        )
+        .truncate(),
+    );
+}
+
+/// The review modes the toolbar offers: (mode, icon, command id).
+const MODES: [(Kind, char, &str); 3] = [
+    (Kind::Tape, icons::CIRCLE_PLAY, "review-tape"),
+    (Kind::Compare, icons::COLUMNS, "review-compare"),
+    (Kind::Survey, icons::GRID, "review-survey"),
+];
 
 /// Just the keys of a command under `preset`.
 fn keys_of(id: &str, preset: Preset) -> String {
     keymap::command(id).map_or_else(String::new, |c| c.hint(preset))
-}
-
-/// The line under the header while a review mode is on: where it stands
-/// and the keys that drive it.
-fn mode_bar(ui: &mut egui::Ui, theme: &Palette, state: &State, dos: &mut Vec<Do>) {
-    let p = state.preset;
-    let text = match &state.mode {
-        Mode::Browse => return,
-        Mode::Tape(t) => {
-            let at = t.last.map_or(0, |k| k + 1);
-            format!(
-                "Tape {at}/{} · P/X/U mark and skip · {} leaves",
-                t.ids.len(),
-                keys_of("review-exit", p)
-            )
-        }
-        Mode::Compare(_) => format!(
-            "Compare · {} candidate · {} make select · P/X/U mark it · {} leaves",
-            keys_of("review-compare-candidate", p),
-            keys_of("review-compare-promote", p),
-            keys_of("review-exit", p)
-        ),
-        Mode::Survey(s) => {
-            let group = match s.group {
-                Some(g) => format!("group {}/{} · ", g + 1, state.groups.len()),
-                None => String::new(),
-            };
-            format!(
-                "Survey {} · {group}{} drops · {} / {} groups · {} leaves",
-                s.ids.len(),
-                keys_of("review-survey-remove", p),
-                keys_of("review-next-group", p),
-                keys_of("review-prev-group", p),
-                keys_of("review-exit", p)
-            )
-        }
-    };
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = egui::vec2(SPACE_XS, SPACE_XS);
-        if let Mode::Tape(t) = &state.mode
-            && ui
-                .selectable_label(t.fast, egui::RichText::new("Fast").size(11.0))
-                .on_hover_text(hint("review-fast", p))
-                .clicked()
-        {
-            dos.push(Do::FastReview);
-        }
-        ui.label(
-            egui::RichText::new(text)
-                .size(11.0)
-                .color(theme::rgb(theme.accent)),
-        );
-    });
-    ui.add_space(SPACE_XS);
 }
 
 /// Saved searches: (label, query).
@@ -970,35 +1250,54 @@ const SMART: &[(&str, &str)] = &[
     ("Needs captions", "uncaptioned"),
 ];
 
-/// The query's tokens as removable chips.
+/// The query's tokens as removable chips: 24 px, 6 px corners, ink fill,
+/// a close icon; a negated token tinted with the danger colour.
 fn chips(ui: &mut egui::Ui, theme: &Palette, query: &Query, dos: &mut Vec<Do>) {
+    ui.add_space(SPACE_XS);
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = egui::vec2(SPACE_XS, SPACE_XS);
+        let font = theme::medium(ui.ctx(), theme::BODY_SIZE);
         for (i, c) in query.clauses.iter().enumerate() {
-            let text = format!("{}  ✕", c.label());
             let galley =
                 ui.painter()
-                    .layout_no_wrap(text, theme::font(11.0), theme::rgb(theme.text));
-            let size = galley.size() + egui::vec2(12.0, 4.0);
-            let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
-            let fill = match (c.negate, c.is_text(), resp.hovered()) {
-                (_, _, true) => theme.hover,
-                (true, _, false) => theme.raised,
-                (false, true, false) => theme.panel,
-                (false, false, false) => theme.accent_soft,
-            };
-            let stroke = if c.negate { theme.danger } else { theme.border };
-            ui.painter().rect(
-                rect,
-                egui::CornerRadius::same(3),
-                theme::rgb(fill),
-                egui::Stroke::new(1.0, theme::rgb(stroke)),
-                egui::StrokeKind::Inside,
+                    .layout_no_wrap(c.label(), font.clone(), theme::rgb(theme.text));
+            let size = egui::vec2(
+                galley.size().x + SPACE_SM + icons::SMALL + SPACE_XS * 2.0,
+                theme::COMPACT_HEIGHT,
             );
+            let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+            let label = format!("Remove {}", c.label());
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
+            let fill = match (c.negate, resp.hovered()) {
+                (true, false) => theme::translucent(theme.danger, 38),
+                (true, true) => theme::translucent(theme.danger, 64),
+                (false, false) => theme::ink(theme, theme::INK_08),
+                (false, true) => theme::ink(theme, theme::INK_12),
+            };
+            ui.painter()
+                .rect_filled(rect, egui::CornerRadius::same(theme::RADIUS), fill);
+            let ink = theme::rgb(theme.text);
             ui.painter().galley(
-                rect.min + egui::vec2(6.0, 2.0),
+                egui::pos2(
+                    rect.left() + SPACE_SM,
+                    rect.center().y - galley.size().y / 2.0,
+                ),
                 galley,
-                theme::rgb(theme.text),
+                ink,
+            );
+            let slot = egui::Rect::from_center_size(
+                egui::pos2(
+                    rect.right() - SPACE_XS - icons::SMALL / 2.0,
+                    rect.center().y,
+                ),
+                egui::Vec2::splat(icons::SMALL - 2.0),
+            );
+            icons::paint(
+                ui.painter(),
+                slot,
+                icons::X,
+                icons::SMALL - 2.0,
+                theme::rgb(theme.text_muted),
             );
             if resp.on_hover_text("Remove").clicked() {
                 dos.push(Do::Search(query.without(i)));
@@ -1009,16 +1308,29 @@ fn chips(ui: &mut egui::Ui, theme: &Palette, query: &Query, dos: &mut Vec<Do>) {
 
 /// No results: say why and offer a way out.
 fn empty(ui: &mut egui::Ui, theme: &Palette, query: &Query, matched: usize, dos: &mut Vec<Do>) {
-    ui.add_space(SPACE_SM);
-    let text = if matched > 0 {
-        format!("{matched} shots match, all below the cut-off.")
+    let (title, hint) = if matched > 0 {
+        (
+            format!("{matched} shots under the minimum score"),
+            "Lower it in the filter menu to see them.",
+        )
     } else if query.is_empty() {
-        "The shot log is empty.".to_owned()
+        (
+            "The shot log is empty".to_owned(),
+            "Index the night on the Home screen.",
+        )
     } else {
-        "No shots match.".to_owned()
+        (
+            "No shots match".to_owned(),
+            "Try fewer words, or a smart search.",
+        )
     };
-    crate::gui::ui::widgets::muted(ui, theme, &text);
-    if !query.is_empty() && ui.small_button("Clear search").clicked() {
+    let mut clear = false;
+    widgets::empty_state(ui, theme, icons::SEARCH, &title, hint, |ui| {
+        if !query.is_empty() && widgets::outline_button(ui, theme, "Clear search").clicked() {
+            clear = true;
+        }
+    });
+    if clear {
         dos.push(Do::Search(String::new()));
     }
 }
@@ -1214,10 +1526,10 @@ fn interact(paint: &Paint<'_>, item: usize, response: &egui::Response, dos: &mut
         item_btn(ui, dos, "Clear mark", "U", Do::Verdict(None, false));
         ui.menu_button("Rating", |ui| {
             for r in (0..=5u8).rev() {
-                let label = if r == 0 {
-                    "No rating".to_owned()
-                } else {
-                    "★".repeat(usize::from(r))
+                let label = match r {
+                    0 => "No rating".to_owned(),
+                    1 => "1 star".to_owned(),
+                    _ => format!("{r} stars"),
                 };
                 if ui.button(label).clicked() {
                     dos.push(Do::Rate(r));
@@ -1336,6 +1648,7 @@ fn apply(ctx: &mut PageCtx<'_>, state: &mut State, d: Do, egui_ctx: &egui::Conte
             set_selection(ctx, ids);
         }
         Do::Search(text) => *ctx.search = text,
+        Do::FocusSearch => ctx.actions.push(Action::FocusSearch),
         Do::Mode(kind) => {
             let current = state.mode.kind();
             leave(ctx, state);
@@ -1828,11 +2141,22 @@ pub(super) fn text_line(
     color: egui::Color32,
     max_w: f32,
 ) -> f32 {
+    text_in(painter, pos, text, theme::font(size), color, max_w)
+}
+
+/// [`text_line`] in a given font (Medium for names, tabular for numbers).
+pub(super) fn text_in(
+    painter: &egui::Painter,
+    pos: egui::Pos2,
+    text: &str,
+    font: egui::FontId,
+    color: egui::Color32,
+    max_w: f32,
+) -> f32 {
     if max_w <= 4.0 {
         return 0.0;
     }
-    let mut job =
-        egui::text::LayoutJob::simple_singleline(text.to_owned(), theme::font(size), color);
+    let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), font, color);
     job.wrap = egui::text::TextWrapping::truncate_at_width(max_w);
     let galley = painter.layout_job(job);
     let w = galley.size().x;
@@ -1905,6 +2229,7 @@ pub(super) fn tooltip(ui: &mut egui::Ui, paint: &Paint<'_>, item: &Item) {
         );
     }
     let v = bar_values(paint.night, s);
+    measures(ui, paint.theme, v);
     ui.label(
         egui::RichText::new(format!(
             "{:.1}–{:.1}s · {} · fire {:.2} · led {:.2} · move {:.2} · focus {:.2} · q {:.2}",
@@ -1928,6 +2253,48 @@ pub(super) fn tooltip(ui: &mut egui::Ui, paint: &Paint<'_>, item: &Item) {
     }
 }
 
+/// The four measures as small labelled bars (fire, LED, moving light,
+/// focus): the hover card's at-a-glance row, kept off the cards so they
+/// stay calm.
+fn measures(ui: &mut egui::Ui, theme: &Palette, values: [f32; 4]) {
+    let colors = metric_colors(theme);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = SPACE_SM;
+        for ((name, v), c) in ["fire", "led", "move", "focus"]
+            .into_iter()
+            .zip(values)
+            .zip(colors)
+        {
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(64.0, 24.0), egui::Sense::hover());
+            let painter = ui.painter();
+            painter.text(
+                rect.left_top(),
+                egui::Align2::LEFT_TOP,
+                name,
+                theme::font(theme::SMALL_SIZE),
+                theme::rgb(theme.text_muted),
+            );
+            let track = egui::Rect::from_min_size(
+                egui::pos2(rect.left(), rect.bottom() - 4.0),
+                egui::vec2(rect.width(), 3.0),
+            );
+            painter.rect_filled(
+                track,
+                egui::CornerRadius::same(1),
+                theme::ink(theme, theme::INK_10),
+            );
+            painter.rect_filled(
+                egui::Rect::from_min_size(
+                    track.min,
+                    egui::vec2(track.width() * v.clamp(0.0, 1.0), track.height()),
+                ),
+                egui::CornerRadius::same(1),
+                c,
+            );
+        }
+    });
+}
+
 /// The width left in `ui` that is actually on screen: a wide header row
 /// can stretch the pane's layout past its clip edge.
 pub(super) fn visible_width(ui: &egui::Ui) -> f32 {
@@ -1942,27 +2309,96 @@ pub(super) fn scroll_bar_width(ui: &egui::Ui) -> f32 {
     s.bar_width + s.bar_inner_margin + s.bar_outer_margin
 }
 
-/// A play triangle on a dark disc, centred at `c`, `r` across the disc's
-/// radius.
-pub(super) fn play_mark(painter: &egui::Painter, c: egui::Pos2, r: f32, color: egui::Color32) {
-    painter.circle_filled(c, r, egui::Color32::from_black_alpha(170));
-    let h = r * 0.55;
-    painter.add(egui::Shape::convex_polygon(
-        vec![
-            c + egui::vec2(-h * 0.6, -h),
-            c + egui::vec2(h, 0.0),
-            c + egui::vec2(-h * 0.6, h),
-        ],
+/// A play icon on a glass disc, centred at `c`, `r` across the disc's
+/// radius: the shot the tape is on.
+pub(super) fn play_mark(
+    painter: &egui::Painter,
+    theme: &Palette,
+    c: egui::Pos2,
+    r: f32,
+    color: egui::Color32,
+) {
+    painter.circle(c, r, theme::glass_fill(theme), theme::ink_line(theme));
+    let size = (r * 1.1).round();
+    icons::paint(
+        painter,
+        egui::Rect::from_center_size(c + egui::vec2(1.0, 0.0), egui::Vec2::splat(size)),
+        icons::PLAY,
+        size,
         color,
-        egui::Stroke::NONE,
-    ));
+    );
 }
 
-/// The mark badge: fill colour and glyph.
-pub(super) fn verdict_style(theme: &Palette, v: Verdict) -> (egui::Color32, &'static str) {
+/// The mark badge: its colour and icon.
+pub(super) fn verdict_style(theme: &Palette, v: Verdict) -> (egui::Color32, char) {
     match v {
-        Verdict::Pick => (theme::rgb(theme.success), "✓"),
-        Verdict::Reject => (theme::rgb(theme.danger), "✕"),
+        Verdict::Pick => (theme::rgb(theme.success), icons::CHECK),
+        Verdict::Reject => (theme::rgb(theme.danger), icons::X),
+    }
+}
+
+/// A small glass plate (Selects' card badges: the glass recipe, 2 px
+/// corners, 4 px side padding) anchored at `pos`, holding an optional icon
+/// in its colour and an optional label in white 12 px Medium. Returns its
+/// rect.
+pub(super) fn glass_badge(
+    painter: &egui::Painter,
+    theme: &Palette,
+    pos: egui::Pos2,
+    anchor: egui::Align2,
+    icon: Option<(char, egui::Color32)>,
+    label: &str,
+) -> egui::Rect {
+    let font = theme::medium(painter.ctx(), theme::BODY_SIZE);
+    let galley = (!label.is_empty())
+        .then(|| painter.layout_no_wrap(label.to_owned(), font, egui::Color32::WHITE));
+    let icon_w = if icon.is_some() {
+        icons::SMALL - 2.0
+    } else {
+        0.0
+    };
+    let gap = if icon.is_some() && galley.is_some() {
+        2.0
+    } else {
+        0.0
+    };
+    let text_w = galley.as_ref().map_or(0.0, |g| g.size().x);
+    let size = egui::vec2(icon_w + gap + text_w + SPACE_XS * 2.0, SPACE_LG + 2.0);
+    let rect = anchor.anchor_size(pos, size);
+    painter.rect_filled(
+        rect,
+        egui::CornerRadius::same(theme::RADIUS_XS),
+        theme::glass_fill(theme),
+    );
+    let mut x = rect.left() + SPACE_XS;
+    if let Some((glyph, color)) = icon {
+        icons::paint(
+            painter,
+            egui::Rect::from_min_size(
+                egui::pos2(x, rect.center().y - icon_w / 2.0),
+                egui::Vec2::splat(icon_w),
+            ),
+            glyph,
+            icon_w,
+            color,
+        );
+        x += icon_w + gap;
+    }
+    if let Some(galley) = galley {
+        let y = rect.center().y - galley.size().y / 2.0;
+        painter.galley(egui::pos2(x, y), galley, egui::Color32::WHITE);
+    }
+    rect
+}
+
+/// A segment's length for a badge: `4.2s`, or `1:07` from a minute up.
+pub(super) fn duration(seconds: f32) -> String {
+    let s = seconds.max(0.0);
+    if s < 60.0 {
+        format!("{s:.1}s")
+    } else {
+        let whole = s.round() as u32;
+        format!("{}:{:02}", whole / 60, whole % 60)
     }
 }
 

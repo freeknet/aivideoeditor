@@ -14,7 +14,7 @@
 //! / `U` mark the candidate and move on. The numbers that differ are the
 //! point: the better value of each measurement is drawn in green.
 
-use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, StrokeKind, vec2};
+use egui::{Align2, CornerRadius, Rect, Sense, Stroke, StrokeKind, vec2};
 
 use super::{Do, Paint};
 use crate::gui::thumbs::Thumbs;
@@ -75,8 +75,8 @@ pub(super) fn draw(
             let side = w >= SIDE_BY_SIDE * 2.0 + SPACE_SM;
             let pane_w = if side { (w - SPACE_SM) / 2.0 } else { w };
             let panes = [
-                ("SELECT", select, &cmp.select, false),
-                ("CANDIDATE", candidate, &cmp.candidate, true),
+                ("Select", select, &cmp.select, false),
+                ("Candidate", candidate, &cmp.candidate, true),
             ];
             if side {
                 ui.horizontal_top(|ui| {
@@ -119,69 +119,75 @@ fn pane(
     dos: &mut Vec<Do>,
 ) {
     let theme = paint.theme;
-    let role_color = if focus {
-        theme.accent
-    } else {
-        theme.text_muted
-    };
+    let role_color = if focus { theme.text } else { theme.text_muted };
     ui.label(
         egui::RichText::new(role)
-            .size(10.0)
-            .strong()
+            .font(theme::medium(ui.ctx(), theme::BODY_SIZE))
             .color(theme::rgb(role_color)),
     );
-    let (rect, response) =
-        ui.allocate_exact_size(vec2(width, (width * 9.0 / 16.0).round()), Sense::click());
+    let room = SPACE_XS;
+    let (outer, response) = ui.allocate_exact_size(
+        vec2(
+            width,
+            ((width - room * 2.0) * 9.0 / 16.0).round() + room * 2.0,
+        ),
+        Sense::click(),
+    );
+    let rect = outer.shrink(room);
+    let radius = CornerRadius::same(theme::RADIUS_XS);
+    ui.painter()
+        .rect_filled(rect, radius, theme::rgb(theme.raised));
     let Some(s) = seg else {
-        ui.painter()
-            .rect_filled(rect, CornerRadius::same(2), theme::rgb(theme.app));
-        ui.label(egui::RichText::new(format!("{id} is not in the shot log")).size(11.0));
+        ui.label(
+            egui::RichText::new(format!("{id} is not in the shot log"))
+                .color(theme::rgb(theme.text_muted)),
+        );
         return;
     };
     let t = f64::from((s.seg.start + s.seg.end) / 2.0);
-    match super::source(paint.paths, &s.clip) {
-        Some(path) => thumbs.paint(ui, rect, path, t, s.seg.cx, theme::rgb(theme.app)),
-        None => {
-            ui.painter()
-                .rect_filled(rect, CornerRadius::same(2), theme::rgb(theme.app));
-        }
+    if let Some(path) = super::source(paint.paths, &s.clip) {
+        thumbs.paint(ui, rect, path, t, s.seg.cx, theme::rgb(theme.raised));
     }
-    let painter = ui.painter_at(rect);
+    let painter = ui.painter_at(outer);
     if let Some(v) = paint.night.marks.get(&s.id).verdict {
         let (color, glyph) = super::verdict_style(theme, v);
-        let c = rect.left_top() + vec2(10.0, 10.0);
-        painter.circle_filled(c, 7.0, color);
-        painter.text(
-            c,
-            Align2::CENTER_CENTER,
-            glyph,
-            theme::font(10.0),
-            Color32::BLACK,
+        super::glass_badge(
+            &painter,
+            theme,
+            rect.left_top() + vec2(SPACE_XS, SPACE_XS),
+            Align2::LEFT_TOP,
+            Some((glyph, color)),
+            "",
         );
     }
-    let border = if focus {
-        (2.0, theme.accent)
-    } else {
-        (1.0, theme.border_strong)
-    };
-    painter.rect_stroke(
-        rect,
-        CornerRadius::same(2),
-        Stroke::new(border.0, theme::rgb(border.1)),
-        StrokeKind::Inside,
+    super::glass_badge(
+        &painter,
+        theme,
+        rect.right_bottom() - vec2(SPACE_XS, SPACE_XS),
+        Align2::RIGHT_BOTTOM,
+        None,
+        &super::duration(s.seg.end - s.seg.start),
     );
+    if focus {
+        painter.rect_stroke(
+            rect.expand(2.0),
+            CornerRadius::same(theme::RADIUS_XS + 2),
+            Stroke::new(2.0, theme::rgb(theme.accent)),
+            StrokeKind::Outside,
+        );
+    }
     if response.on_hover_text("Show in the viewer").clicked() {
         dos.push(Do::Preview(s.id.clone()));
     }
     let line = Rect::from_min_size(ui.cursor().min, vec2(width, 16.0));
     ui.allocate_rect(line, Sense::hover());
-    super::text_line(
+    super::text_in(
         ui.painter(),
-        line.left_center(),
-        &format!("{}  ·  {:.1}s", s.id, s.seg.end - s.seg.start),
-        11.0,
+        line.left_center() + vec2(room, 0.0),
+        &s.id,
+        theme::medium(ui.ctx(), theme::BODY_SIZE),
         theme::rgb(theme.text),
-        width,
+        width - room,
     );
     let caption = s.caption.as_ref().map_or_else(
         || format!("{} · {}", s.subject, s.seg.camera.label()),
@@ -190,7 +196,7 @@ fn pane(
     ui.add(
         egui::Label::new(
             egui::RichText::new(caption)
-                .size(10.5)
+                .size(theme::SMALL_SIZE)
                 .color(theme::rgb(theme.text_muted)),
         )
         .wrap(),
@@ -232,18 +238,22 @@ fn numbers(ui: &mut egui::Ui, paint: &Paint<'_>, a: &Scored, b: &Scored) {
         // Length is not better or worse, only different.
         ("length s", len(a), len(b), false),
     ];
-    let small = |text: String, color| egui::RichText::new(text).size(11.0).color(color);
+    let small = |text: String, color| {
+        egui::RichText::new(text)
+            .size(theme::BODY_SIZE)
+            .color(color)
+    };
     let muted = theme::rgb(theme.text_muted);
     let plain = theme::rgb(theme.text);
     let better = theme::rgb(theme.success);
+    let tabular = theme::tabular(ui.ctx(), theme::BODY_SIZE);
     egui::Grid::new("review-compare-numbers")
         .num_columns(3)
-        .striped(true)
         .spacing(vec2(SPACE_SM, 2.0))
         .show(ui, |ui| {
             ui.label(small(String::new(), muted));
             ui.label(small("select".to_owned(), muted));
-            ui.label(small("candidate".to_owned(), theme::rgb(theme.accent)));
+            ui.label(small("candidate".to_owned(), plain));
             ui.end_row();
             for (label, va, vb, ranked) in rows {
                 let color = |me: f32, other: f32| {
@@ -254,8 +264,8 @@ fn numbers(ui: &mut egui::Ui, paint: &Paint<'_>, a: &Scored, b: &Scored) {
                     }
                 };
                 ui.label(small(label.to_owned(), muted));
-                ui.label(small(format!("{va:.2}"), color(va, vb)).monospace());
-                ui.label(small(format!("{vb:.2}"), color(vb, va)).monospace());
+                ui.label(small(format!("{va:.2}"), color(va, vb)).font(tabular.clone()));
+                ui.label(small(format!("{vb:.2}"), color(vb, va)).font(tabular.clone()));
                 ui.end_row();
             }
             let moment = |s: &Scored| {

@@ -35,7 +35,7 @@ use super::PageCtx;
 use crate::beats::{MusicMap, structure};
 use crate::color::Rgb;
 use crate::commands::Cmd;
-use crate::gui::ui::{keymap, theme, widgets};
+use crate::gui::ui::{icons, keymap, theme, widgets};
 use crate::theme::Palette;
 
 /// A correction to the music map, applied after the frame.
@@ -235,33 +235,53 @@ fn no_music(
     track: Option<std::path::PathBuf>,
     work: &std::path::Path,
 ) {
-    widgets::muted(ui, ctx.theme, "The music is not mapped yet.");
-    ui.add_space(theme::SPACE_SM);
+    let theme = ctx.theme;
     match track {
         Some(track) => {
             let running = job_running(ctx, state);
-            ui.add_enabled_ui(!running, |ui| {
-                let label = if running {
-                    "Mapping…"
-                } else {
-                    "Map the music"
-                };
-                if widgets::button(ui, ctx.theme, label, widgets::Emphasis::Primary).clicked() {
-                    state.job = Some(ctx.jobs.spawn(
-                        "Map the music",
-                        Cmd::Beats {
-                            track,
-                            work: work.to_path_buf(),
-                        },
-                    ));
-                }
-            });
+            let mut map = false;
+            widgets::empty_state(
+                ui,
+                theme,
+                icons::MUSIC,
+                "The music is not mapped yet",
+                "Map the track's beats, bars and drops to cut to them.",
+                |ui| {
+                    ui.add_enabled_ui(!running, |ui| {
+                        let label = if running {
+                            "Mapping…"
+                        } else {
+                            "Map the music"
+                        };
+                        map = widgets::button_with(
+                            ui,
+                            theme,
+                            widgets::ButtonKind::Key,
+                            Some(icons::AUDIO_WAVEFORM),
+                            label,
+                        )
+                        .clicked();
+                    });
+                },
+            );
+            if map {
+                state.job = Some(ctx.jobs.spawn(
+                    "Map the music",
+                    Cmd::Beats {
+                        track,
+                        work: work.to_path_buf(),
+                    },
+                ));
+            }
         }
         None => {
-            widgets::muted(
+            widgets::empty_state(
                 ui,
-                ctx.theme,
-                "Choose the track on the Home screen, then map it.",
+                theme,
+                icons::MUSIC,
+                "No track chosen",
+                "Choose the track on the Home screen, then map it here.",
+                |_| {},
             );
         }
     }
@@ -291,10 +311,9 @@ fn body(
     }
     state.clamp_view(map.duration);
     let page = ui.max_rect();
-    header(ctx, state, ui, map, work);
-    ui.add_space(theme::SPACE_XS);
-    toolbar(ctx, state, ui, map, edits);
-    ui.add_space(theme::SPACE_XS);
+    toolbar(ctx, state, ui, map, work, edits);
+    header(ctx, state, ui, map);
+    ui.add_space(theme::SPACE_SM);
 
     // The cache is borrowed for the frame; drawing needs `state` mutably too.
     let mut taken = std::mem::take(&mut state.peaks);
@@ -303,7 +322,11 @@ fn body(
     ui.add_space(theme::SPACE_XS);
     view::zoomed(ctx, state, ui, map, ready, edits);
     if let Some(e) = taken.error() {
-        widgets::muted(ui, ctx.theme, &format!("No waveform: {e}"));
+        ui.label(
+            RichText::new(format!("No waveform: {e}"))
+                .size(theme::SMALL_SIZE)
+                .color(theme::rgb(ctx.theme.text_muted)),
+        );
     }
     state.peaks = taken;
 
@@ -313,70 +336,26 @@ fn body(
     if pointer_here && ctx.keys_free(ui) {
         keys(ctx, state, ui, map, edits);
     }
-    hint(ctx, ui);
-    ui.separator();
+    ui.add_space(theme::SPACE_SM);
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
             selection_row(ctx, state, ui, map, edits);
-            ui.add_space(theme::SPACE_SM);
             sections(ctx, state, ui, map, edits);
-            ui.add_space(theme::SPACE_SM);
             drops(ctx, ui, map, edits);
-            ui.add_space(theme::SPACE_SM);
             ranges(ctx, ui, map, edits);
         });
 }
 
-/// Track name, tempo, length, grid state and the re-analysis button.
-fn header(
-    ctx: &mut PageCtx<'_>,
-    state: &mut State,
-    ui: &mut egui::Ui,
-    map: &MusicMap,
-    work: &std::path::Path,
-) {
+/// Height of the toolbar under the tab strip: with the 4 px the workspace
+/// leaves under the strip, Selects' 40 px toolbar.
+const TOOLBAR_H: f32 = theme::PANEL_HEADER_HEIGHT - theme::SPACE_XS;
+
+/// The track's name and numbers, with how the grid was fixed in a tooltip.
+fn header(ctx: &mut PageCtx<'_>, state: &State, ui: &mut egui::Ui, map: &MusicMap) {
     let name = std::path::Path::new(&map.path)
         .file_name()
         .map_or_else(|| map.path.clone(), |n| n.to_string_lossy().into_owned());
-    ui.horizontal(|ui| {
-        ui.label(
-            RichText::new(name)
-                .font(theme::font(theme::TITLE_SIZE))
-                .color(theme::rgb(ctx.theme.text))
-                .strong(),
-        );
-        ui.label(
-            RichText::new(format!(
-                "{:.2} BPM · {} bars · {}",
-                map.bpm,
-                map.bars.len(),
-                clock(map.duration)
-            ))
-            .color(theme::rgb(ctx.theme.text_muted)),
-        );
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let running = job_running(ctx, state);
-            let label = if running {
-                "Analysing…"
-            } else {
-                "Re-analyse"
-            };
-            let button = ui
-                .add_enabled(!running, egui::Button::new(label))
-                .on_hover_text("Run the beat analysis again (your fixes are kept)");
-            if button.clicked() {
-                let track = std::path::PathBuf::from(&map.path);
-                state.job = Some(ctx.jobs.spawn(
-                    "Map the music",
-                    Cmd::Beats {
-                        track,
-                        work: work.to_path_buf(),
-                    },
-                ));
-            }
-        });
-    });
     let mut fixes = Vec::new();
     if map.downbeat_shift != 0 {
         fixes.push(format!("downbeat {:+} beats", map.downbeat_shift));
@@ -391,115 +370,242 @@ fn header(
             map.detected_bpm()
         ));
     }
-    let line = if fixes.is_empty() {
+    let grid = if fixes.is_empty() {
         "Grid as detected".to_owned()
     } else {
         format!("Grid fixed: {}", fixes.join(", "))
     };
     ui.horizontal(|ui| {
-        widgets::muted(ui, ctx.theme, &line);
-        if let Some(e) = &state.error {
-            ui.label(RichText::new(e).color(theme::rgb(ctx.theme.danger)));
-        }
+        ui.spacing_mut().item_spacing.x = theme::SPACE_SM;
+        ui.add(
+            egui::Label::new(
+                RichText::new(name)
+                    .font(theme::medium(ui.ctx(), theme::BODY_SIZE))
+                    .color(theme::rgb(ctx.theme.text)),
+            )
+            .truncate(),
+        )
+        .on_hover_text(&map.path);
+        ui.add(
+            egui::Label::new(
+                RichText::new(format!("{} bars · {}", map.bars.len(), clock(map.duration)))
+                    .font(theme::tabular(ui.ctx(), theme::BODY_SIZE))
+                    .color(theme::rgb(ctx.theme.text_muted)),
+            )
+            .truncate(),
+        )
+        .on_hover_text(grid);
     });
+    if let Some(e) = &state.error {
+        ui.label(
+            RichText::new(e)
+                .size(theme::SMALL_SIZE)
+                .color(theme::rgb(ctx.theme.danger)),
+        );
+    }
 }
 
-/// Tempo, downbeat and offset controls.
+/// The toolbar: the tempo menu (with the grid nudges) and the downbeat on the left; the
+/// grid toggle, reset, re-analysis and the keys on the right.
 fn toolbar(
     ctx: &mut PageCtx<'_>,
     state: &mut State,
     ui: &mut egui::Ui,
     map: &MusicMap,
+    work: &std::path::Path,
     edits: &mut Vec<Edit>,
 ) {
-    ui.horizontal_wrapped(|ui| {
-        let label = ui.label("Tempo");
-        let mut bpm = state.bpm_edit.unwrap_or(map.bpm);
-        let field = ui
-            .add(
-                egui::DragValue::new(&mut bpm)
-                    .speed(0.01)
-                    .range(40.0..=300.0)
-                    .max_decimals(2)
-                    .suffix(" BPM"),
+    let palette = ctx.theme;
+    let preset = ctx.keymap;
+    let key = |id: &str| {
+        keymap::command(id)
+            .map(|c| c.hint(preset))
+            .unwrap_or_default()
+    };
+    let running = job_running(ctx, state);
+    let mut analyse = false;
+    let gestures = format!(
+        "Drag bars to select them; drag a bar number to move the downbeat.\n\
+         {} / {}  downbeat a beat earlier / later\n\
+         {} / {}  grid 10 ms earlier / later\n\
+         {}  mark a drop · {} / {}  range in / out · {}  grid\n\
+         Ctrl+wheel  zoom · R  reference in chat",
+        key("music-downbeat-earlier"),
+        key("music-downbeat-later"),
+        key("music-nudge-earlier"),
+        key("music-nudge-later"),
+        key("music-drop"),
+        key("music-from"),
+        key("music-to"),
+        key("music-grid"),
+    );
+    widgets::toolbar_row(
+        ui,
+        TOOLBAR_H,
+        &mut (&mut *state, &mut *edits),
+        |ui, (state, edits)| {
+            tempo_menu(ui, palette, state, map, edits, &key);
+            for (glyph, label, id, edit) in [
+                (
+                    icons::CHEVRON_LEFT,
+                    "Downbeat one beat earlier",
+                    "music-downbeat-earlier",
+                    Edit::ShiftDownbeat(-1),
+                ),
+                (
+                    icons::CHEVRON_RIGHT,
+                    "Downbeat one beat later",
+                    "music-downbeat-later",
+                    Edit::ShiftDownbeat(1),
+                ),
+            ] {
+                if widgets::icon_btn(ui, palette, glyph, label, &key(id)).clicked() {
+                    edits.push(edit);
+                }
+            }
+        },
+        |ui, (state, edits)| {
+            widgets::icon_btn(ui, palette, icons::KEYBOARD, &gestures, "");
+            let label = if running {
+                "Analysing…"
+            } else {
+                "Re-analyse the beats (your fixes are kept)"
+            };
+            let glyph = if running {
+                icons::LOADER
+            } else {
+                icons::REFRESH
+            };
+            analyse = ui
+                .add_enabled_ui(!running, |ui| {
+                    widgets::icon_btn(ui, palette, glyph, label, "")
+                })
+                .inner
+                .clicked();
+            if !map.grid_is_detected()
+                && widgets::icon_btn(
+                    ui,
+                    palette,
+                    icons::ROTATE_CCW,
+                    "Back to the detected grid",
+                    "",
+                )
+                .clicked()
+            {
+                edits.push(Edit::ResetGrid);
+            }
+            if widgets::icon_toggle(
+                ui,
+                palette,
+                icons::GRID,
+                "Show the beat grid",
+                &key("music-grid"),
+                state.show_grid,
             )
-            .labelled_by(label.id);
-        if field.changed() {
-            state.bpm_edit = Some(bpm);
-        }
-        if (field.drag_stopped() || field.lost_focus())
-            && let Some(v) = state.bpm_edit.take()
-            && (v - map.bpm).abs() > 1e-3
-        {
-            edits.push(Edit::SetBpm(Some(v)));
-        }
-        if ui
-            .small_button("×2")
-            .on_hover_text("Double the tempo")
             .clicked()
-        {
-            edits.push(Edit::SetBpm(Some(map.bpm * 2.0)));
-        }
-        if ui
-            .small_button("½")
-            .on_hover_text("Halve the tempo")
-            .clicked()
-        {
-            edits.push(Edit::SetBpm(Some(map.bpm / 2.0)));
-        }
-        if map.bpm_override.is_some()
-            && ui
-                .small_button("auto")
-                .on_hover_text("Back to the detected tempo")
+            {
+                state.show_grid = !state.show_grid;
+            }
+        },
+    );
+    if analyse {
+        state.job = Some(ctx.jobs.spawn(
+            "Map the music",
+            Cmd::Beats {
+                track: std::path::PathBuf::from(&map.path),
+                work: work.to_path_buf(),
+            },
+        ));
+    }
+}
+
+/// The tempo as a ghost dropdown; its popover types it, doubles or halves
+/// it, nudges the grid 10 ms either way,
+/// or goes back to the detected tempo.
+fn tempo_menu(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    state: &mut State,
+    map: &MusicMap,
+    edits: &mut Vec<Edit>,
+    key: &dyn Fn(&str) -> String,
+) {
+    let id = ui.make_persistent_id("music-tempo");
+    let open = egui::Popup::is_id_open(ui.ctx(), id);
+    let response = widgets::dropdown_button(
+        ui,
+        palette,
+        &format!("{:.2} BPM", map.bpm),
+        "Tempo and grid",
+        open,
+    );
+    let _ = egui::Popup::menu(&response)
+        .id(id)
+        .width(220.0)
+        .gap(theme::SPACE_XS)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            ui.spacing_mut().item_spacing.y = theme::SPACE_SM;
+            ui.horizontal(|ui| {
+                ui.add_space(theme::SPACE_SM);
+                widgets::menu_heading(ui, palette, "Tempo");
+            });
+            ui.horizontal(|ui| {
+                ui.add_space(theme::SPACE_SM);
+                let mut bpm = state.bpm_edit.unwrap_or(map.bpm);
+                let field = ui
+                    .add(
+                        egui::DragValue::new(&mut bpm)
+                            .speed(0.01)
+                            .range(40.0..=300.0)
+                            .max_decimals(2)
+                            .suffix(" BPM"),
+                    )
+                    .accessible_name("Tempo");
+                if field.changed() {
+                    state.bpm_edit = Some(bpm);
+                }
+                if (field.drag_stopped() || field.lost_focus())
+                    && let Some(v) = state.bpm_edit.take()
+                    && (v - map.bpm).abs() > 1e-3
+                {
+                    edits.push(Edit::SetBpm(Some(v)));
+                }
+            });
+            widgets::menu_separator(ui, palette);
+            if widgets::menu_item(ui, palette, None, "Double the tempo", "", false).clicked() {
+                edits.push(Edit::SetBpm(Some(map.bpm * 2.0)));
+            }
+            if widgets::menu_item(ui, palette, None, "Halve the tempo", "", false).clicked() {
+                edits.push(Edit::SetBpm(Some(map.bpm / 2.0)));
+            }
+            widgets::menu_separator(ui, palette);
+            for (label, id, edit) in [
+                (
+                    "Grid 10 ms earlier",
+                    "music-nudge-earlier",
+                    Edit::Nudge(-0.01),
+                ),
+                ("Grid 10 ms later", "music-nudge-later", Edit::Nudge(0.01)),
+            ] {
+                if widgets::menu_item(ui, palette, None, label, &key(id), false).clicked() {
+                    edits.push(edit);
+                }
+            }
+            if map.bpm_override.is_some()
+                && widgets::menu_item(
+                    ui,
+                    palette,
+                    Some(icons::ROTATE_CCW),
+                    &format!("Detected tempo ({:.2})", map.detected_bpm()),
+                    "",
+                    false,
+                )
                 .clicked()
-        {
-            edits.push(Edit::SetBpm(None));
-        }
-        ui.separator();
-        ui.label("Downbeat");
-        if ui
-            .small_button("< beat")
-            .on_hover_text("One beat earlier  ,")
-            .clicked()
-        {
-            edits.push(Edit::ShiftDownbeat(-1));
-        }
-        if ui
-            .small_button("beat >")
-            .on_hover_text("One beat later  .")
-            .clicked()
-        {
-            edits.push(Edit::ShiftDownbeat(1));
-        }
-        ui.separator();
-        ui.label(format!("Offset {:+.0} ms", map.grid_offset * 1000.0));
-        if ui
-            .small_button("−10")
-            .on_hover_text("Grid 10 ms earlier  Shift+,")
-            .clicked()
-        {
-            edits.push(Edit::Nudge(-0.01));
-        }
-        if ui
-            .small_button("+10")
-            .on_hover_text("Grid 10 ms later  Shift+.")
-            .clicked()
-        {
-            edits.push(Edit::Nudge(0.01));
-        }
-        ui.separator();
-        ui.checkbox(&mut state.show_grid, "Grid")
-            .on_hover_text("Show the beat grid  0");
-        if !map.grid_is_detected()
-            && ui
-                .small_button("Reset")
-                .on_hover_text("Back to the detected grid")
-                .clicked()
-        {
-            edits.push(Edit::ResetGrid);
-        }
-    });
-    let _ = ctx;
+            {
+                edits.push(Edit::SetBpm(None));
+            }
+        });
 }
 
 /// The keyboard: grid fixes, drops, in/out, zoom.
@@ -584,29 +690,34 @@ fn keys(
     }
 }
 
-/// The shortcut line under the strips.
-fn hint(ctx: &PageCtx<'_>, ui: &mut egui::Ui) {
-    let key = |id| {
-        keymap::command(id)
-            .map(|c| c.hint(ctx.keymap))
-            .unwrap_or_default()
-    };
-    ui.label(
-        RichText::new(format!(
-            "drag bars to select · drag a bar number to move the downbeat · {} {} beat · \
-             {} {} 10 ms · {} drop · {}/{} range · {} grid · Ctrl+wheel zoom · R reference",
-            key("music-downbeat-earlier"),
-            key("music-downbeat-later"),
-            key("music-nudge-earlier"),
-            key("music-nudge-later"),
-            key("music-drop"),
-            key("music-from"),
-            key("music-to"),
-            key("music-grid"),
-        ))
-        .small()
-        .color(theme::rgb(ctx.theme.text_faint)),
+/// A list's heading: 12 px Medium, muted, 28 px, with `right` at the far
+/// end (right to left).
+fn heading(ui: &mut egui::Ui, palette: &Palette, title: &str, right: impl FnOnce(&mut egui::Ui)) {
+    ui.add_space(theme::SPACE_XS);
+    ui.horizontal(|ui| {
+        ui.set_min_height(theme::CONTROL_HEIGHT);
+        ui.label(
+            RichText::new(title)
+                .font(theme::medium(ui.ctx(), theme::BODY_SIZE))
+                .color(theme::rgb(palette.text_muted)),
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            right(ui);
+        });
+    });
+}
+
+/// A quiet line in a list: nothing there yet.
+fn none(ui: &mut egui::Ui, palette: &Palette, text: &str, tooltip: &str) {
+    let label = ui.label(
+        RichText::new(text)
+            .size(theme::BODY_SIZE)
+            .color(theme::rgb(palette.text_faint)),
     );
+    if !tooltip.is_empty() {
+        label.on_hover_text(tooltip);
+    }
 }
 
 /// The selection: what it is, and naming it as a song range.
@@ -617,41 +728,65 @@ fn selection_row(
     map: &MusicMap,
     edits: &mut Vec<Edit>,
 ) {
-    widgets::title(ui, ctx.theme, "Selection");
+    heading(ui, ctx.theme, "Selection", |_| {});
     let Some((from, to)) = state.sel else {
-        widgets::muted(ui, ctx.theme, "Click or drag over bars to select them.");
+        none(
+            ui,
+            ctx.theme,
+            "No bars selected",
+            "Click or drag over bars to select them",
+        );
         return;
     };
     let t0 = map.bars.get(from).map_or(0.0, |b| b.t);
     let t1 = map.bar_end(to);
-    ui.label(format!(
-        "bars {from}–{to} · {} bars · {:.1} s ({} – {})",
-        to + 1 - from,
-        t1 - t0,
-        clock(t0),
-        clock(t1)
-    ));
+    ui.label(
+        RichText::new(format!(
+            "Bars {from}–{to} · {} bars · {:.1} s",
+            to + 1 - from,
+            t1 - t0,
+        ))
+        .size(theme::BODY_SIZE)
+        .color(theme::rgb(ctx.theme.text)),
+    )
+    .on_hover_text(format!("{} – {}", clock(t0), clock(t1)));
+    ui.add_space(theme::SPACE_XS);
     ui.horizontal_wrapped(|ui| {
-        ui.label("Use for");
+        ui.spacing_mut().item_spacing = egui::vec2(theme::SPACE_XS, theme::SPACE_XS);
         for name in view::DELIVERABLES {
             let target = target_seconds(name);
             let hover = match target {
                 Some(s) => format!("Save as the {name} song range (target {s} s)"),
                 None => format!("Save as the {name} song range"),
             };
-            if ui.small_button(name).on_hover_text(hover).clicked() {
+            let button =
+                widgets::button_with(ui, ctx.theme, widgets::ButtonKind::Outline, None, name);
+            if widgets::tip(button, ctx.theme, &hover, "").clicked() {
                 edits.push(Edit::SetRange(name.to_owned(), from, to));
             }
         }
-        let field = ui
-            .add(
-                egui::TextEdit::singleline(&mut state.range_name)
-                    .hint_text("other name")
-                    .desired_width(90.0),
-            )
-            .accessible_name("Range name");
+    });
+    ui.add_space(theme::SPACE_XS);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = theme::SPACE_XS;
+        let width =
+            (ui.available_width() - theme::CONTROL_HEIGHT - theme::SPACE_XS).clamp(60.0, 200.0);
+        let (rect, _) = ui.allocate_exact_size(
+            egui::vec2(width, theme::CONTROL_HEIGHT),
+            egui::Sense::hover(),
+        );
+        let field = widgets::field_frame(
+            ui,
+            ctx.theme,
+            rect,
+            &mut state.range_name,
+            "Another range name",
+            None,
+        )
+        .accessible_name("Range name");
         let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        if (ui.small_button("Save").clicked() || enter) && !state.range_name.trim().is_empty() {
+        let save = widgets::icon_btn(ui, ctx.theme, icons::CHECK, "Save the range", "Enter");
+        if (save.clicked() || enter) && !state.range_name.trim().is_empty() {
             edits.push(Edit::SetRange(state.range_name.trim().to_owned(), from, to));
             state.range_name.clear();
         }
@@ -666,24 +801,28 @@ fn sections(
     map: &MusicMap,
     edits: &mut Vec<Edit>,
 ) {
-    ui.horizontal(|ui| {
-        widgets::title(ui, ctx.theme, "Sections");
+    heading(ui, ctx.theme, "Sections", |ui| {
         if !map.sections_user.is_empty()
-            && ui
-                .small_button("Detected")
-                .on_hover_text("Back to the detected sections")
-                .clicked()
+            && widgets::icon_btn(
+                ui,
+                ctx.theme,
+                icons::ROTATE_CCW,
+                "Back to the detected sections",
+                "",
+            )
+            .clicked()
         {
             edits.push(Edit::ResetSections);
         }
     });
     egui::Grid::new("music-sections")
         .num_columns(3)
-        .spacing([theme::SPACE_SM, 2.0])
+        .spacing([theme::SPACE_SM, theme::SPACE_XS])
+        .min_row_height(theme::COMPACT_HEIGHT)
         .show(ui, |ui| {
             for (i, s) in map.sections.iter().enumerate() {
                 let colour = section_color(ctx.theme, &s.name);
-                widgets::swatch(ui, ctx.theme, colour, egui::vec2(10.0, 10.0));
+                widgets::swatch(ui, ctx.theme, colour, egui::vec2(4.0, 16.0));
                 let renaming = state.rename.as_ref().is_some_and(|(k, _)| *k == i);
                 if renaming {
                     let mut commit = None;
@@ -714,7 +853,9 @@ fn sections(
                     let label = ui
                         .add(
                             egui::Label::new(
-                                RichText::new(&s.name).color(theme::rgb(colour)).strong(),
+                                RichText::new(&s.name)
+                                    .font(theme::medium(ui.ctx(), theme::BODY_SIZE))
+                                    .color(theme::rgb(ctx.theme.text)),
                             )
                             .sense(egui::Sense::click()),
                         )
@@ -749,14 +890,15 @@ fn sections(
                 let t0 = map.bars.get(s.from_bar).map_or(0.0, |b| b.t);
                 ui.label(
                     RichText::new(format!(
-                        "bars {}–{} · {} · {:.1} s",
+                        "bars {}–{} · {:.1} s",
                         s.from_bar,
                         s.to_bar,
-                        clock(t0),
                         map.bar_end(s.to_bar) - t0
                     ))
+                    .font(theme::tabular(ui.ctx(), theme::BODY_SIZE))
                     .color(theme::rgb(ctx.theme.text_muted)),
-                );
+                )
+                .on_hover_text(clock(t0));
                 ui.end_row();
             }
         });
@@ -764,9 +906,17 @@ fn sections(
 
 /// The drop list.
 fn drops(ctx: &mut PageCtx<'_>, ui: &mut egui::Ui, map: &MusicMap, edits: &mut Vec<Edit>) {
-    widgets::title(ui, ctx.theme, "Drops");
+    heading(ui, ctx.theme, "Drops", |_| {});
     if map.drops.is_empty() {
-        widgets::muted(ui, ctx.theme, "None found. Press D over a bar to mark one.");
+        let key = keymap::command("music-drop")
+            .map(|c| c.hint(ctx.keymap))
+            .unwrap_or_default();
+        none(
+            ui,
+            ctx.theme,
+            "None found",
+            &format!("Press {key} over a bar to mark one"),
+        );
         return;
     }
     egui::Grid::new("music-drops")
@@ -781,18 +931,19 @@ fn drops(ctx: &mut PageCtx<'_>, ui: &mut egui::Ui, map: &MusicMap, edits: &mut V
                     (_, false) => "detected",
                 };
                 ui.label(
-                    RichText::new(format!("bar {}", d.bar))
-                        .color(theme::rgb(ctx.theme.accent))
-                        .strong(),
+                    RichText::new(format!("Bar {}", d.bar))
+                        .font(theme::medium(ui.ctx(), theme::BODY_SIZE))
+                        .color(theme::rgb(ctx.theme.text)),
                 );
                 ui.label(
-                    RichText::new(format!("{} · score {:.2} · {what}", clock(d.t), d.score))
+                    RichText::new(format!("{} · {what}", clock(d.t)))
+                        .font(theme::tabular(ui.ctx(), theme::BODY_SIZE))
                         .color(theme::rgb(ctx.theme.text_muted)),
-                );
+                )
+                .on_hover_text(format!("score {:.2}", d.score));
                 ui.horizontal(|ui| {
-                    if ui
-                        .small_button("play")
-                        .on_hover_text("Play from the bar before")
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    if widgets::icon_btn(ui, ctx.theme, icons::PLAY, "Play from the bar before", "")
                         .clicked()
                     {
                         let t = map.bars.get(d.bar.saturating_sub(2)).map_or(d.t, |b| b.t);
@@ -800,18 +951,18 @@ fn drops(ctx: &mut PageCtx<'_>, ui: &mut egui::Ui, map: &MusicMap, edits: &mut V
                         ctx.player.play();
                     }
                     if i > 0
-                        && ui
-                            .small_button("main")
-                            .on_hover_text("Build edits around this drop")
-                            .clicked()
+                        && widgets::icon_btn(
+                            ui,
+                            ctx.theme,
+                            icons::STAR,
+                            "Make it the main drop: edits build around it",
+                            "",
+                        )
+                        .clicked()
                     {
                         edits.push(Edit::PrimaryDrop(d.bar));
                     }
-                    if ui
-                        .small_button("remove")
-                        .on_hover_text("Not a drop")
-                        .clicked()
-                    {
+                    if widgets::icon_btn(ui, ctx.theme, icons::X, "Not a drop", "").clicked() {
                         edits.push(Edit::ToggleDrop(d.bar));
                     }
                 });
@@ -822,12 +973,13 @@ fn drops(ctx: &mut PageCtx<'_>, ui: &mut egui::Ui, map: &MusicMap, edits: &mut V
 
 /// The song ranges.
 fn ranges(ctx: &mut PageCtx<'_>, ui: &mut egui::Ui, map: &MusicMap, edits: &mut Vec<Edit>) {
-    widgets::title(ui, ctx.theme, "Song ranges");
+    heading(ui, ctx.theme, "Song ranges", |_| {});
     if map.ranges.is_empty() {
-        widgets::muted(
+        none(
             ui,
             ctx.theme,
-            "Select bars, then pick a deliverable to give it its part of the song.",
+            "None yet",
+            "Select bars, then pick a deliverable to give it its part of the song",
         );
         return;
     }
@@ -838,31 +990,36 @@ fn ranges(ctx: &mut PageCtx<'_>, ui: &mut egui::Ui, map: &MusicMap, edits: &mut 
         .show(ui, |ui| {
             for (i, r) in map.ranges.iter().enumerate() {
                 let colour = ctx.theme.series(i, n.max(4));
-                ui.label(RichText::new(&r.name).color(theme::rgb(colour)).strong());
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = theme::SPACE_SM;
+                    widgets::swatch(ui, ctx.theme, colour, egui::vec2(4.0, 16.0));
+                    ui.label(
+                        RichText::new(&r.name)
+                            .font(theme::medium(ui.ctx(), theme::BODY_SIZE))
+                            .color(theme::rgb(ctx.theme.text)),
+                    );
+                });
                 let t0 = map.bars.get(r.from_bar).map_or(0.0, |b| b.t);
                 let secs = map.bar_end(r.to_bar) - t0;
                 let fit = target_seconds(&r.name)
-                    .map(|s| format!(" (target {s} s, {:+.1})", secs - s as f32))
+                    .map(|s| format!(" ({:+.1})", secs - s as f32))
                     .unwrap_or_default();
                 ui.label(
                     RichText::new(format!(
                         "bars {}–{} · {:.1} s{fit}",
                         r.from_bar, r.to_bar, secs
                     ))
+                    .font(theme::tabular(ui.ctx(), theme::BODY_SIZE))
                     .color(theme::rgb(ctx.theme.text_muted)),
                 );
                 ui.horizontal(|ui| {
-                    if ui
-                        .small_button("play")
-                        .on_hover_text("Play the range")
-                        .clicked()
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    if widgets::icon_btn(ui, ctx.theme, icons::PLAY, "Play the range", "").clicked()
                     {
                         view::seek(ctx, map, t0);
                         ctx.player.play();
                     }
-                    if ui
-                        .small_button("remove")
-                        .on_hover_text("Remove the range")
+                    if widgets::icon_btn(ui, ctx.theme, icons::TRASH, "Remove the range", "")
                         .clicked()
                     {
                         edits.push(Edit::RemoveRange(r.name.clone()));
