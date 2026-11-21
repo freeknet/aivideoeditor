@@ -571,6 +571,10 @@ pub const COMMANDS: &[Command] = &[
     ),
     region("tool-select", "Select tool", Scope::Timeline, key(Key::V)),
     region("tool-slip", "Slip tool", Scope::Timeline, key(Key::T)),
+    // Z and H are the zoom and hand tools in Premiere (Selects' default)
+    // and Final Cut alike, so no preset differs.
+    region("tool-zoom", "Zoom tool", Scope::Timeline, key(Key::Z)),
+    region("tool-hand", "Hand tool", Scope::Timeline, key(Key::H)),
     region(
         "zoom-fit",
         "Fit the timeline",
@@ -1031,6 +1035,23 @@ mod tests {
     }
 
     #[test]
+    fn no_two_timeline_commands_share_a_chord_in_any_preset() {
+        for preset in Preset::ALL {
+            let mut seen = HashSet::new();
+            for command in COMMANDS.iter().filter(|c| c.scope == Scope::Timeline) {
+                if let Keys::Chord(chord) = command.keys(preset) {
+                    assert!(
+                        seen.insert(format_chord(chord)),
+                        "{} reuses {} under {preset:?}",
+                        command.id,
+                        format_chord(chord)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn a_global_chord_never_shadows_a_region_chord() {
         for preset in Preset::ALL {
             let global: HashSet<String> = COMMANDS
@@ -1205,6 +1226,10 @@ mod tests {
             "music-zoom-out",
             "music-deselect",
             "deliver-render",
+            "tool-select",
+            "tool-slip",
+            "tool-zoom",
+            "tool-hand",
         ] {
             for preset in Preset::ALL {
                 assert!(

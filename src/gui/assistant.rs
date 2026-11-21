@@ -33,6 +33,7 @@
 //! | [`store`] | chat logs, plan versions, preferences |
 //! | [`complete`] | the `@` autocomplete and chip/token merging |
 //! | [`look`] | the chat's own drawing pieces (activity rows, the mode switch) |
+//! | [`cards`] | the first-cut settings card, step approvals and their progress |
 //! | [`markdown`] | the bold/bullet text the model writes |
 //! | [`chats`] | the chat list, tabs, rename / archive / delete |
 //! | [`find`] | find in chat: matches, the counter, highlighting |
@@ -49,6 +50,7 @@
 //! earlier prompts, references included.
 
 mod agent;
+mod cards;
 mod chats;
 mod claude_code;
 mod complete;
@@ -303,6 +305,14 @@ pub(crate) struct State {
     recall: Option<usize>,
     /// Whether the Chats list is open (it then holds the rename field).
     list_open: bool,
+    /// The "Here's our plan" card, while open.
+    first_cut: Option<cards::FirstCut>,
+    /// The first cut being drafted: its job, plan name and settings.
+    drafting: Option<(u64, String, cards::FirstCut)>,
+    /// Slow steps the agent asked for, waiting for the person.
+    approvals: Vec<cards::Approval>,
+    /// Steps the chat started, followed until they end.
+    running: Vec<cards::Running>,
 }
 
 /// Contact-sheet textures by file (`None`: unreadable).
@@ -351,6 +361,8 @@ pub(crate) fn panel(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
     };
     sync_chat(ctx, state);
     poll(ctx, state, ui.ctx());
+    tend_approvals(ctx, state);
+    follow_jobs(ctx, state);
     send_queued(ctx, state, ui.ctx());
     chats::keys(ctx, state, ui);
 
@@ -515,7 +527,247 @@ fn sync_chat(ctx: &PageCtx<'_>, state: &mut State) {
         state.tabs.push(meta.id.clone());
     }
     state.chat = pick.map(|meta| open_chat(&project.work, meta));
+    reopened(state);
+}
+
+/// After another conversation opened: drop the old one's cards and read
+/// back any step request still waiting for an answer.
+fn reopened(state: &mut State) {
     state.cards.clear();
+    state.first_cut = None;
+    state.approvals = state
+        .chat
+        .as_ref()
+        .map(|c| {
+            model::unanswered(&model::messages(&c.log))
+                .into_iter()
+                .filter(|(_, name, _)| name == crate::mcp::RUN_STEP)
+                .filter_map(|(id, _, input)| {
+                    cards::Step::from_input(&input).map(|step| cards::Approval {
+                        id,
+                        step,
+                        estimate: None,
+                        restored: true,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+}
+
+/// Adds a notice line to the conversation.
+fn note(state: &mut State, text: String, error: bool) {
+    if let Some(chat) = state.chat.as_mut()
+        && let Some(e) = chat.push(LogLine::Notice { text, error })
+    {
+        state.error = Some(e);
+    }
+}
+
+/// A tool call that needs the person before anything happens: a slow step
+/// to approve, or a first cut asked for without settings.
+fn intercept(
+    ctx: &PageCtx<'_>,
+    state: &mut State,
+    id: &str,
+    name: &str,
+    input: &serde_json::Value,
+) {
+    if name == crate::mcp::RUN_STEP {
+        if let Some(step) = cards::Step::from_input(input)
+            && !state.approvals.iter().any(|a| a.id == id)
+        {
+            state.approvals.push(cards::Approval {
+                id: id.to_owned(),
+                step,
+                estimate: None,
+                restored: false,
+            });
+        }
+    } else if name == "plan_draft"
+        && input.get("seconds").is_none()
+        && input.get("aspect").is_none()
+        && ctx
+            .project
+            .as_ref()
+            .is_some_and(|p| p.index.is_some() && p.music.is_some())
+    {
+        state.first_cut = Some(cards::FirstCut::new(
+            ctx.selection,
+            Some(id.to_owned()),
+            input,
+        ));
+    }
+}
+
+/// Estimates the waiting steps once each, and starts them at once when the
+/// person lets the assistant act by itself.
+fn tend_approvals(ctx: &mut PageCtx<'_>, state: &mut State) {
+    let Some(project) = ctx.project.as_ref() else {
+        return;
+    };
+    for a in state.approvals.iter_mut().filter(|a| a.estimate.is_none()) {
+        a.estimate = Some(a.step.estimate(project));
+    }
+    if allow_commit(ctx) {
+        let auto: Vec<String> = state
+            .approvals
+            .iter()
+            .filter(|a| !a.restored && matches!(a.estimate, Some(Ok(_))))
+            .map(|a| a.id.clone())
+            .collect();
+        for id in auto {
+            decide(ctx, state, &id, cards::Choice::Go, true);
+        }
+    }
+}
+
+/// Approves or cancels step request `id`.
+fn decide(ctx: &mut PageCtx<'_>, state: &mut State, id: &str, choice: cards::Choice, auto: bool) {
+    let Some(pos) = state.approvals.iter().position(|a| a.id == id) else {
+        return;
+    };
+    let a = state.approvals.remove(pos);
+    let what = a.step.what();
+    let (text, error) = match choice {
+        cards::Choice::Cancel => (format!("Not started: {what}."), false),
+        cards::Choice::Go => {
+            let job = ctx
+                .project
+                .as_ref()
+                .ok_or_else(|| "no night is open".to_owned())
+                .and_then(|p| a.step.job(p));
+            match job {
+                Ok((label, cmd)) => {
+                    let job = ctx.jobs.spawn(label, cmd);
+                    state.running.push(cards::Running {
+                        job,
+                        step: a.step.clone(),
+                        auto,
+                    });
+                    let about = match &a.estimate {
+                        Some(Ok(e)) => {
+                            format!(", about {}", crate::project::duration_text(e.secs))
+                        }
+                        Some(Err(_)) | None => String::new(),
+                    };
+                    let how = if auto { "Auto-approved" } else { "Approved" };
+                    (format!("{how}: {what}{about}."), false)
+                }
+                Err(e) => (format!("Could not start {what}: {e}"), true),
+            }
+        }
+    };
+    note(state, text, error);
+}
+
+/// Follows the jobs the chat started: a line when each ends, and for a
+/// first cut, its rules written and the agent's part put in the composer.
+fn follow_jobs(ctx: &mut PageCtx<'_>, state: &mut State) {
+    use crate::jobs::Status as Job;
+    let mut notes = Vec::new();
+    state.running.retain(|r| {
+        let Some(job) = ctx.jobs.get(r.job) else {
+            return false;
+        };
+        let what = r.step.what();
+        let took = crate::project::duration_text(job.took.unwrap_or_default());
+        match &job.status {
+            Job::Running => return true,
+            Job::Done => notes.push((
+                format!("{} finished in {took}.", cards::capitalised(&what)),
+                false,
+            )),
+            Job::Failed(_) if job.cancelled() => {
+                notes.push((format!("Stopped: {what}. What finished is kept."), false));
+            }
+            Job::Failed(e) => {
+                notes.push((format!("{} failed: {e}", cards::capitalised(&what)), true))
+            }
+        }
+        false
+    });
+    for (text, error) in notes {
+        note(state, text, error);
+    }
+    let Some((job, name, card)) = state.drafting.clone() else {
+        return;
+    };
+    let status = ctx.jobs.get(job).map(|j| j.status.clone());
+    match status {
+        Some(Job::Running) => {}
+        Some(Job::Done) => {
+            state.drafting = None;
+            let Some(project) = ctx.project.as_mut() else {
+                return;
+            };
+            let path = project.work.join("plans").join(format!("{name}.toml"));
+            let rules = Plan::load(&path).and_then(|mut plan| {
+                let before = plan.rules.clone();
+                card.apply_rules(&mut plan.rules);
+                if plan.rules != before {
+                    plan.save(&path)?;
+                }
+                Ok(())
+            });
+            project.reload_plans();
+            match rules {
+                Ok(()) => note(state, format!("Drafted {name}: {}.", card.summary()), false),
+                Err(e) => note(
+                    state,
+                    format!("Drafted {name}, but its rules could not be set: {e:#}"),
+                    true,
+                ),
+            }
+            if let Some(message) = card.follow_up(&name) {
+                if !state.input.trim().is_empty() {
+                    state.input.push_str("\n\n");
+                }
+                state.input.push_str(&message);
+            }
+        }
+        Some(Job::Failed(e)) => {
+            state.drafting = None;
+            note(state, format!("Drafting {name} failed: {e}"), true);
+        }
+        None => state.drafting = None,
+    }
+}
+
+/// Continue on the first-cut card: the plan page's draft job for these
+/// settings.
+fn start_first_cut(ctx: &mut PageCtx<'_>, state: &mut State) {
+    let Some(card) = state.first_cut.as_mut() else {
+        return;
+    };
+    let Some(project) = ctx.project.as_ref() else {
+        return;
+    };
+    if project.index.is_none() || project.music.is_none() {
+        card.error = Some("Index the footage and map the music first.".to_owned());
+        return;
+    }
+    if state.drafting.is_some() {
+        card.error = Some("A first cut is being drafted already.".to_owned());
+        return;
+    }
+    let taken: Vec<String> = project
+        .plans
+        .iter()
+        .filter_map(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
+        .collect();
+    let name = card.name(&taken);
+    let (label, cmd) =
+        crate::gui::pages::plan::draft_job(project, &name, card.aspect, card.seconds());
+    let job = ctx.jobs.spawn(label, cmd);
+    let card = card.clone();
+    state.first_cut = None;
+    note(
+        state,
+        format!("Drafting {name}: {}\u{2026}", card.summary()),
+        false,
+    );
+    state.drafting = Some((job, name, card));
 }
 
 /// Loads chat `meta`'s conversation.
@@ -590,88 +842,98 @@ fn poll(ctx: &mut PageCtx<'_>, state: &mut State, egui_ctx: &egui::Context) {
     let mut done = false;
     let mut proposals = Vec::new();
     let mut committed = Vec::new();
+    let mut calls: Vec<(String, String, serde_json::Value)> = Vec::new();
     while let Ok(event) = turn.rx.try_recv() {
         let Some(chat) = state.chat.as_mut() else {
             break;
         };
-        let err = match event {
-            Event::Delta(Delta::Text(t)) => {
-                turn.text.push_str(&t);
-                None
-            }
-            Event::Delta(Delta::Thinking(t)) => {
-                turn.thinking.push_str(&t);
-                None
-            }
-            Event::Delta(Delta::Tool(name)) => {
-                // The in-process loop announces bare names; Claude Code
-                // sends a described label.
-                turn.tools.push(if name.contains(' ') {
-                    name
-                } else {
-                    tools::describe(&name, &serde_json::Value::Null, true)
-                });
-                None
-            }
-            Event::Msg(msg) => {
-                turn.text.clear();
-                turn.thinking.clear();
-                turn.tools.clear();
-                chat.push(LogLine::Msg { msg })
-            }
-            Event::Proposal(p) => {
-                proposals.push(p.id.clone());
-                chat.push(LogLine::Proposal { proposal: p })
-            }
-            Event::Committed { id, version } => {
-                committed.push((id, version));
-                None
-            }
-            Event::Image {
-                tool_use_id,
-                mime,
-                data,
-            } => save_image(chat, &tool_use_id, &mime, &data),
-            Event::Ask {
-                id,
-                question,
-                options,
-                held,
-            } => {
-                chat.ask = Some(Ask {
+        let err =
+            match event {
+                Event::Delta(Delta::Text(t)) => {
+                    turn.text.push_str(&t);
+                    None
+                }
+                Event::Delta(Delta::Thinking(t)) => {
+                    turn.thinking.push_str(&t);
+                    None
+                }
+                Event::Delta(Delta::Tool(name)) => {
+                    // The in-process loop announces bare names; Claude Code
+                    // sends a described label.
+                    turn.tools.push(if name.contains(' ') {
+                        name
+                    } else {
+                        tools::describe(&name, &serde_json::Value::Null, true)
+                    });
+                    None
+                }
+                Event::Msg(msg) => {
+                    turn.text.clear();
+                    turn.thinking.clear();
+                    turn.tools.clear();
+                    if msg.role == Role::Assistant {
+                        calls.extend(msg.tool_uses().map(|(id, name, input)| {
+                            (id.to_owned(), name.to_owned(), input.clone())
+                        }));
+                    }
+                    chat.push(LogLine::Msg { msg })
+                }
+                Event::Proposal(p) => {
+                    proposals.push(p.id.clone());
+                    chat.push(LogLine::Proposal { proposal: p })
+                }
+                Event::Committed { id, version } => {
+                    committed.push((id, version));
+                    None
+                }
+                Event::Image {
+                    tool_use_id,
+                    mime,
+                    data,
+                } => save_image(chat, &tool_use_id, &mime, &data),
+                Event::Ask {
                     id,
                     question,
                     options,
                     held,
-                });
-                None
-            }
-            Event::Notice { text, error } => chat.push(LogLine::Notice { text, error }),
-            Event::Done {
-                secs,
-                model,
-                usage,
-                cost,
-            } => {
-                done = true;
-                chat.push(LogLine::Turn {
+                } => {
+                    chat.ask = Some(Ask {
+                        id,
+                        question,
+                        options,
+                        held,
+                    });
+                    None
+                }
+                Event::Notice { text, error } => chat.push(LogLine::Notice { text, error }),
+                Event::Done {
                     secs,
                     model,
-                    input_tokens: usage.input,
-                    output_tokens: usage.output,
-                    cached_tokens: usage.cached,
-                    cost_usd: cost,
-                    context_tokens: usage.context,
-                    context_window: usage.window,
-                })
-            }
-        };
+                    usage,
+                    cost,
+                } => {
+                    done = true;
+                    chat.push(LogLine::Turn {
+                        secs,
+                        model,
+                        input_tokens: usage.input,
+                        output_tokens: usage.output,
+                        cached_tokens: usage.cached,
+                        cost_usd: cost,
+                        context_tokens: usage.context,
+                        context_window: usage.window,
+                    })
+                }
+            };
         if err.is_some() {
             state.error = err;
         }
         if done {
             break;
         }
+    }
+    for (id, name, input) in calls {
+        intercept(ctx, state, &id, &name, &input);
     }
     for (id, version) in committed {
         let ops = state
@@ -1147,6 +1409,12 @@ fn composer(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
     let mut send: Option<String> = None;
     let id = ui.make_persistent_id("assistant_input");
 
+    if state.mode == Mode::Chat
+        && let Some(a) = state.approvals.first().cloned()
+        && let Some(choice) = cards::approval(ui, theme, &a)
+    {
+        decide(ctx, state, &a.id, choice, false);
+    }
     if state.mode == Mode::Chat
         && let Some(ask) = state.chat.as_ref().and_then(|c| c.ask.clone())
         && !busy
@@ -2785,6 +3053,10 @@ fn conversation(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
         .filter(|_| state.turn.is_none())
         .map(|a| a.id.clone());
     let mut hits = find::Hits::of(state.find.as_ref(), theme);
+    let running = state.running.clone();
+    let mut stop: Vec<u64> = Vec::new();
+    let mut first_cut = false;
+    let mut card_choice: Option<cards::Choice> = None;
 
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -2800,8 +3072,12 @@ fn conversation(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.spacing_mut().item_spacing.y = 2.0;
-                    if log.is_empty() && state.turn.is_none() {
-                        empty_state(ctx, state, ui, &mut send);
+                    if log.is_empty()
+                        && state.turn.is_none()
+                        && running.is_empty()
+                        && state.first_cut.is_none()
+                    {
+                        empty_state(ctx, state, ui, &mut send, &mut first_cut);
                     }
                     for (i, line) in log.iter().enumerate() {
                         match line {
@@ -2964,6 +3240,17 @@ fn conversation(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                             | LogLine::Image { .. } => {}
                         }
                     }
+                    for r in &running {
+                        if let Some(job) = ctx.jobs.get(r.job)
+                            && cards::progress(ui, theme, r, job)
+                        {
+                            stop.push(r.job);
+                        }
+                    }
+                    if let Some(card) = state.first_cut.as_mut() {
+                        ui.add_space(SPACE_MD);
+                        card_choice = cards::first_cut(ui, theme, card, ctx.selection);
+                    }
                     if let Some(turn) = &state.turn {
                         let elapsed = Some(duration(turn.started.elapsed().as_secs_f32()));
                         ui.add_space(SPACE_SM);
@@ -3038,6 +3325,30 @@ fn conversation(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
     }
     if let Some(r) = open {
         open_link(ctx, state, &r);
+    }
+    for job in stop {
+        let _ = ctx.jobs.cancel(job);
+    }
+    if first_cut {
+        state.first_cut = Some(cards::FirstCut::new(
+            ctx.selection,
+            None,
+            &serde_json::Value::Null,
+        ));
+    }
+    match card_choice {
+        Some(cards::Choice::Go) => start_first_cut(ctx, state),
+        Some(cards::Choice::Cancel) => {
+            let asked = state.first_cut.take().is_some_and(|c| c.tool.is_some());
+            if asked {
+                note(
+                    state,
+                    "First cut cancelled: nothing was drafted.".to_owned(),
+                    false,
+                );
+            }
+        }
+        None => {}
     }
 }
 
@@ -3229,7 +3540,13 @@ fn kilo(n: u64) -> String {
 
 /// What an empty conversation shows, as Selects' chat: one centred 14 px
 /// muted line, then quick actions as outline pills that send a prompt.
-fn empty_state(ctx: &PageCtx<'_>, state: &State, ui: &mut Ui, send: &mut Option<String>) {
+fn empty_state(
+    ctx: &PageCtx<'_>,
+    state: &State,
+    ui: &mut Ui,
+    send: &mut Option<String>,
+    first_cut: &mut bool,
+) {
     let theme = ctx.theme;
     let plan = state.chat.as_ref().map_or("this plan", |c| c.plan.as_str());
     let line = format!(
@@ -3263,6 +3580,16 @@ fn empty_state(ctx: &PageCtx<'_>, state: &State, ui: &mut Ui, send: &mut Option<
         )
         .on_hover_text("Select shots and press R, or type @, to point at them.");
     child.add_space(SPACE_SM);
+    if widgets::tip(
+        look::suggestion(&mut child, theme, "Suggest a first cut"),
+        theme,
+        "Pick the length, aspect, pacing and rules, then draft a new plan",
+        "",
+    )
+    .clicked()
+    {
+        *first_cut = true;
+    }
     for (label, prompt) in [
         (
             "Fix what the check flags",
@@ -4364,6 +4691,13 @@ mod tests {
             .state_mut()
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("no app"))?;
+        // The local model needs no key or installed CLI, so Send's state
+        // does not depend on the machine (CI has no `claude`, no API key).
+        app.pages
+            .assistant
+            .prefs
+            .get_or_insert_with(super::store::Prefs::default)
+            .model = Some("local".into());
         app.pages.assistant.input = "and @shot:reel-a#2 too".into();
         h.run_steps(3);
         let send = h
@@ -4433,6 +4767,114 @@ mod tests {
         Ok(())
     }
 
+    /// Appends `lines` to `reel-a`'s conversation.
+    fn write_log(work: &std::path::Path, lines: Vec<LogLine>) -> anyhow::Result<()> {
+        let path = super::store::chat_path(work, "reel-a");
+        for line in &lines {
+            super::store::append(&path, line)?;
+        }
+        Ok(())
+    }
+
+    /// A conversation in which the agent staged an edit of `reel-a` (shot 2
+    /// moved to the front, with a note), proposed on the plan as it is on
+    /// disk, with that file's version, as `plan_edit` stages it.
+    fn staged_edit(work: &std::path::Path) -> anyhow::Result<()> {
+        use super::ops::EditOp;
+        let path = work.join("plans").join("reel-a.toml");
+        let ops = vec![
+            EditOp::MoveShot { from: 2, to: 1 },
+            EditOp::SetNote {
+                index: 1,
+                note: "B opens: the brighter, closer shot".into(),
+            },
+        ];
+        let input =
+            serde_json::json!({"name": "reel-a", "reason": "Open on B", "ops": ops.clone()});
+        write_log(
+            work,
+            vec![
+                LogLine::Msg {
+                    msg: Msg::new(
+                        Role::User,
+                        vec![Block::Text {
+                            text: "Open on the stronger shot".into(),
+                        }],
+                    ),
+                },
+                LogLine::Msg {
+                    msg: Msg::new(
+                        Role::Assistant,
+                        vec![
+                            Block::Text {
+                                text: "B is the stronger opener; staged it.".into(),
+                            },
+                            Block::ToolUse {
+                                id: "p1".into(),
+                                name: super::tools::EDIT.into(),
+                                input,
+                            },
+                        ],
+                    ),
+                },
+                LogLine::Proposal {
+                    proposal: Box::new(super::model::Proposal {
+                        id: "p1".into(),
+                        plan: "reel-a".into(),
+                        summary: "Open on B, the stronger shot".into(),
+                        ops,
+                        base: crate::plan::Plan::load(&path)?,
+                        base_version: crate::mcp::plan_version(&path)?,
+                        ts: super::model::now(),
+                    }),
+                },
+            ],
+        )
+    }
+
+    /// Whether some widget or text shows `text`.
+    fn shows(h: &egui_kittest::Harness<'_, Option<crate::gui::app::App>>, text: &str) -> bool {
+        h.query_all_by_label_contains(text).next().is_some()
+    }
+
+    #[test]
+    fn a_staged_edit_is_a_card_whose_apply_saves_a_version() -> anyhow::Result<()> {
+        let (_dir, work) = night(false)?;
+        staged_edit(&work)?;
+        let mut h = harness(work.clone());
+        for label in ["Apply", "Preview", "Discard"] {
+            assert!(
+                h.query_all_by_label(label).next().is_some(),
+                "the proposal card offers {label}"
+            );
+        }
+        assert!(
+            shows(&h, "Open on B, the stronger shot"),
+            "the card's title is the reason"
+        );
+        h.query_all_by_label("Apply")
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("no Apply button"))?
+            .click();
+        h.run_steps(4);
+        let plan = crate::plan::Plan::load(&work.join("plans").join("reel-a.toml"))?;
+        assert_eq!(
+            plan.shots.first().map(|s| s.clip.as_str()),
+            Some("B"),
+            "Apply wrote the edited plan"
+        );
+        assert!(
+            !super::store::versions(&work, "reel-a").is_empty(),
+            "as a plan version"
+        );
+        assert!(shows(&h, "Applied as v"), "the card says it was applied");
+        assert!(
+            h.query_all_by_label("Apply").next().is_none(),
+            "and offers Apply no more"
+        );
+        Ok(())
+    }
+
     #[test]
     fn new_chat_then_rename_and_archive_from_the_list() -> anyhow::Result<()> {
         let (_dir, work) = night(true)?;
@@ -4492,6 +4934,55 @@ mod tests {
         assert!(
             h.query_by_label("Archived chats (1)").is_some(),
             "the list offers the archived chats"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn the_first_cut_card_opens_from_the_quick_action_and_cancel_closes_it() -> anyhow::Result<()> {
+        let (_dir, work) = night(false)?;
+        let mut h = harness(work);
+        h.query_by_label("Suggest a first cut")
+            .ok_or_else(|| anyhow::anyhow!("no first-cut quick action"))?
+            .click();
+        h.run_steps(3);
+        for label in [
+            "Here's our plan",
+            "15 s",
+            "30 s",
+            "60 s",
+            "Custom",
+            "9:16",
+            "4:5",
+            "16:9",
+            "Calm",
+            "On the beat",
+            "Bursts",
+            "No repeated shots",
+            "People spacing",
+            "Drop on the hero",
+            "Continue",
+        ] {
+            assert!(
+                h.query_all_by_label(label).next().is_some(),
+                "the first-cut card shows {label:?}"
+            );
+        }
+        h.query_by_label("Continue")
+            .ok_or_else(|| anyhow::anyhow!("no Continue"))?
+            .click();
+        h.run_steps(3);
+        assert!(
+            shows(&h, "Index the footage and map the music first"),
+            "an unindexed night cannot be drafted, and the card says why"
+        );
+        h.query_by_label("Close the first-cut card")
+            .ok_or_else(|| anyhow::anyhow!("no close button"))?
+            .click();
+        h.run_steps(3);
+        assert!(
+            h.query_by_label("Here's our plan").is_none(),
+            "closing dismisses the card"
         );
         Ok(())
     }
@@ -4612,6 +5103,72 @@ mod tests {
         h.key_press(egui::Key::ArrowDown);
         h.run_steps(3);
         assert!(panel(&mut h)?.input.is_empty(), "Down walks back to empty");
+        Ok(())
+    }
+
+    #[test]
+    fn a_step_the_agent_asks_for_waits_for_approval_then_runs_as_a_job() -> anyhow::Result<()> {
+        let (_dir, work) = night(false)?;
+        let call = |id: &str, input: serde_json::Value| Block::ToolUse {
+            id: id.into(),
+            name: crate::mcp::RUN_STEP.into(),
+            input,
+        };
+        write_log(
+            &work,
+            vec![LogLine::Msg {
+                msg: Msg::new(
+                    Role::Assistant,
+                    vec![
+                        call("s1", serde_json::json!({"step": "caption"})),
+                        call(
+                            "s2",
+                            serde_json::json!({"step": "render", "plan": "reel-a"}),
+                        ),
+                    ],
+                ),
+            }],
+        )?;
+        let mut h = harness(work);
+        assert!(shows(&h, "Allow this?"), "the request asks first");
+        assert!(
+            shows(&h, "Caption the shot log"),
+            "and says what it will do"
+        );
+        h.query_all_by_label("Cancel")
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("no Cancel"))?
+            .click();
+        h.run_steps(3);
+        assert!(
+            shows(&h, "Not started: caption the shot log"),
+            "Cancel starts nothing and says so"
+        );
+        assert!(
+            shows(&h, "Render reel-a"),
+            "the next request comes up, with its estimate"
+        );
+        h.query_by_label("Approve")
+            .ok_or_else(|| anyhow::anyhow!("no Approve"))?
+            .click();
+        h.run_steps(3);
+        assert!(
+            shows(&h, "Approved: render reel-a"),
+            "Approve starts the job and says so"
+        );
+        // The night has no index, so the render fails at once; the chat
+        // follows the job to its end.
+        let mut ended = false;
+        for _ in 0..50 {
+            h.run_steps(2);
+            if shows(&h, "Render reel-a failed") {
+                ended = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(ended, "the job's end lands in the chat");
+        assert!(!shows(&h, "Allow this?"), "no request is left waiting");
         Ok(())
     }
 }

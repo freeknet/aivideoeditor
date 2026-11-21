@@ -15,7 +15,7 @@
 //! history can be resent append-only (which keeps the prompt cache warm and
 //! the model's earlier reasoning valid).
 //!
-//! The chat log (`<work>/chat/<plan>.jsonl`) is a list of [`LogLine`]s: the
+//! A chat log (`<work>/chat/chats/<id>.jsonl`) is a list of [`LogLine`]s: the
 //! messages, the proposals the model made, what became of each, and the
 //! timing of every turn. Reading it back rebuilds the panel exactly.
 

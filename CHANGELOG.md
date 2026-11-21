@@ -12,6 +12,25 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- A Shot list tab in the inspector, Selects' Transcript for a cut: the open plan's shots
+  in timeline order under their song sections, each with its number, time (MM:SS.s),
+  bar, source segment, caption line, the plan's note and a quiet icon for its
+  `plan::check` problems. Clicking a row selects the shot and seeks the viewer to it,
+  the row under the playhead carries a lime marker while the plan plays, Up / Down walk
+  the rows, Enter plays from one, Delete lifts it through the timeline's undoable lift,
+  `R` and the right-click menu mention it in chat.
+- Chat cards for new plans and slow steps. "Suggest a first cut" (or the agent calling
+  `plan_draft` with no length or aspect, which now answers `SETTINGS_NEEDED`) shows a
+  "Here's our plan" card: length 15/30/60/custom, aspect, pacing, a hero shot from the
+  selection and switches for no repeated shots, people spacing and drop on the hero.
+  Continue starts the same `ave plan` job as the plan page's "Draft new…" window, writes
+  the switches into the plan's rules and puts what needs judgment (pacing, the hero) in
+  the composer for the agent. A new `run_step` tool (index, caption, render) never runs
+  anything itself: the chat shows "Allow this?" with the step's estimated time from the
+  night's measured speeds, and Approve starts the job with a live progress row (percent,
+  time left, Stop); with "Let it apply edits" on, steps start at once, labelled
+  auto-approved. The proposal card is now covered by a headless test (Apply writes a plan
+  version) and the screenshot example shoots all three cards.
 - A design system matched to Selects' dark workspace (`docs/DESIGN.md`): its exact
   tokens (neutral surfaces, white-10 % hairlines, ink overlays, neutral selection,
   lime key, 6/8/10/12/14 px radii, 4 px grid, 10/11/12/14 px type), the Mona Sans
@@ -244,6 +263,17 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- The timeline's A1 waveform no longer shows red "clipped" marks along a loud but
+  mastered track. The music is now decoded at its own rate and channels (ffmpeg's
+  stereo-to-mono downmix summed past full scale, and resampling rang over it), and a
+  column is marked only where a channel holds three consecutive samples at 0.999 of
+  full scale or more. Bars are 1.5 px on a 2 px pitch at 55 % white, so a loud master
+  reads as a shape rather than a white wall.
+- Short V1 clips no longer show cut-off names ("4 M", "15 I"): a clip draws its name
+  only when it is at least the text's width plus 12 px, else just the shot number if
+  that fits, else nothing, and the text never runs past the clip.
+- The timeline's Zoom and Hand tools have shortcuts, Z and H (the same in Premiere
+  and Final Cut), listed on the shortcut sheet and shown in the tool island tooltips.
 - Symbols (▾ ✕ ▶ …) draw on Linux and macOS: the symbol-font fallback now looks
   in the per-family folders (`/usr/share/fonts/truetype/dejavu`, `…/noto`,
   `/System/Library/Fonts`) and loads every fallback it finds, not just the first.
