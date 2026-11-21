@@ -166,6 +166,15 @@ pub(crate) fn describe(name: &str, input: &Value, live: bool) -> String {
             s("pattern").to_owned(),
         ),
         ASK => ("Asking", "Asked", s("question").to_owned()),
+        mcp::RUN_STEP => (
+            "Asking to start a step",
+            "Asked to start a step",
+            [s("step"), s("plan")]
+                .into_iter()
+                .filter(|x| !x.is_empty())
+                .collect::<Vec<_>>()
+                .join(" "),
+        ),
         other => {
             return format!("{} {other}", if live { "Calling" } else { "Called" });
         }

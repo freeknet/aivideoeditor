@@ -3,8 +3,8 @@
 // Description:  Renders every page, view mode and overlay of the app headlessly
 //               to PNG files, for the README and for reviewing a visual change.
 //
-// Dependencies: egui, egui_kittest (headless harness + wgpu renderer), anyhow;
-//               aivideoeditor::gui::app
+// Dependencies: egui, egui_kittest (headless harness + wgpu renderer), anyhow,
+//               serde_json, toml (the chat fixtures); aivideoeditor::gui::app
 // ============================================================================
 
 //! `cargo run --example screenshot [-- <out dir>]`
@@ -18,13 +18,112 @@
 //! With a night open it also shoots the timeline's A/B compare
 //! (`plan-compare.png`): it opens the tab strip's "Compare" menu and picks
 //! the first other plan, or else the latest earlier version.
+//!
+//! And the chat's cards: a staged edit (`chat-proposal.png`), a slow step
+//! waiting for approval (`chat-approval.png`) and the first-cut settings
+//! card (`chat-first-cut.png`). The first two need a conversation: for each
+//! plan without one, the example writes a short fixture conversation into
+//! the night's `chat/` folder and removes it after the shot, so point it at
+//! a copy of a night, not the original.
+
+use std::path::{Path, PathBuf};
 
 use aivideoeditor::gui::app::{Action, App, Page};
 use aivideoeditor::gui::ui::layout::ViewMode;
 use egui_kittest::kittest::Queryable;
+use serde_json::{Value, json};
 
 /// The shot that opens the timeline's compare view.
 const COMPARE: &str = "plan-compare";
+
+/// The shot of a staged edit's card.
+const PROPOSAL: &str = "chat-proposal";
+
+/// The shot of a step waiting for approval.
+const APPROVAL: &str = "chat-approval";
+
+/// The shot of the first-cut settings card.
+const FIRST_CUT: &str = "chat-first-cut";
+
+/// Fixture conversations written for one shot; removed when dropped.
+struct Fixtures(Vec<PathBuf>);
+
+impl Drop for Fixtures {
+    fn drop(&mut self) {
+        for path in &self.0 {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+/// A chat-log line holding one message.
+fn message(role: &str, blocks: Value) -> Value {
+    json!({"kind": "msg", "msg": {"role": role, "blocks": blocks, "ts": 0}})
+}
+
+/// Writes the conversation `shot` needs for every plan of `work` that has
+/// none yet.
+fn fixtures(work: &Path, shot: &str) -> anyhow::Result<Fixtures> {
+    let mut written = Fixtures(Vec::new());
+    let chat = work.join("chat");
+    std::fs::create_dir_all(&chat)?;
+    for entry in std::fs::read_dir(work.join("plans"))? {
+        let path = entry?.path();
+        if path.extension().is_none_or(|e| e != "toml") {
+            continue;
+        }
+        let Some(stem) = path.file_stem().map(|s| s.to_string_lossy().into_owned()) else {
+            continue;
+        };
+        let log = chat.join(format!("{stem}.jsonl"));
+        if log.exists() {
+            continue;
+        }
+        let lines = match shot {
+            PROPOSAL => {
+                let base: Value = toml::from_str(&std::fs::read_to_string(&path)?)?;
+                let ops = json!([
+                    {"op": "move_shot", "from": 2, "to": 1},
+                    {"op": "set_note", "index": 1, "note": "opens on the brighter, closer shot"}
+                ]);
+                vec![
+                    message(
+                        "user",
+                        json!([{"type": "text", "text": "Open on a stronger shot"}]),
+                    ),
+                    message(
+                        "assistant",
+                        json!([
+                            {"type": "text", "text": "Shot 2 is the stronger opener, so I moved it to the front."},
+                            {"type": "tool_use", "id": "fixture-edit", "name": "plan_edit",
+                             "input": {"name": stem, "reason": "Open on shot 2", "ops": ops}}
+                        ]),
+                    ),
+                    json!({"kind": "proposal", "proposal": {
+                        "id": "fixture-edit", "plan": stem,
+                        "summary": "Open on the stronger shot 2", "ops": ops,
+                        "base": base, "base_version": "", "ts": 0}}),
+                ]
+            }
+            APPROVAL => vec![
+                message("user", json!([{"type": "text", "text": "Render it"}])),
+                message(
+                    "assistant",
+                    json!([
+                        {"type": "text", "text": "The check passes; rendering needs your go-ahead."},
+                        {"type": "tool_use", "id": "fixture-step", "name": "run_step",
+                         "input": {"step": "render", "plan": stem}}
+                    ]),
+                ),
+            ],
+            _ => continue,
+        };
+        let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+        std::fs::write(&log, text)?;
+        written.0.push(log);
+    }
+    Ok(written)
+}
 
 /// One picture: its name, the actions that set it up, then the keys
 /// pressed once the app is up.
@@ -72,6 +171,9 @@ fn main() -> anyhow::Result<()> {
     }
     if night.is_some() {
         shots.push((COMPARE.to_owned(), vec![Action::Go(Page::Plan)], Vec::new()));
+        for name in [PROPOSAL, APPROVAL, FIRST_CUT] {
+            shots.push((name.to_owned(), vec![Action::Go(Page::Review)], Vec::new()));
+        }
     }
     // The Shots browser's review modes, entered by their keys the way a
     // user would (they need a night: without one the tab is empty).
@@ -92,6 +194,10 @@ fn main() -> anyhow::Result<()> {
         shots.push((name.to_owned(), vec![Action::Go(Page::Review)], keys));
     }
     for (name, actions, keys) in shots {
+        let _fixtures = match &night {
+            Some(work) => Some(fixtures(work, &name)?),
+            None => None,
+        };
         let mut harness = egui_kittest::Harness::builder()
             .with_size(egui::vec2(width, height))
             // Every input must be reachable by name; `run_steps` does not
@@ -130,6 +236,13 @@ fn main() -> anyhow::Result<()> {
         }
         if name == COMPARE {
             open_compare(&mut harness)?;
+        }
+        if name == FIRST_CUT {
+            harness
+                .query_by_label("Suggest a first cut")
+                .ok_or_else(|| anyhow::anyhow!("no first-cut quick action: the chat is not empty"))?
+                .click();
+            harness.run_steps(15);
         }
         let unnamed = harness.unnamed_widgets();
         if !unnamed.is_empty() {
