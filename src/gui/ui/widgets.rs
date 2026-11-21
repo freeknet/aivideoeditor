@@ -882,6 +882,88 @@ pub fn icon_toggle_sized(
     tip(response, theme, label, keys)
 }
 
+/// A ghost dropdown trigger: `label` in 12 px Medium, muted until hovered
+/// (or `open`), and a trailing chevron, 28 px tall, 8 px corners. Hand the
+/// response to `egui::Popup::menu` for its menu. `tooltip` names it.
+pub fn dropdown_button(
+    ui: &mut Ui,
+    theme: &Palette,
+    label: &str,
+    tooltip: &str,
+    open: bool,
+) -> Response {
+    let font = theme::medium(ui.ctx(), theme::BODY_SIZE);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font, Color32::PLACEHOLDER);
+    let width = galley.size().x + icons::SMALL + SPACE_XS + SPACE_SM * 2.0;
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(width, theme::CONTROL_HEIGHT), Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, tooltip));
+    let lift = hover_t(ui, response.id, response.hovered());
+    paint_ghost(ui, theme, rect, open, lift, theme::RADIUS_MD);
+    let ink = if open {
+        theme::rgb(theme.text)
+    } else {
+        blend(theme.text_muted, theme.text, lift)
+    };
+    let text_pos = egui::pos2(
+        rect.left() + SPACE_SM,
+        rect.center().y - galley.size().y / 2.0,
+    );
+    ui.painter().galley(text_pos, galley, ink);
+    let slot = Rect::from_center_size(
+        egui::pos2(
+            rect.right() - SPACE_SM - icons::SMALL / 2.0,
+            rect.center().y,
+        ),
+        Vec2::splat(icons::SMALL),
+    );
+    icons::paint(ui.painter(), slot, icons::CHEVRON_DOWN, icons::SMALL, ink);
+    focus_ring(ui, theme, &response);
+    tip(response, theme, tooltip, "")
+}
+
+/// A borderless toolbar row under a panel header (Selects' Project
+/// toolbar): `height` tall, 2 px between items. `right` is laid out first,
+/// right to left from the far end, so it always fits; `left` then gets
+/// what is left, left to right, clipped short of it. Both sides are handed
+/// `cx`, whatever they both need to change.
+pub fn toolbar_row<C>(
+    ui: &mut Ui,
+    height: f32,
+    cx: &mut C,
+    left: impl FnOnce(&mut Ui, &mut C),
+    right: impl FnOnce(&mut Ui, &mut C),
+) {
+    let width = ui
+        .available_width()
+        .min(ui.clip_rect().right() - ui.cursor().left());
+    let (row, _) = ui.allocate_exact_size(Vec2::new(width.max(0.0), height), Sense::hover());
+    let mut tail = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(row)
+            .layout(Layout::right_to_left(Align::Center)),
+    );
+    tail.spacing_mut().item_spacing.x = 2.0;
+    right(&mut tail, cx);
+    let used = tail.min_rect();
+    let end = if used.width() > 0.0 {
+        used.left() - SPACE_XS
+    } else {
+        row.right()
+    };
+    let head_rect = Rect::from_min_max(row.min, egui::pos2(end.max(row.left()), row.bottom()));
+    let mut head = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(head_rect)
+            .layout(Layout::left_to_right(Align::Center)),
+    );
+    head.set_clip_rect(head_rect.intersect(ui.clip_rect()));
+    head.spacing_mut().item_spacing.x = 2.0;
+    left(&mut head, cx);
+}
+
 /// The glass recipe as a frame, for anything floating over footage:
 /// [`theme::glass_fill`], a white-10 % hairline, 12 px corners, 4 px inset
 /// (Selects' glass island).
