@@ -742,8 +742,10 @@ impl Player {
             .response
     }
 
-    /// Draws the frame into a black stage of `size` and says where the
-    /// output frame landed (for safe-area overlays).
+    /// Draws the frame into a stage of `size`, letterboxed on whatever is
+    /// under it (the panel, as in Selects), and says where the output frame
+    /// landed (for safe-area overlays). A frame still being decoded shows
+    /// as `background`; with nothing loaded nothing is drawn.
     pub(crate) fn show_framed(
         &mut self,
         ui: &mut egui::Ui,
@@ -754,8 +756,6 @@ impl Player {
     ) -> Shown {
         self.tick(ui.ctx());
         let (stage, response) = ui.allocate_exact_size(size, egui::Sense::click());
-        ui.painter()
-            .rect_filled(stage, egui::CornerRadius::same(4), egui::Color32::BLACK);
         let aspect = framing.aspect.max(0.1);
         let mut frame = fit(stage.shrink(2.0), aspect);
         let here = self.here();
@@ -779,7 +779,8 @@ impl Player {
             }
         } else {
             match (&self.source, here) {
-                (Source::Empty, _) | (Source::Clip { .. } | Source::Sequence { .. }, None) => {
+                (Source::Empty, _) => {}
+                (Source::Clip { .. } | Source::Sequence { .. }, None) => {
                     ui.painter()
                         .rect_filled(frame, egui::CornerRadius::ZERO, background);
                 }
@@ -788,13 +789,7 @@ impl Player {
                         .file_name()
                         .map(|n| n.to_string_lossy().into_owned())
                         .unwrap_or_default();
-                    ui.painter().text(
-                        stage.center(),
-                        egui::Align2::CENTER_CENTER,
-                        format!("Music: {name}"),
-                        egui::FontId::proportional(16.0),
-                        egui::Color32::from_gray(170),
-                    );
+                    paint_music(ui, stage, &name);
                 }
                 (Source::Clip { .. } | Source::Sequence { .. }, Some(here)) => {
                     let cx = self.segs.get(here.seg).map_or(0.5, |s| s.cx);
@@ -1003,10 +998,14 @@ impl Player {
         }
     }
 
-    /// Draws the transport row in the current egui style.
+    /// Draws the transport row with a volume menu on its right, in the
+    /// signature palette. Pages with a palette at hand call
+    /// [`transport::bar`] and put their own settings on the right.
     pub(crate) fn transport(&mut self, ui: &mut egui::Ui) {
-        let style = transport::Style::from_visuals(ui.visuals());
-        transport::bar(self, ui, &style);
+        let palette = crate::theme::signature();
+        transport::bar(self, ui, &palette, |ui, player| {
+            transport::volume_menu(ui, &palette, player);
+        });
     }
 }
 
@@ -1081,6 +1080,24 @@ pub(crate) fn fit(outer: egui::Rect, aspect: f32) -> egui::Rect {
         egui::vec2(size.x, size.x / aspect)
     };
     egui::Rect::from_center_size(outer.center(), fit)
+}
+
+/// A music range has no picture: its icon and file name, muted, centred.
+fn paint_music(ui: &egui::Ui, stage: egui::Rect, name: &str) {
+    use crate::gui::ui::{icons, theme};
+    let muted = ui.visuals().weak_text_color();
+    let slot = egui::Rect::from_center_size(
+        stage.center() - egui::vec2(0.0, icons::LARGE),
+        egui::Vec2::splat(icons::LARGE),
+    );
+    icons::paint(ui.painter(), slot, icons::MUSIC, icons::LARGE - 4.0, muted);
+    ui.painter().text(
+        stage.center(),
+        egui::Align2::CENTER_CENTER,
+        name,
+        theme::medium(ui.ctx(), theme::LARGE_SIZE),
+        muted,
+    );
 }
 
 /// Paints `tex` (of pixel size `src`) into `stage` for `framing`, cropped
