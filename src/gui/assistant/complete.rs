@@ -208,20 +208,31 @@ pub(crate) fn merge(chips: &[Reference], text: &str) -> Vec<(Reference, Origin)>
     out
 }
 
-/// `text` without the first token that parses as `reference`.
-pub(crate) fn remove_token(text: &str, reference: &Reference) -> String {
-    let mut removed = false;
-    text.split(' ')
-        .filter(|w| {
-            if !removed && Reference::parse(w).is_some_and(|r| r == *reference) {
-                removed = true;
-                false
-            } else {
-                true
+/// Byte ranges of the reference tokens in `text`, in order: what the
+/// composer and the sent bubble paint in the key colour (Selects shows
+/// mentions as coloured text, not chips).
+pub(crate) fn mention_spans(text: &str) -> Vec<std::ops::Range<usize>> {
+    let mut spans = Vec::new();
+    let mut start = None;
+    for (at, c) in text
+        .char_indices()
+        .chain(std::iter::once((text.len(), ' ')))
+    {
+        match (c.is_whitespace(), start) {
+            (true, Some(from)) => {
+                if text
+                    .get(from..at)
+                    .is_some_and(|word| Reference::parse(word).is_some())
+                {
+                    spans.push(from..at);
+                }
+                start = None;
             }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+            (false, None) => start = Some(at),
+            (true, None) | (false, Some(_)) => {}
+        }
+    }
+    spans
 }
 
 #[cfg(test)]
@@ -289,7 +300,7 @@ mod tests {
     }
 
     #[test]
-    fn inserting_merging_and_removing_tokens() -> anyhow::Result<()> {
+    fn inserting_and_merging_tokens() -> anyhow::Result<()> {
         let (text, cursor) = super::insert("swap >@sho please", 5, 10, ">@shot:reel-30#5");
         assert_eq!(text, "swap >@shot:reel-30#5 please", "replaced");
         assert_eq!(cursor, 22, "cursor after the space");
@@ -305,8 +316,31 @@ mod tests {
         assert_eq!(merged.len(), 2, "duplicate target folded: {merged:?}");
         assert_eq!(merged[0].1, Origin::Chip(0), "chip first");
         assert_eq!(merged[1].1, Origin::Typed, "then typed");
-        let gone = super::remove_token("avoid !@person:white-mask now", &merged[1].0);
-        assert_eq!(gone, "avoid now", "token removed");
+        Ok(())
+    }
+
+    #[test]
+    fn mention_spans_cover_whole_tokens_only() -> anyhow::Result<()> {
+        let text = "swap >@shot:reel-30#5 for\n@person:white-mask, not @nothing";
+        let spans = super::mention_spans(text);
+        let words: Vec<&str> = spans.iter().filter_map(|r| text.get(r.clone())).collect();
+        assert_eq!(
+            words,
+            [">@shot:reel-30#5", "@person:white-mask,"]
+                .iter()
+                .filter(|w| Reference::parse(w).is_some())
+                .copied()
+                .collect::<Vec<_>>(),
+            "every parsable token, prefix included, and nothing else"
+        );
+        assert!(
+            words.first() == Some(&">@shot:reel-30#5"),
+            "the shot token with its intent prefix: {words:?}"
+        );
+        assert!(
+            super::mention_spans("").is_empty() && super::mention_spans("   ").is_empty(),
+            "no text, no spans"
+        );
         Ok(())
     }
 }

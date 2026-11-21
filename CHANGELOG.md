@@ -66,6 +66,16 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   buttons, and a floating tool island (selection, slip, zoom and hand tools). The hint
   line is gone (hints live in tooltips) and the check bar shows Lucide count pills.
   Compare, storyboard and comments use the same tokens.
+- The assistant panel follows Selects' chat: a 40 px header with a Chats menu (the
+  plan picker and New chat), the plan's name and History / settings icon buttons; an
+  empty state of one quiet line and outline-pill quick actions; your messages as an
+  outlined bubble on the right and the assistant's as plain 14 px text, with time and
+  copy on hover; thinking and tool calls as quiet 12 px rows that expand; proposal and
+  question cards with primary and ghost buttons; and one dark composer box holding a
+  Chat / Comments switch, scope pills, the 14 px input with references in lime, and a
+  toolbar of 32 px controls (add, the model picker with permissions, send / stop).
+  Comments mode lists the plan's review comments (click to play from there) and puts
+  the open ones in a message. Lucide icons replace every symbol glyph in the panel.
 
 - Timeline playback ends like the render: after the last shot the viewer holds the
   plan's end card for the render's span (`card_bar` to `end_bar`, `Plan::card_span`)
