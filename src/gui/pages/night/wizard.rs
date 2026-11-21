@@ -31,10 +31,10 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use super::{pipeline, scan};
+use super::{parts, pipeline, scan};
 use crate::commands::Cmd;
 use crate::gui::pages::PageCtx;
-use crate::gui::ui::{theme, widgets};
+use crate::gui::ui::{icons, theme, widgets};
 use crate::project::{self, StepEstimate};
 use crate::recipe::{self, Recipe};
 
@@ -346,6 +346,22 @@ fn rows(ctx: &PageCtx<'_>, state: &mut State, scanned: Option<&scan::Scanned>) -
     out
 }
 
+/// The column's widest.
+const COLUMN: f32 = 720.0;
+
+/// What the approval step chose, for the card's footer to start.
+struct Approval {
+    /// The chosen rows' estimated seconds.
+    total: f32,
+    /// Whether the footage is still being read (no estimate yet).
+    reading: bool,
+    /// The jobs to queue, in order, and what the processing page tracks;
+    /// empty when nothing is chosen.
+    jobs: Vec<(String, Cmd)>,
+    /// What the processing page tracks.
+    plan: Vec<Planned>,
+}
+
 /// Draws the wizard; returns what the night page should do.
 pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) -> Option<Outcome> {
     let (name, footage) = ctx
@@ -358,179 +374,292 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
             .want(&state.work, footage, true, state.generation);
     }
     let theme = ctx.theme;
-    let width = ui.available_width().min(880.0);
-    let side = ((ui.available_width() - width) / 2.0).max(0.0);
     let mut outcome = None;
-    ui.horizontal(|ui| {
-        ui.add_space(side);
-        ui.vertical(|ui| {
-            ui.set_width(width);
-            ui.add_space(theme::SPACE_XL);
-            ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(format!("Set up {name}"))
-                        .font(theme::font(theme::HEADING_SIZE + 6.0))
-                        .color(theme::rgb(theme.text))
-                        .strong(),
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .link("Skip setup")
-                        .on_hover_text("Go to the night page; nothing runs")
-                        .clicked()
-                    {
-                        outcome = Some(Outcome::Close);
-                    }
-                });
-            });
-            ui.add_space(theme::SPACE_MD);
-            stepper(ctx, state, ui);
-            ui.add_space(theme::SPACE_LG);
-            egui::Frame::new()
-                .fill(theme::rgb(theme.panel))
-                .stroke(egui::Stroke::new(1.0, theme::rgb(theme.border)))
-                .corner_radius(egui::CornerRadius::same(theme::RADIUS_LG))
-                .inner_margin(theme::margin(theme::SPACE_LG))
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    match state.step {
-                        Step::Footage => footage_step(ctx, state, ui),
-                        Step::Music => music_step(ctx, state, ui),
-                        Step::Deliverables => deliverables_step(ctx, state, ui),
-                        Step::Approve => {
-                            if let Some(o) = approve_step(ctx, state, ui) {
-                                outcome = Some(o);
-                            }
-                        }
-                    }
-                });
-            ui.add_space(theme::SPACE_MD);
-            ui.horizontal(|ui| {
-                let i = state.step.index();
-                if i > 0
-                    && widgets::button(ui, theme, "Back", widgets::Emphasis::Secondary).clicked()
+    parts::centred(ui, COLUMN, |ui| {
+        ui.add_space((ui.clip_rect().height() * 0.06).clamp(theme::SPACE_XL, 56.0));
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(format!("Set up {name}"))
+                    .font(theme::semibold(ui.ctx(), theme::HEADING_SIZE + 4.0))
+                    .color(theme::rgb(theme.text)),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if widgets::ghost_button(ui, theme, "Skip setup")
+                    .on_hover_text("Go to the night page; nothing runs")
+                    .clicked()
                 {
-                    state.step = Step::ALL[i - 1];
+                    outcome = Some(Outcome::Close);
                 }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if let Some(next) = Step::ALL.get(i + 1)
-                        && widgets::button(ui, theme, "Continue", widgets::Emphasis::Primary)
-                            .clicked()
-                    {
-                        state.step = *next;
-                    }
-                });
             });
         });
+        ui.add_space(theme::SPACE_LG);
+        stepper(ctx, state, ui);
+        ui.add_space(theme::SPACE_LG);
+        egui::Frame::new()
+            .fill(theme::rgb(theme.panel))
+            .stroke(egui::Stroke::new(1.0, theme::accent_fill(theme)))
+            .corner_radius(egui::CornerRadius::same(theme::RADIUS_XL))
+            .inner_margin(theme::margin(theme::SPACE_LG + theme::SPACE_XS))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                let i = state.step.index();
+                ui.label(
+                    egui::RichText::new(format!("Step {} of {}", i + 1, Step::ALL.len()))
+                        .font(theme::tabular(ui.ctx(), theme::SMALL_SIZE))
+                        .color(theme::rgb(theme.text_faint)),
+                );
+                ui.add_space(theme::SPACE_XS);
+                let approval = match state.step {
+                    Step::Footage => {
+                        footage_step(ctx, state, ui);
+                        None
+                    }
+                    Step::Music => {
+                        music_step(ctx, state, ui);
+                        None
+                    }
+                    Step::Deliverables => {
+                        deliverables_step(ctx, state, ui);
+                        None
+                    }
+                    Step::Approve => Some(approve_step(ctx, state, ui)),
+                };
+                ui.add_space(theme::SPACE_LG);
+                let (rect, _) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), 1.0),
+                    egui::Sense::hover(),
+                );
+                ui.painter()
+                    .hline(rect.x_range(), rect.center().y, theme::ink_line(theme));
+                ui.add_space(theme::SPACE_MD);
+                ui.horizontal(|ui| {
+                    if i > 0 && widgets::outline_button(ui, theme, "Back").clicked() {
+                        state.step = Step::ALL[i - 1];
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.spacing_mut().item_spacing.x = theme::SPACE_MD;
+                        match approval {
+                            Some(approval) => {
+                                let go = ui
+                                    .add_enabled_ui(!approval.jobs.is_empty(), |ui| {
+                                        widgets::button_with(
+                                            ui,
+                                            theme,
+                                            widgets::ButtonKind::Key,
+                                            Some(icons::SPARKLES),
+                                            "Start analysis",
+                                        )
+                                    })
+                                    .inner
+                                    .clicked();
+                                ui.label(
+                                    egui::RichText::new(if approval.reading {
+                                        "Estimating\u{2026}".to_owned()
+                                    } else {
+                                        format!(
+                                            "About {} in all",
+                                            project::duration_text(approval.total)
+                                        )
+                                    })
+                                    .font(theme::tabular(ui.ctx(), theme::BODY_SIZE))
+                                    .color(theme::rgb(theme.text_muted)),
+                                );
+                                if go {
+                                    outcome = Some(Outcome::Start {
+                                        jobs: approval.jobs,
+                                        plan: approval.plan,
+                                    });
+                                }
+                            }
+                            None => {
+                                if let Some(next) = Step::ALL.get(i + 1)
+                                    && widgets::primary_button(ui, theme, "Continue").clicked()
+                                {
+                                    state.step = *next;
+                                }
+                            }
+                        }
+                    });
+                });
+            });
+        ui.add_space(theme::SPACE_XL * 2.0);
     });
     outcome
 }
 
-/// The numbered steps across the top; earlier ones can be clicked.
+/// The steps across the top: a numbered circle and a name each, joined by
+/// hairlines; done steps carry a check, the current one is filled. Any
+/// step can be clicked.
 fn stepper(ctx: &PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
+    // The step circles' diameter.
+    const DOT: f32 = 22.0;
     let theme = ctx.theme;
-    ui.horizontal(|ui| {
-        for (i, step) in Step::ALL.into_iter().enumerate() {
-            let here = step == state.step;
-            let past = i < state.step.index();
-            let (fill, text) = if here {
-                (theme.accent, theme.text_on_accent)
-            } else if past {
-                (theme.accent_soft, theme.text)
-            } else {
-                (theme.raised, theme.text_muted)
-            };
-            let label = format!(
-                "{}  {}",
-                if past {
-                    "\u{2713}".to_owned()
-                } else {
-                    (i + 1).to_string()
-                },
-                step.title()
-            );
+    let width = ui.available_width();
+    let (row, _) = ui.allocate_exact_size(egui::vec2(width, DOT), egui::Sense::hover());
+    let font = theme::medium(ui.ctx(), theme::BODY_SIZE);
+    let items: Vec<_> = Step::ALL
+        .into_iter()
+        .map(|step| {
             let galley = ui.painter().layout_no_wrap(
-                label,
-                theme::font(theme::BODY_SIZE - 1.0),
-                theme::rgb(text),
+                step.title().to_owned(),
+                font.clone(),
+                egui::Color32::PLACEHOLDER,
             );
-            let size = galley.size() + egui::vec2(theme::SPACE_LG, theme::SPACE_SM * 1.5);
-            let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
-            ui.painter().rect_filled(
-                rect,
-                egui::CornerRadius::same(theme::RADIUS_LG),
-                theme::rgb(fill),
-            );
-            ui.painter().galley(
-                rect.center() - galley.size() / 2.0,
-                galley,
-                theme::rgb(text),
-            );
-            if response.clicked() {
-                state.step = step;
-            }
-            if i + 1 < Step::ALL.len() {
-                ui.label(egui::RichText::new("\u{203a}").color(theme::rgb(theme.text_faint)));
-            }
-        }
-    });
-}
-
-/// A labelled line: muted label, then the value and any buttons.
-fn field(ctx: &PageCtx<'_>, ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui)) {
-    ui.horizontal(|ui| {
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(130.0, 22.0), egui::Sense::hover());
-        ui.painter().text(
-            rect.left_center(),
-            egui::Align2::LEFT_CENTER,
-            label,
-            theme::font(theme::BODY_SIZE - 1.0),
-            theme::rgb(ctx.theme.text_muted),
+            (step, galley)
+        })
+        .collect();
+    let content: f32 = items
+        .iter()
+        .map(|(_, g)| DOT + theme::SPACE_SM + g.size().x)
+        .sum();
+    let gap = ((width - content) / (items.len().max(2) - 1) as f32).max(theme::SPACE_LG);
+    let mut x = row.left();
+    let here = state.step.index();
+    let count = items.len();
+    for (i, (step, galley)) in items.into_iter().enumerate() {
+        let item_w = DOT + theme::SPACE_SM + galley.size().x;
+        let rect = egui::Rect::from_min_size(egui::pos2(x, row.top()), egui::vec2(item_w, DOT));
+        let response = ui.interact(
+            rect,
+            ui.scope_id().with(("wizard-step", i)),
+            egui::Sense::click(),
         );
-        add(ui);
-    });
+        response.widget_info(|| {
+            egui::WidgetInfo::selected(egui::Role::Tab, true, i == here, step.title())
+        });
+        let lift = widgets::hover_t(ui, response.id, response.hovered());
+        let dot = egui::Rect::from_min_size(rect.min, egui::Vec2::splat(DOT));
+        let painter = ui.painter();
+        let (label_ink, number_ink) = if i == here {
+            painter.circle_filled(dot.center(), DOT / 2.0, theme::rgb(theme.text));
+            (theme::rgb(theme.text), theme::rgb(theme.panel))
+        } else if i < here {
+            painter.circle_filled(dot.center(), DOT / 2.0, theme::selected_fill(theme));
+            (
+                widgets::blend(theme.text_muted, theme.text, lift),
+                theme::rgb(theme.text),
+            )
+        } else {
+            painter.circle_stroke(dot.center(), DOT / 2.0 - 0.5, theme::input_line(theme));
+            (
+                widgets::blend(theme.text_muted, theme.text, lift),
+                theme::rgb(theme.text_muted),
+            )
+        };
+        if i < here {
+            icons::paint(painter, dot, icons::CHECK, icons::SMALL, number_ink);
+        } else {
+            painter.text(
+                dot.center(),
+                egui::Align2::CENTER_CENTER,
+                (i + 1).to_string(),
+                theme::tabular(ui.ctx(), theme::SMALL_SIZE),
+                number_ink,
+            );
+        }
+        painter.galley(
+            egui::pos2(
+                dot.right() + theme::SPACE_SM,
+                rect.center().y - galley.size().y / 2.0,
+            ),
+            galley,
+            label_ink,
+        );
+        if i + 1 < count {
+            let from = rect.right() + theme::SPACE_MD;
+            let to = rect.right() + gap - theme::SPACE_MD;
+            if to > from {
+                painter.hline(from..=to, rect.center().y, theme::ink_line(theme));
+            }
+        }
+        if response.clicked() {
+            state.step = step;
+        }
+        x += item_w + gap;
+    }
 }
 
-/// A file name, or a muted placeholder.
-fn file_label(ctx: &PageCtx<'_>, ui: &mut egui::Ui, path: Option<&Path>, none: &str) {
-    match path {
-        Some(p) => {
-            ui.label(
-                egui::RichText::new(p.file_name().unwrap_or_default().to_string_lossy())
-                    .color(theme::rgb(ctx.theme.text)),
-            )
-            .on_hover_text(p.display().to_string());
-        }
-        None => {
-            ui.label(egui::RichText::new(none).color(theme::rgb(ctx.theme.text_faint)));
-        }
-    }
+/// A step's title in 14 px Medium and its one-line description.
+fn step_head(ui: &mut egui::Ui, theme: &crate::theme::Palette, title: &str, description: &str) {
+    ui.label(
+        egui::RichText::new(title)
+            .font(theme::medium(ui.ctx(), theme::TITLE_SIZE))
+            .color(theme::rgb(theme.text)),
+    );
+    ui.add_space(2.0);
+    parts::muted(ui, theme, description);
+    ui.add_space(theme::SPACE_LG);
+}
+
+/// A path row: the path as a read-only field and a "Choose…" button;
+/// returns whether the button was pressed.
+fn choose_row(
+    ui: &mut egui::Ui,
+    theme: &crate::theme::Palette,
+    label: &str,
+    glyph: char,
+    path: Option<&Path>,
+    none: &str,
+    button: &str,
+) -> bool {
+    let mut pressed = false;
+    parts::form_row(ui, theme, label, |ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            pressed = widgets::outline_button(ui, theme, button).clicked();
+            ui.add_space(theme::SPACE_XS);
+            let width = ui.available_width();
+            parts::path_box(ui, theme, glyph, path, none, width);
+        });
+    });
+    ui.add_space(theme::SPACE_XS + 2.0);
+    pressed
+}
+
+/// A list of rows inside one hairline box (Selects' option list); `add`
+/// draws the rows, with a [`rule`] between each two.
+fn list_box(ui: &mut egui::Ui, theme: &crate::theme::Palette, add: impl FnOnce(&mut egui::Ui)) {
+    egui::Frame::new()
+        .fill(theme::ink(theme, theme::INK_03))
+        .stroke(theme::ink_line(theme))
+        .corner_radius(egui::CornerRadius::same(theme::RADIUS_MD))
+        .inner_margin(theme::margin_xy(theme::SPACE_MD, 0.0))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = 0.0;
+            add(ui);
+        });
+}
+
+/// A hairline across a [`list_box`], between two rows.
+fn rule(ui: &mut egui::Ui, theme: &crate::theme::Palette) {
+    let (rect, _) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
+    ui.painter()
+        .hline(rect.x_range(), rect.center().y, theme::ink_line(theme));
 }
 
 /// Step 1: the footage folder.
 fn footage_step(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
     let theme = ctx.theme;
-    widgets::title(ui, theme, "This week's footage");
-    widgets::muted(ui, theme, "Every video directly in this folder is indexed.");
-    ui.add_space(theme::SPACE_MD);
+    step_head(
+        ui,
+        theme,
+        "This week's footage",
+        "Every video directly in this folder is indexed.",
+    );
     let footage = ctx
         .project
         .as_ref()
         .and_then(|p| p.settings.footage.clone());
-    let mut change = false;
-    field(ctx, ui, "Folder", |ui| {
-        match &footage {
-            Some(f) => {
-                ui.label(
-                    egui::RichText::new(f.display().to_string()).color(theme::rgb(theme.text)),
-                );
-            }
-            None => {
-                ui.label(egui::RichText::new("not set").color(theme::rgb(theme.warning)));
-            }
-        }
-        change = ui.button("Change\u{2026}").clicked();
-    });
+    let change = choose_row(
+        ui,
+        theme,
+        "Folder",
+        icons::FOLDER,
+        footage.as_deref(),
+        "Not set",
+        "Change\u{2026}",
+    );
     if change
         && let Some(picked) = rfd::FileDialog::new()
             .set_title("This week's footage folder")
@@ -542,11 +671,14 @@ fn footage_step(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
         state.generation += 1;
     }
     let scanned = state.scan.for_work(&state.work).cloned();
-    field(ctx, ui, "Clips", |ui| match &scanned {
+    let busy = state.scan.busy();
+    parts::form_row(ui, theme, "Clips", |ui| match &scanned {
         Some(s) if s.error.is_some() => {
-            ui.colored_label(
-                theme::rgb(theme.danger),
-                s.error.clone().unwrap_or_default(),
+            parts::status_line(
+                ui,
+                theme,
+                parts::Kind::Danger,
+                &s.error.clone().unwrap_or_default(),
             );
         }
         Some(s) => {
@@ -559,32 +691,45 @@ fn footage_step(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
             if cached > 0 {
                 text.push_str(&format!(" \u{b7} {cached} analysed already"));
             }
-            ui.label(text);
-            if state.scan.busy() {
-                ui.add(egui::Spinner::new().size(12.0));
+            ui.label(
+                egui::RichText::new(text)
+                    .font(theme::tabular(ui.ctx(), theme::BODY_SIZE))
+                    .color(theme::rgb(theme.text)),
+            );
+            if busy {
+                ui.add(
+                    egui::Spinner::new()
+                        .size(icons::SMALL - 2.0)
+                        .color(theme::rgb(theme.text_muted)),
+                );
             }
         }
         None => {
-            ui.add(egui::Spinner::new().size(12.0));
+            ui.add(
+                egui::Spinner::new()
+                    .size(icons::SMALL - 2.0)
+                    .color(theme::rgb(theme.text_muted)),
+            );
             ui.label(
-                egui::RichText::new("reading the folder\u{2026}")
+                egui::RichText::new("Reading the folder\u{2026}")
+                    .font(theme::font(theme::BODY_SIZE))
                     .color(theme::rgb(theme.text_muted)),
             );
         }
     });
     if let Some(s) = scanned.filter(|s| !s.clips.is_empty()) {
         ui.add_space(theme::SPACE_MD);
+        let gap = theme::SPACE_XS + 2.0;
         let size = egui::vec2(112.0, 63.0);
-        let fit = ((ui.available_width() + 6.0) / (size.x + 6.0))
+        let fit = ((ui.available_width() + gap) / (size.x + gap))
             .floor()
             .max(1.0) as usize;
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 6.0;
+            ui.spacing_mut().item_spacing.x = gap;
             for clip in s.clips.iter().take(fit) {
                 let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
                 let t = clip.duration.map_or(1.0, |d| d * 0.4);
-                ctx.thumbs
-                    .paint(ui, rect, &clip.path, t, 0.5, theme::rgb(theme.raised));
+                parts::thumb(ctx.thumbs, ui, theme, rect, Some((clip.path.as_path(), t)));
                 response.on_hover_text(&clip.id);
             }
         });
@@ -594,13 +739,12 @@ fn footage_step(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
 /// Step 2: track and end cards, last week's carried over.
 fn music_step(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
     let theme = ctx.theme;
-    widgets::title(ui, theme, "Music and end cards");
-    widgets::muted(
+    step_head(
         ui,
         theme,
+        "Music and end cards",
         "The approved track every cut is timed to, and the card each aspect closes on.",
     );
-    ui.add_space(theme::SPACE_MD);
     let keys: BTreeSet<String> = state
         .recipe()
         .deliverables
@@ -610,24 +754,28 @@ fn music_step(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
     let Some(settings) = ctx.project.as_ref().map(|p| p.settings.clone()) else {
         return;
     };
-    let mut pick_track = false;
-    field(ctx, ui, "Track", |ui| {
-        file_label(ctx, ui, settings.track.as_deref(), "no track yet");
-        pick_track = ui.button("Choose\u{2026}").clicked();
-    });
+    let pick_track = choose_row(
+        ui,
+        theme,
+        "Track",
+        icons::MUSIC,
+        settings.track.as_deref(),
+        "No track yet",
+        "Choose\u{2026}",
+    );
     let mut pick_card = None;
     for key in &keys {
-        field(ctx, ui, &format!("End card {key}"), |ui| {
-            file_label(
-                ctx,
-                ui,
-                settings.end_cards.get(key).map(PathBuf::as_path),
-                "none",
-            );
-            if ui.button("Choose\u{2026}").clicked() {
-                pick_card = Some(key.clone());
-            }
-        });
+        if choose_row(
+            ui,
+            theme,
+            &format!("End card {key}"),
+            icons::IMAGE,
+            settings.end_cards.get(key).map(PathBuf::as_path),
+            "None",
+            "Choose\u{2026}",
+        ) {
+            pick_card = Some(key.clone());
+        }
     }
     let start = recipe::night_dir(&state.work);
     if pick_track
@@ -652,7 +800,6 @@ fn music_step(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
         p.settings.end_cards.insert(key, card);
         let _ = p.save_settings();
     }
-    ui.add_space(theme::SPACE_MD);
     let last: Option<project::Settings> = state.previous.as_ref().and_then(|w| {
         std::fs::read_to_string(w.join("ave.toml"))
             .ok()
@@ -670,11 +817,13 @@ fn music_step(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
             .as_deref()
             .map(|w| recipe::Names::for_work(w).night)
             .unwrap_or_default();
-        if widgets::button(
+        ui.add_space(theme::SPACE_SM);
+        if widgets::button_with(
             ui,
             theme,
+            widgets::ButtonKind::Outline,
+            Some(icons::HISTORY),
             &format!("Carry over {from}'s"),
-            widgets::Emphasis::Secondary,
         )
         .on_hover_text("Fill the track and end cards still missing from last week's night")
         .clicked()
@@ -694,28 +843,25 @@ fn music_step(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
         }
     }
     if !state.notes.is_empty() {
-        ui.add_space(theme::SPACE_SM);
+        ui.add_space(theme::SPACE_MD);
         for note in &state.notes {
-            ui.label(
-                egui::RichText::new(format!("\u{2713} {note}"))
-                    .small()
-                    .color(theme::rgb(theme.success)),
-            );
+            parts::status_line(ui, theme, parts::Kind::Success, note);
         }
     }
 }
 
 /// Step 3: the recipe's deliverables.
 fn deliverables_step(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
+    // A deliverable's row.
+    const ROW: f32 = 40.0;
     let theme = ctx.theme;
-    widgets::title(ui, theme, "Deliverables");
-    widgets::muted(
+    step_head(
         ui,
         theme,
+        "Deliverables",
         "From the night's recipe. Untick one to leave it out of the first drafts; edit the \
          recipe itself on the night page.",
     );
-    ui.add_space(theme::SPACE_MD);
     let cards = ctx
         .project
         .as_ref()
@@ -723,165 +869,180 @@ fn deliverables_step(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui
         .unwrap_or_default();
     let list = state.recipe().deliverables.clone();
     if list.is_empty() {
-        ui.colored_label(theme::rgb(theme.warning), "The recipe has no deliverables.");
+        parts::status_line(
+            ui,
+            theme,
+            parts::Kind::Warning,
+            "The recipe has no deliverables.",
+        );
+        return;
     }
-    for d in list {
-        let mut on = !state.skip.contains(&d.id);
-        ui.horizontal(|ui| {
-            if ui.checkbox(&mut on, "").changed() {
-                if on {
-                    state.skip.remove(&d.id);
-                } else {
-                    state.skip.insert(d.id.clone());
-                }
+    list_box(ui, theme, |ui| {
+        for (i, d) in list.into_iter().enumerate() {
+            if i > 0 {
+                rule(ui, theme);
             }
-            ui.label(
-                egui::RichText::new(&d.id)
-                    .strong()
-                    .color(theme::rgb(theme.text)),
-            );
-            let card = if cards.contains_key(d.end_card_key()) {
-                "end card \u{2713}"
-            } else {
-                "no end card"
-            };
-            ui.label(
-                egui::RichText::new(format!(
-                    "{} \u{b7} {:.0} s \u{b7} {card}",
-                    recipe::aspect_key(d.aspect),
-                    d.seconds
-                ))
-                .color(theme::rgb(theme.text_muted)),
-            );
-        });
-    }
+            let mut on = !state.skip.contains(&d.id);
+            ui.horizontal(|ui| {
+                ui.set_min_height(ROW);
+                if ui.checkbox(&mut on, &d.id).changed() {
+                    if on {
+                        state.skip.remove(&d.id);
+                    } else {
+                        state.skip.insert(d.id.clone());
+                    }
+                }
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{} \u{b7} {:.0} s",
+                        recipe::aspect_key(d.aspect),
+                        d.seconds
+                    ))
+                    .font(theme::tabular(ui.ctx(), theme::BODY_SIZE))
+                    .color(theme::rgb(theme.text_muted)),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if cards.contains_key(d.end_card_key()) {
+                        widgets::pill(ui, theme, "end card", widgets::Tone::Success);
+                    } else {
+                        widgets::pill(ui, theme, "no end card", widgets::Tone::Neutral);
+                    }
+                });
+            });
+        }
+    });
 }
 
-/// Step 4: the approval card.
-fn approve_step(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) -> Option<Outcome> {
+/// Step 4: the approval card. Returns what is chosen, for the footer.
+fn approve_step(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) -> Approval {
+    // An analysis row.
+    const ROW: f32 = 48.0;
     let theme = ctx.theme;
-    widgets::title(ui, theme, "Analyse the footage");
-    widgets::muted(
+    step_head(
         ui,
         theme,
+        "Analyse the footage",
         "Runs on this machine, in this order. Open the editor as soon as indexing is done; \
          captions keep going in the background.",
     );
-    ui.add_space(theme::SPACE_MD);
     let scanned = state.scan.for_work(&state.work).cloned();
     let rows = rows(ctx, state, scanned.as_ref());
     let mut total = 0.0;
     let mut chosen: Vec<&Row> = Vec::new();
-    for row in &rows {
-        let can = row.blocked.is_none() && !row.jobs.is_empty();
-        let mut on = can && !state.off.contains(row.key);
-        ui.horizontal(|ui| {
-            let changed = ui
-                .add_enabled_ui(can, |ui| ui.checkbox(&mut on, ""))
-                .inner
-                .changed();
-            if changed {
-                if on {
-                    state.off.remove(row.key);
-                } else {
-                    state.off.insert(row.key);
-                }
+    list_box(ui, theme, |ui| {
+        for (i, row) in rows.iter().enumerate() {
+            if i > 0 {
+                rule(ui, theme);
             }
-            let (rect, _) = ui.allocate_exact_size(egui::vec2(110.0, 20.0), egui::Sense::hover());
-            ui.painter().text(
-                rect.left_center(),
-                egui::Align2::LEFT_CENTER,
-                row.title,
-                theme::font(theme::BODY_SIZE),
-                theme::rgb(if can { theme.text } else { theme.text_faint }),
-            );
-            ui.vertical(|ui| {
-                ui.label(egui::RichText::new(&row.estimate.what).color(theme::rgb(theme.text)));
-                let note = match (&row.blocked, row.estimate.basis.is_empty()) {
-                    (Some(why), _) if why.eq_ignore_ascii_case(&row.estimate.what) => String::new(),
-                    (Some(why), _) => why.clone(),
-                    (None, true) => String::new(),
-                    (None, false) => row.estimate.basis.clone(),
-                };
-                if !note.is_empty() {
-                    ui.label(
-                        egui::RichText::new(note)
-                            .small()
-                            .color(theme::rgb(theme.text_faint)),
-                    );
-                }
-            });
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if can {
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "\u{2248} {}",
-                            project::duration_text(row.estimate.secs)
-                        ))
-                        .strong()
-                        .color(theme::rgb(if on {
-                            theme.text
-                        } else {
-                            theme.text_faint
-                        })),
-                    );
-                }
-            });
-        });
-        ui.add_space(theme::SPACE_XS);
-        if can && on {
-            total += row.estimate.secs;
-            chosen.push(row);
-        }
-    }
-    ui.separator();
-    let reading = scanned.as_ref().is_none_or(|s| s.speeds.is_none());
-    let mut outcome = None;
-    ui.horizontal(|ui| {
-        ui.label(
-            egui::RichText::new(if reading {
-                "Estimating\u{2026}".to_owned()
-            } else {
-                format!("About {} in all", project::duration_text(total))
-            })
-            .font(theme::font(theme::TITLE_SIZE))
-            .color(theme::rgb(theme.text)),
-        );
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let go = ui
-                .add_enabled_ui(!chosen.is_empty(), |ui| {
-                    widgets::button(ui, theme, "Start analysis", widgets::Emphasis::Primary)
-                })
-                .inner
-                .clicked();
-            if go {
-                // Index first, the music map early (it is quick and plans need
-                // it), captions next (long; the editor opens meanwhile), then
-                // what reads the captions.
-                let order = ["index", "beats", "caption", "people", "plans"];
-                let mut jobs = Vec::new();
-                let mut plan = Vec::new();
-                for key in order {
-                    let Some(row) = chosen.iter().find(|r| r.key == key) else {
-                        continue;
-                    };
-                    let n = row.jobs.len().max(1) as f32;
-                    for (label, cmd) in &row.jobs {
-                        plan.push(Planned {
-                            label: label.clone(),
-                            title: if row.jobs.len() > 1 {
-                                label.clone()
-                            } else {
-                                row.title.to_owned()
+            let can = row.blocked.is_none() && !row.jobs.is_empty();
+            let mut on = can && !state.off.contains(row.key);
+            ui.horizontal(|ui| {
+                ui.set_min_height(ROW);
+                let changed = ui
+                    .add_enabled_ui(can, |ui| {
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(132.0, ROW),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                ui.set_min_width(132.0);
+                                ui.checkbox(&mut on, row.title)
                             },
-                            secs: row.estimate.secs / n,
-                        });
-                        jobs.push((label.clone(), cmd.clone()));
+                        )
+                        .inner
+                    })
+                    .inner
+                    .changed();
+                if changed {
+                    if on {
+                        state.off.remove(row.key);
+                    } else {
+                        state.off.insert(row.key);
                     }
                 }
-                outcome = Some(Outcome::Start { jobs, plan });
+                let estimate = if can {
+                    format!("\u{2248} {}", project::duration_text(row.estimate.secs))
+                } else {
+                    String::new()
+                };
+                let estimate_w = 72.0;
+                let room = (ui.available_width() - estimate_w - theme::SPACE_SM).max(0.0);
+                ui.allocate_ui(egui::vec2(room, ROW), |ui| {
+                    ui.set_min_width(room);
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 2.0;
+                        ui.add_space(theme::SPACE_SM);
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(&row.estimate.what)
+                                    .font(theme::font(theme::BODY_SIZE))
+                                    .color(theme::rgb(if can {
+                                        theme.text
+                                    } else {
+                                        theme.text_muted
+                                    })),
+                            )
+                            .truncate(),
+                        );
+                        let note = match (&row.blocked, row.estimate.basis.is_empty()) {
+                            (Some(why), _) if why.eq_ignore_ascii_case(&row.estimate.what) => {
+                                String::new()
+                            }
+                            (Some(why), _) => why.clone(),
+                            (None, true) => String::new(),
+                            (None, false) => row.estimate.basis.clone(),
+                        };
+                        if !note.is_empty() {
+                            ui.label(
+                                egui::RichText::new(note)
+                                    .font(theme::font(theme::SMALL_SIZE))
+                                    .color(theme::rgb(theme.text_faint)),
+                            );
+                        }
+                    });
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        egui::RichText::new(estimate)
+                            .font(theme::tabular(ui.ctx(), theme::BODY_SIZE))
+                            .color(theme::rgb(if on { theme.text } else { theme.text_faint })),
+                    );
+                });
+            });
+            if can && on {
+                total += row.estimate.secs;
+                chosen.push(row);
             }
-        });
+        }
     });
-    outcome
+    let reading = scanned.as_ref().is_none_or(|s| s.speeds.is_none());
+    // Index first, the music map early (it is quick and plans need it),
+    // captions next (long; the editor opens meanwhile), then what reads
+    // the captions.
+    let order = ["index", "beats", "caption", "people", "plans"];
+    let mut jobs = Vec::new();
+    let mut plan = Vec::new();
+    for key in order {
+        let Some(row) = chosen.iter().find(|r| r.key == key) else {
+            continue;
+        };
+        let n = row.jobs.len().max(1) as f32;
+        for (label, cmd) in &row.jobs {
+            plan.push(Planned {
+                label: label.clone(),
+                title: if row.jobs.len() > 1 {
+                    label.clone()
+                } else {
+                    row.title.to_owned()
+                },
+                secs: row.estimate.secs / n,
+            });
+            jobs.push((label.clone(), cmd.clone()));
+        }
+    }
+    Approval {
+        total,
+        reading,
+        jobs,
+        plan,
+    }
 }

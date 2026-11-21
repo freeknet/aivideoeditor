@@ -36,7 +36,7 @@ use std::time::{Duration, Instant, SystemTime};
 use crate::commands::Cmd;
 use crate::gui::app::{Action, Page};
 use crate::gui::pages::PageCtx;
-use crate::gui::ui::{modal, theme, widgets};
+use crate::gui::ui::{icons, modal, theme, widgets};
 use crate::jobs::{Jobs, Status};
 use crate::recipe::{self, Recipe};
 
@@ -743,10 +743,15 @@ pub(crate) fn draw(
     let (all, skipped) = everything(ctx, state, &recipe);
 
     ui.horizontal(|ui| {
-        widgets::title(ui, ctx.theme, "Pipeline");
+        ui.set_min_height(theme::CONTROL_HEIGHT);
+        ui.label(
+            egui::RichText::new("Pipeline")
+                .font(theme::medium(ui.ctx(), theme::TITLE_SIZE))
+                .color(theme::rgb(ctx.theme.text)),
+        );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let busy = state.current.is_some() || !state.queue.is_empty();
-            let tip = if all.is_empty() {
+            let mut tip = if all.is_empty() {
                 "Everything that can run has run. Re-run single steps below.".to_owned()
             } else {
                 let labels: Vec<&str> = all.iter().map(|(l, _)| l.as_str()).collect();
@@ -755,10 +760,19 @@ pub(crate) fn draw(
                     labels.join(" → ")
                 )
             };
+            if !skipped.is_empty() {
+                tip.push_str(&format!("\nSkips {}.", skipped.join("; ")));
+            }
             let enabled = !all.is_empty() && !busy;
             let clicked = ui
                 .add_enabled_ui(enabled, |ui| {
-                    widgets::button(ui, ctx.theme, "Run everything", widgets::Emphasis::Primary)
+                    widgets::button_with(
+                        ui,
+                        ctx.theme,
+                        widgets::ButtonKind::Key,
+                        Some(icons::PLAY),
+                        "Run everything",
+                    )
                 })
                 .inner
                 .on_hover_text(tip)
@@ -772,16 +786,9 @@ pub(crate) fn draw(
                 state.enqueue(ctx.jobs, all.clone());
                 state.selected = None;
             }
-            if !skipped.is_empty() {
-                ui.label(
-                    egui::RichText::new(format!("skips {}", skipped.join("; ")))
-                        .small()
-                        .color(theme::rgb(ctx.theme.text_faint)),
-                );
-            }
         });
     });
-    ui.add_space(theme::SPACE_SM);
+    ui.add_space(theme::SPACE_MD);
     bar(ctx, state, ui, views);
     ui.add_space(theme::SPACE_MD);
     queue_line(ctx, state, ui);
@@ -789,13 +796,16 @@ pub(crate) fn draw(
     confirm(ctx, state, ui);
 }
 
-/// The six steps side by side, joined by chevrons.
+/// The six steps side by side, joined by chevrons: calm cards (the panel
+/// surface, a hairline, 10 px corners) with the step's number and name,
+/// a badge for where it stands, what it produced, and its action.
 fn bar(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui, views: Vec<View>) {
+    // The chevrons' gutter and a card's height.
+    const GAP: f32 = 18.0;
+    const HEIGHT: f32 = 144.0;
     let theme = ctx.theme;
-    let gap = 18.0;
     let n = views.len().max(1) as f32;
-    let width = ((ui.available_width() - gap * (n - 1.0)) / n).max(120.0);
-    let height = 132.0;
+    let width = ((ui.available_width() - GAP * (n - 1.0)) / n).max(120.0);
     let mut clicked_run: Option<Run> = None;
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
@@ -803,86 +813,96 @@ fn bar(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui, views: Vec<V
         for (i, view) in views.into_iter().enumerate() {
             let selected = state.selected == Some(view.step);
             let (rect, response) =
-                ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
+                ui.allocate_exact_size(egui::vec2(width, HEIGHT), egui::Sense::click());
+            response.widget_info(|| {
+                egui::WidgetInfo::selected(egui::Role::Button, true, selected, view.step.title())
+            });
             let lift = widgets::hover_t(ui, response.id, response.hovered());
-            let (accent, word) = match view.standing {
-                Standing::Done => (theme.success, "done"),
-                Standing::Partial => (theme.warning, "partly done"),
-                Standing::Ready => (theme.accent, "ready"),
-                Standing::Blocked => (theme.text_faint, "waiting"),
-                Standing::Busy => (theme.accent, "running"),
+            let (word, tone) = match view.standing {
+                Standing::Done => ("done", widgets::Tone::Success),
+                Standing::Partial => ("partly done", widgets::Tone::Warning),
+                Standing::Ready => ("ready", widgets::Tone::Neutral),
+                Standing::Blocked => ("waiting", widgets::Tone::Neutral),
+                Standing::Busy => ("running", widgets::Tone::Neutral),
             };
             let border = if selected {
-                theme.accent
+                egui::Stroke::new(1.0, theme::ring(theme))
             } else {
-                theme.border.lerp(theme.border_strong, lift)
+                egui::Stroke::new(
+                    1.0,
+                    theme::ink(
+                        theme,
+                        egui::lerp(f32::from(theme::INK_10)..=f32::from(theme::INK_20), lift)
+                            .round() as u8,
+                    ),
+                )
             };
             let painter = ui.painter();
             painter.rect(
                 rect,
                 egui::CornerRadius::same(theme::RADIUS_LG),
-                theme::rgb(theme.raised.lerp(theme.hover, lift * 0.5)),
-                egui::Stroke::new(if selected { 2.0 } else { 1.0 }, theme::rgb(border)),
+                theme::rgb(theme.panel),
+                border,
                 egui::StrokeKind::Inside,
-            );
-            let stripe = egui::Rect::from_min_size(
-                rect.left_top() + egui::vec2(1.0, 1.0),
-                egui::vec2(rect.width() - 2.0, 3.0),
-            );
-            painter.rect_filled(
-                stripe,
-                egui::CornerRadius {
-                    nw: theme::RADIUS_LG,
-                    ne: theme::RADIUS_LG,
-                    sw: 0,
-                    se: 0,
-                },
-                theme::rgb(accent),
             );
             let pad = theme::SPACE_MD;
             let x = rect.left() + pad;
+            let number =
+                egui::Rect::from_min_size(egui::pos2(x, rect.top() + pad), egui::Vec2::splat(20.0));
+            painter.circle_filled(number.center(), 10.0, theme::ink(theme, theme::INK_10));
             painter.text(
-                egui::pos2(x, rect.top() + 14.0),
-                egui::Align2::LEFT_TOP,
-                format!("{}  {}", i + 1, view.step.title()),
-                theme::font(theme::TITLE_SIZE),
-                theme::rgb(theme.text),
-            );
-            painter.circle_filled(
-                egui::pos2(x + 4.0, rect.top() + 44.0),
-                4.0,
-                theme::rgb(accent),
-            );
-            painter.text(
-                egui::pos2(x + 13.0, rect.top() + 44.0),
-                egui::Align2::LEFT_CENTER,
-                word,
-                theme::font(theme::BODY_SIZE - 2.0),
+                number.center(),
+                egui::Align2::CENTER_CENTER,
+                (i + 1).to_string(),
+                theme::tabular(ui.ctx(), theme::SMALL_SIZE),
                 theme::rgb(theme.text_muted),
             );
-            let galley = painter.layout(
-                view.summary.clone(),
-                theme::font(theme::BODY_SIZE - 1.0),
-                theme::rgb(theme.text),
-                rect.width() - pad * 2.0,
-            );
-            painter.galley(
-                egui::pos2(x, rect.top() + 56.0),
-                galley,
+            painter.text(
+                egui::pos2(number.right() + theme::SPACE_SM, number.center().y),
+                egui::Align2::LEFT_CENTER,
+                view.step.title(),
+                theme::medium(ui.ctx(), theme::LARGE_SIZE),
                 theme::rgb(theme.text),
             );
+            let badge_y = number.bottom() + theme::SPACE_SM + 10.0;
+            let badge_w = {
+                // A badge is drawn from its right edge; measure it first.
+                let galley = painter.layout_no_wrap(
+                    word.to_owned(),
+                    theme::medium(ui.ctx(), theme::SMALL_SIZE),
+                    egui::Color32::PLACEHOLDER,
+                );
+                galley.size().x + theme::SPACE_SM + theme::SPACE_XS
+            };
+            super::recent::paint_badge(ui, theme, x + badge_w, badge_y, word, tone);
+            let painter = ui.painter();
             if let Some(t) = view.when {
                 painter.text(
-                    egui::pos2(x, rect.bottom() - 46.0),
-                    egui::Align2::LEFT_BOTTOM,
+                    egui::pos2(x + badge_w + theme::SPACE_SM, badge_y),
+                    egui::Align2::LEFT_CENTER,
                     ago(t),
-                    theme::font(theme::BODY_SIZE - 3.0),
+                    theme::font(theme::SMALL_SIZE),
                     theme::rgb(theme.text_faint),
                 );
             }
+            let summary = painter.layout(
+                view.summary.clone(),
+                theme::font(theme::BODY_SIZE),
+                theme::rgb(theme.text_muted),
+                rect.width() - pad * 2.0,
+            );
+            let summary_rect = egui::Rect::from_min_max(
+                egui::pos2(x, badge_y + 14.0),
+                egui::pos2(rect.right() - pad, badge_y + 14.0 + 32.0),
+            );
+            painter.with_clip_rect(summary_rect).galley(
+                summary_rect.min,
+                summary,
+                theme::rgb(theme.text_muted),
+            );
             let button = egui::Rect::from_min_size(
-                egui::pos2(x, rect.bottom() - pad - 26.0),
-                egui::vec2(rect.width() - pad * 2.0, 26.0),
+                egui::pos2(x, rect.bottom() - pad - theme::CONTROL_HEIGHT),
+                egui::vec2(rect.width() - pad * 2.0, theme::CONTROL_HEIGHT),
             );
             let busy = view.standing == Standing::Busy;
             let label = match &view.run {
@@ -891,16 +911,14 @@ fn bar(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui, views: Vec<V
                 Run::None => None,
             };
             if let Some(label) = label {
-                let label = if busy { "Running…" } else { label };
-                let primary = matches!(view.standing, Standing::Ready) && !busy;
-                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(button));
-                let emphasis = if primary {
-                    widgets::Emphasis::Primary
-                } else {
-                    widgets::Emphasis::Secondary
-                };
+                let label = if busy { "Running\u{2026}" } else { label };
+                let mut child = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(button)
+                        .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                );
                 let pressed = child
-                    .add_enabled_ui(!busy, |ui| widgets::button(ui, theme, label, emphasis))
+                    .add_enabled_ui(!busy, |ui| widgets::outline_button(ui, theme, label))
                     .inner
                     .clicked();
                 if pressed {
@@ -913,12 +931,12 @@ fn bar(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui, views: Vec<V
             }
             if i + 1 < count {
                 let (gap_rect, _) =
-                    ui.allocate_exact_size(egui::vec2(gap, height), egui::Sense::hover());
-                ui.painter().text(
-                    gap_rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    "›",
-                    theme::font(theme::TITLE_SIZE),
+                    ui.allocate_exact_size(egui::vec2(GAP, HEIGHT), egui::Sense::hover());
+                icons::paint(
+                    ui.painter(),
+                    gap_rect,
+                    icons::CHEVRON_RIGHT,
+                    icons::SMALL,
                     theme::rgb(theme.text_faint),
                 );
             }
@@ -934,16 +952,16 @@ fn bar(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui, views: Vec<V
 
 /// The queue's progress, when it holds more than one job, or why it stopped.
 fn queue_line(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
+    let theme = ctx.theme;
     if let Some(why) = state.stopped.clone() {
-        ui.horizontal(|ui| {
-            ui.colored_label(
-                theme::rgb(ctx.theme.danger),
-                format!("Queue stopped: {why}"),
-            );
-            if ui.small_button("Dismiss").clicked() {
-                state.stopped = None;
-            }
-        });
+        if super::parts::notice(
+            ui,
+            theme,
+            super::parts::Kind::Danger,
+            &format!("Queue stopped: {why}"),
+        ) {
+            state.stopped = None;
+        }
         ui.add_space(theme::SPACE_SM);
     }
     if state.total < 2 {
@@ -956,25 +974,32 @@ fn queue_line(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
         .map(|j| j.label.clone())
         .unwrap_or_default();
     ui.horizontal(|ui| {
-        ui.label(format!(
-            "Queue: {} of {} · {label}",
-            state.started.min(state.total),
-            state.total
-        ));
-        if !state.queue.is_empty() && ui.small_button("Clear the rest").clicked() {
-            state.queue.clear();
-            state.total = state.started;
-        }
+        ui.set_min_height(theme::CONTROL_HEIGHT);
+        ui.label(
+            egui::RichText::new(format!(
+                "Queue: {} of {} \u{b7} {label}",
+                state.started.min(state.total),
+                state.total
+            ))
+            .font(theme::tabular(ui.ctx(), theme::BODY_SIZE))
+            .color(theme::rgb(theme.text_muted)),
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if !state.queue.is_empty()
+                && widgets::ghost_button(ui, theme, "Clear the rest").clicked()
+            {
+                state.queue.clear();
+                state.total = state.started;
+            }
+        });
     });
-    let id = egui::Id::unique("night-queue-meter");
-    widgets::meter(
+    super::parts::progress_bar(
         ui,
-        ctx.theme,
-        id,
+        theme,
+        egui::Id::unique("night-queue-meter"),
         done as f32 / state.total.max(1) as f32,
-        ctx.theme.accent,
     );
-    ui.add_space(theme::SPACE_SM);
+    ui.add_space(theme::SPACE_MD);
 }
 
 /// The log of the selected step's latest job (or the queue's current one).
@@ -1000,7 +1025,7 @@ fn log(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
     let (status, color) = match &job.status {
         Status::Running => (
             format!("running for {:.0}s", job.started.elapsed().as_secs_f32()),
-            theme.accent,
+            theme.text_muted,
         ),
         Status::Done => (
             format!("done in {:.1}s", job.took.unwrap_or(0.0)),
@@ -1039,22 +1064,46 @@ fn log(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
     let lines: Vec<String> = job.lines.iter().rev().take(14).rev().cloned().collect();
     let label = job.label.clone();
     let running = job.status == Status::Running;
+    let mark = match &job.status {
+        Status::Running => super::parts::Mark::Running,
+        Status::Done => super::parts::Mark::Done,
+        Status::Failed(_) => super::parts::Mark::Failed,
+    };
     egui::Frame::new()
         .fill(theme::rgb(theme.panel))
-        .stroke(egui::Stroke::new(1.0, theme::rgb(theme.border)))
-        .corner_radius(egui::CornerRadius::same(theme::RADIUS))
-        .inner_margin(theme::margin(theme::SPACE_MD))
+        .stroke(theme::ink_line(theme))
+        .corner_radius(egui::CornerRadius::same(theme::RADIUS_LG))
+        .inner_margin(theme::margin_xy(theme::SPACE_LG, theme::SPACE_MD))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
-                if running {
-                    ui.add(egui::Spinner::new().size(14.0));
-                }
-                ui.label(egui::RichText::new(format!("ave {label}")).strong());
-                ui.label(egui::RichText::new(status).color(theme::rgb(color)));
+                ui.set_min_height(theme::CONTROL_HEIGHT);
+                ui.spacing_mut().item_spacing.x = theme::SPACE_SM;
+                let rect = ui
+                    .allocate_exact_size(egui::Vec2::splat(icons::SIZE), egui::Sense::hover())
+                    .0;
+                super::parts::mark(ui, theme, rect, mark);
+                ui.label(
+                    egui::RichText::new(format!("ave {label}"))
+                        .font(theme::medium(ui.ctx(), theme::BODY_SIZE))
+                        .color(theme::rgb(theme.text)),
+                );
+                ui.label(
+                    egui::RichText::new(status)
+                        .font(theme::tabular(ui.ctx(), theme::BODY_SIZE))
+                        .color(theme::rgb(color)),
+                );
                 if let Some((label, cmd)) = retry.clone() {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Retry").clicked() {
+                        if widgets::button_with(
+                            ui,
+                            theme,
+                            widgets::ButtonKind::Outline,
+                            Some(icons::ROTATE_CCW),
+                            "Retry",
+                        )
+                        .clicked()
+                        {
                             state.enqueue(ctx.jobs, vec![(label, cmd)]);
                         }
                     });
@@ -1062,30 +1111,27 @@ fn log(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
             });
             if let Some((f, text)) = fraction {
                 ui.add_space(theme::SPACE_XS);
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(text)
-                            .small()
-                            .color(theme::rgb(theme.text_muted)),
-                    );
-                });
-                widgets::meter(
+                ui.label(
+                    egui::RichText::new(text)
+                        .font(theme::tabular(ui.ctx(), theme::BODY_SIZE))
+                        .color(theme::rgb(theme.text_muted)),
+                );
+                ui.add_space(theme::SPACE_XS);
+                super::parts::progress_bar(
                     ui,
                     theme,
                     egui::Id::unique(("night-progress", &label)),
                     f,
-                    theme.accent,
                 );
             }
-            ui.add_space(theme::SPACE_XS);
+            ui.add_space(theme::SPACE_SM);
             if lines.is_empty() {
-                widgets::muted(ui, theme, if running { "Working…" } else { "No output." });
+                super::parts::muted(ui, theme, if running { "Working…" } else { "No output." });
             }
             for line in &lines {
                 ui.label(
                     egui::RichText::new(line)
-                        .monospace()
-                        .small()
+                        .font(theme::mono(theme::SMALL_SIZE))
                         .color(theme::rgb(theme.text_muted)),
                 );
             }
