@@ -19,25 +19,20 @@
 //! all of them that waits for the go-ahead, so the review turns into one
 //! proposal rather than a string of edits.
 
-use egui::{Color32, CornerRadius, FontId, Rect, Sense, Stroke, Ui, UiBuilder, vec2};
+use egui::{Color32, CornerRadius, Rect, Sense, Ui, UiBuilder, vec2};
 
 use super::{Io, Shown, State};
 use crate::gui::app::Action;
-use crate::gui::ui::theme;
+use crate::gui::ui::{icons, theme, widgets};
 use crate::plan::{COMMENT_COLORS, Comment, Plan};
 use crate::refs::{Reference, Target};
 
 /// A labelled change to the plan, applied after the list is drawn.
 type Edit = (String, Box<dyn FnOnce(&mut Plan) -> bool>);
 
-/// The marker colour for a comment colour name.
+/// The marker colour for a comment colour name (Selects' marker paint).
 pub(super) fn color(name: &str) -> Color32 {
-    match name {
-        "blue" => Color32::from_rgb(84, 152, 240),
-        "yellow" => Color32::from_rgb(236, 196, 64),
-        "red" => Color32::from_rgb(232, 84, 84),
-        _ => Color32::from_rgb(92, 192, 112),
-    }
+    super::timeline::marker(name).0
 }
 
 /// The colour after `name` in the cycle.
@@ -118,63 +113,73 @@ pub(super) fn chat_text(name: &str, comments: &[Comment], timing: &[(f32, f32)])
 /// The comments list, drawn into `rect` beside the tracks.
 pub(super) fn panel(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut Ui, rect: Rect) {
     let t = s.theme;
-    ui.painter().rect(
-        rect,
-        CornerRadius::same(3),
-        theme::rgb(t.panel),
-        Stroke::new(1.0, theme::rgb(t.border)),
-        egui::StrokeKind::Inside,
-    );
+    ui.painter()
+        .vline(rect.left() + 0.5, rect.y_range(), theme::ink_line(t));
     let comments = &s.plan.comments;
     let open = comments.iter().filter(|c| !c.resolved).count();
     let mut seek = None;
     let mut edits: Vec<Edit> = Vec::new();
-    ui.scope_builder(UiBuilder::new().max_rect(rect.shrink(6.0)), |ui| {
-        ui.spacing_mut().item_spacing = vec2(6.0, 4.0);
+    let inner = Rect::from_min_max(
+        rect.min + vec2(theme::SPACE_SM + 1.0, theme::SPACE_XS),
+        rect.max - vec2(theme::SPACE_SM, theme::SPACE_XS),
+    );
+    ui.scope_builder(UiBuilder::new().max_rect(inner), |ui| {
+        ui.spacing_mut().item_spacing = vec2(theme::SPACE_SM, 2.0);
         ui.horizontal(|ui| {
+            ui.set_min_height(theme::CONTROL_HEIGHT);
             ui.label(
-                egui::RichText::new(format!("COMMENTS {open}"))
-                    .size(10.5)
-                    .strong()
-                    .color(theme::rgb(t.text_muted)),
+                egui::RichText::new("Comments")
+                    .font(theme::medium(ui.ctx(), theme::BODY_SIZE))
+                    .color(theme::rgb(t.text)),
             );
+            widgets::pill(ui, t, &open.to_string(), widgets::Tone::Neutral);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
                 let send = ui
-                    .add_enabled(open > 0, egui::Button::new("Send to chat").small())
-                    .on_hover_text(
-                        "Hand every open comment to the assistant as one message, \
-                         asking for a plan that covers them and waits for your go-ahead",
-                    );
+                    .add_enabled_ui(open > 0, |ui| {
+                        widgets::icon_btn(
+                            ui,
+                            t,
+                            icons::SEND,
+                            "Send to chat: every open comment as one message, asking for a plan that waits for your go-ahead",
+                            "",
+                        )
+                    })
+                    .inner;
                 if send.clicked()
                     && let Some(text) = chat_text(&s.name, comments, &s.timing)
                 {
                     io.actions.push(Action::ChatInbox(text));
                     state.status = format!("sent {open} comments to chat");
                 }
-                if ui
-                    .add_enabled(s.editable, egui::Button::new("Add  F").small())
-                    .on_hover_text("A comment at the playhead")
-                    .clicked()
-                {
+                let add = ui
+                    .add_enabled_ui(s.editable, |ui| {
+                        widgets::icon_btn(ui, t, icons::PLUS, "Add a comment at the playhead", "F")
+                    })
+                    .inner;
+                if add.clicked() {
                     add_at_playhead(state, s, io);
                 }
             });
         });
         let resolved = comments.len() - open;
         if resolved > 0 {
-            ui.checkbox(
+            widgets::switch(
+                ui,
+                t,
                 &mut state.show_resolved,
-                egui::RichText::new(format!("Show {resolved} resolved")).size(11.0),
+                &format!("Show {resolved} resolved"),
             );
         }
-        ui.separator();
+        ui.add_space(theme::SPACE_XS);
         if comments.is_empty() {
-            ui.label(
-                egui::RichText::new(
-                    "No comments. Press F over the timeline to leave one at the playhead.",
-                )
-                .size(11.0)
-                .color(theme::rgb(t.text_faint)),
+            widgets::empty_state(
+                ui,
+                t,
+                icons::MESSAGE_SQUARE,
+                "No comments",
+                "Press F over the timeline to leave one at the playhead.",
+                |_| {},
             );
             return;
         }
@@ -198,7 +203,8 @@ pub(super) fn panel(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut 
     }
 }
 
-/// One comment row.
+/// One comment row: its colour, time, shot and author, resolve and delete,
+/// then the note; ink 8 % under the pointer, the selected fill when picked.
 fn item(
     state: &mut State,
     s: &Shown<'_>,
@@ -210,26 +216,32 @@ fn item(
 ) {
     let t = s.theme;
     let selected = state.comment_sel == Some(i);
-    egui::Frame::new()
-        .fill(theme::rgb(if selected { t.raised } else { t.panel }))
-        .stroke(Stroke::new(
-            1.0,
-            theme::rgb(if selected { t.border_strong } else { t.border }),
-        ))
-        .corner_radius(CornerRadius::same(3))
-        .inner_margin(egui::Margin::symmetric(6, 4))
+    let id = egui::Id::unique("plan_comment_row").with(i);
+    let hovered = ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
+    let fill = if selected {
+        theme::selected_fill(t)
+    } else if hovered {
+        theme::ink_hover(t)
+    } else {
+        Color32::TRANSPARENT
+    };
+    let frame = egui::Frame::new()
+        .fill(fill)
+        .corner_radius(CornerRadius::same(theme::RADIUS_MD))
+        .inner_margin(theme::margin_xy(theme::SPACE_SM, theme::SPACE_XS))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
-                let (dot, resp) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::click());
+                ui.spacing_mut().item_spacing.x = theme::SPACE_SM;
+                let (dot, resp) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::click());
                 let ink = color(&c.color);
                 let ink = if c.resolved {
                     ink.gamma_multiply(0.35)
                 } else {
                     ink
                 };
-                ui.painter().circle_filled(dot.center(), 4.5, ink);
-                if resp.on_hover_text("Change the colour").clicked() && s.editable {
+                ui.painter().circle_filled(dot.center(), 5.0, ink);
+                if widgets::tip(resp, t, "Change the colour", "").clicked() && s.editable {
                     let next = next_color(&c.color).to_owned();
                     edits.push((
                         format!("comment colour {next}"),
@@ -242,34 +254,41 @@ fn item(
                     ));
                 }
                 let at = super::timeline::timecode(c.time, true);
-                if ui
-                    .add(
-                        egui::Button::new(
-                            egui::RichText::new(&at)
-                                .monospace()
-                                .size(10.5)
-                                .color(theme::rgb(t.accent)),
-                        )
-                        .frame(false),
+                let time = ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(&at)
+                            .font(theme::tabular(ui.ctx(), theme::BODY_SIZE))
+                            .color(theme::rgb(t.text)),
                     )
-                    .on_hover_text("Seek here")
-                    .clicked()
-                {
+                    .sense(Sense::click()),
+                );
+                if widgets::tip(time, t, "Seek here", "").clicked() {
                     *seek = Some(c.time);
                     state.comment_sel = Some(i);
                 }
                 let shot = shot_at(&s.timing, c.time)
-                    .map_or_else(|| "card".to_owned(), |k| format!("#{}", k + 1));
+                    .map_or_else(|| "card".to_owned(), |k| format!("shot {}", k + 1));
                 ui.label(
                     egui::RichText::new(format!("{shot} · {}", c.author))
-                        .size(10.0)
-                        .color(theme::rgb(t.text_faint)),
+                        .font(theme::font(theme::SMALL_SIZE))
+                        .color(theme::rgb(t.text_muted)),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .add_enabled(s.editable, egui::Button::new("Delete").small())
-                        .clicked()
-                    {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    let delete = ui
+                        .add_enabled_ui(s.editable, |ui| {
+                            widgets::icon_toggle_sized(
+                                ui,
+                                t,
+                                icons::TRASH,
+                                "Delete",
+                                "",
+                                false,
+                                theme::COMPACT_HEIGHT,
+                            )
+                        })
+                        .inner;
+                    if delete.clicked() {
                         state.comment_edit = None;
                         state.comment_sel = None;
                         edits.push((
@@ -284,11 +303,25 @@ fn item(
                             }),
                         ));
                     }
-                    let label = if c.resolved { "Reopen" } else { "Resolve" };
-                    if ui
-                        .add_enabled(s.editable, egui::Button::new(label).small())
-                        .clicked()
-                    {
+                    let (glyph, label) = if c.resolved {
+                        (icons::ROTATE_CCW, "Reopen")
+                    } else {
+                        (icons::CHECK, "Resolve")
+                    };
+                    let resolve = ui
+                        .add_enabled_ui(s.editable, |ui| {
+                            widgets::icon_toggle_sized(
+                                ui,
+                                t,
+                                glyph,
+                                label,
+                                "",
+                                false,
+                                theme::COMPACT_HEIGHT,
+                            )
+                        })
+                        .inner;
+                    if resolve.clicked() {
                         let done = !c.resolved;
                         edits.push((
                             format!("{} comment", if done { "resolve" } else { "reopen" }),
@@ -311,8 +344,8 @@ fn item(
                 };
                 let resp = ui.add(
                     egui::TextEdit::multiline(buf)
-                        .hint_text("what should change here")
-                        .font(FontId::proportional(11.5))
+                        .hint_text("What should change here")
+                        .font(theme::font(theme::BODY_SIZE))
                         .desired_rows(2)
                         .desired_width(f32::INFINITY),
                 );
@@ -345,20 +378,21 @@ fn item(
                 }
             } else {
                 let (text, ink) = if c.note.is_empty() {
-                    ("(no note)", t.text_faint)
+                    ("No note", theme::ink(t, 102))
                 } else {
                     (
                         c.note.as_str(),
-                        if c.resolved { t.text_muted } else { t.text },
+                        theme::rgb(if c.resolved { t.text_muted } else { t.text }),
                     )
                 };
-                let mut rich = egui::RichText::new(text).size(11.5).color(theme::rgb(ink));
+                let mut rich = egui::RichText::new(text)
+                    .font(theme::font(theme::BODY_SIZE))
+                    .color(ink);
                 if c.resolved {
                     rich = rich.strikethrough();
                 }
-                let resp = ui
-                    .add(egui::Label::new(rich).wrap().sense(Sense::click()))
-                    .on_hover_text("Click to seek · double-click to edit");
+                let resp = ui.add(egui::Label::new(rich).wrap().sense(Sense::click()));
+                let resp = widgets::tip(resp, t, "Click to seek, double-click to edit", "");
                 if resp.clicked() {
                     *seek = Some(c.time);
                     state.comment_sel = Some(i);
@@ -369,6 +403,11 @@ fn item(
                 }
             }
         });
+    let now = frame.response.hovered() || ui.rect_contains_pointer(frame.response.rect);
+    if now != hovered {
+        ui.data_mut(|d| d.insert_temp(id, now));
+        ui.ctx().request_repaint();
+    }
 }
 
 /// Adds a comment at the playhead (or the selected shot's start when the

@@ -1,8 +1,8 @@
 // ============================================================================
 // Module:       gui::pages::plan::tabs
-// Description:  Plans as timeline tabs: one per plan file, with an unsaved
-//               dot and a failed-check count, close / reopen, rename,
-//               duplicate as a new plan, and "+" to draft one.
+// Description:  Plans as timeline tabs in the panel header: one per plan
+//               file, with an unsaved dot and a failed-check count, close /
+//               reopen, rename, duplicate, and "+" to draft or reopen one.
 //
 // Dependencies: egui; crate::{plan, project, refs}, crate::gui::pages::plan
 // ============================================================================
@@ -26,16 +26,25 @@ use std::path::Path;
 use std::time::SystemTime;
 
 use anyhow::{Context, Result};
-use egui::{Align2, CornerRadius, FontId, Rect, Sense, Stroke, Ui, pos2, vec2};
+use egui::{Align2, CornerRadius, Rect, Sense, Ui, Vec2, pos2, vec2};
 
 use super::{State, history};
 use crate::gui::app::Action;
 use crate::gui::player::Player;
-use crate::gui::ui::theme;
+use crate::gui::ui::{icons, theme, widgets};
 use crate::plan::Plan;
 use crate::project::Project;
 use crate::refs::{Reference, Target};
 use crate::theme::Palette;
+
+/// A tab's padding on the left (before the close cross).
+const PAD_LEFT: f32 = 6.0;
+/// A tab's padding on the right.
+const PAD_RIGHT: f32 = 10.0;
+/// Space between a tab's parts.
+const GAP: f32 = 6.0;
+/// The close cross.
+const CLOSE: f32 = 14.0;
 
 /// What a tab shows.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -257,7 +266,9 @@ fn switch(state: &mut State, project: &mut Project, player: &mut Player, name: &
     }
 }
 
-/// The tab strip.
+/// The tab strip, inside the panel header: one 28 px pill per plan (close
+/// cross first, the film glyph, the name, an unsaved dot, a failed-check
+/// count), then `+` for a new plan or a closed one.
 pub(super) fn strip(
     state: &mut State,
     project: &mut Project,
@@ -286,211 +297,257 @@ pub(super) fn strip(
     let mut close = Vec::new();
     let mut close_others = None;
     let mut reopen = None;
-    let h = 24.0;
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 2.0;
-        ui.label(
-            egui::RichText::new("TIMELINE")
-                .size(10.5)
-                .strong()
-                .color(theme::rgb(t.text_muted)),
-        );
-        ui.add_space(6.0);
-        for tab in &tabs {
-            let font = FontId::proportional(11.5);
-            let galley = ui.painter().layout_no_wrap(
-                tab.name.clone(),
-                font.clone(),
-                theme::rgb(if tab.current { t.text } else { t.text_muted }),
-            );
-            let count = (tab.errors > 0).then(|| tab.errors.to_string());
-            let count_w = count.as_ref().map_or(0.0, |c| 14.0 + 6.5 * c.len() as f32);
-            let w = 10.0 + galley.size().x + 10.0 + count_w + 16.0;
-            let (rect, resp) = ui.allocate_exact_size(vec2(w, h), Sense::click());
-            let close_rect = Rect::from_center_size(
-                pos2(rect.right() - 10.0, rect.center().y),
-                vec2(14.0, 14.0),
-            );
-            let close_resp = ui
-                .interact(
-                    close_rect,
-                    egui::Id::unique("plan_tab_close").with(&tab.name),
-                    Sense::click(),
-                )
-                .on_hover_text("Close the tab (the plan file stays)");
-            let hovered = resp.hovered() || close_resp.hovered();
-            let p = ui.painter();
-            let fill = if tab.current {
-                theme::rgb(t.raised)
-            } else if hovered {
-                theme::rgb(t.hover)
-            } else {
-                theme::rgb(t.panel)
-            };
-            p.rect(
-                rect,
-                CornerRadius {
-                    nw: 4,
-                    ne: 4,
-                    sw: 0,
-                    se: 0,
-                },
-                fill,
-                Stroke::new(
-                    1.0,
-                    theme::rgb(if tab.current {
-                        t.border_strong
-                    } else {
-                        t.border
-                    }),
-                ),
-                egui::StrokeKind::Inside,
-            );
-            if tab.current {
-                p.hline(
-                    rect.x_range(),
-                    rect.top() + 1.0,
-                    Stroke::new(2.0, theme::rgb(t.accent)),
-                );
-            }
-            let mut x = rect.left() + 10.0;
-            p.galley(
-                pos2(x, rect.center().y - galley.size().y / 2.0),
-                galley.clone(),
-                theme::rgb(t.text),
-            );
-            x += galley.size().x + 5.0;
-            if tab.dirty {
-                p.circle_filled(pos2(x + 2.0, rect.center().y), 3.0, theme::rgb(t.warning));
-            }
-            x += 8.0;
-            if let Some(c) = &count {
-                let red = theme::rgb(t.danger);
-                let cx = pos2(x + 4.0, rect.center().y);
-                let st = Stroke::new(1.5, red);
-                p.line_segment([cx + vec2(-3.0, -3.0), cx + vec2(3.0, 3.0)], st);
-                p.line_segment([cx + vec2(-3.0, 3.0), cx + vec2(3.0, -3.0)], st);
-                p.text(
-                    pos2(x + 10.0, rect.center().y),
-                    Align2::LEFT_CENTER,
-                    c,
-                    FontId::proportional(10.5),
-                    red,
-                );
-            }
-            if hovered || tab.current {
-                let ink = theme::rgb(if close_resp.hovered() {
-                    t.text
-                } else {
-                    t.text_faint
-                });
-                let c = close_rect.center();
-                let st = Stroke::new(1.2, ink);
-                p.line_segment([c + vec2(-3.5, -3.5), c + vec2(3.5, 3.5)], st);
-                p.line_segment([c + vec2(-3.5, 3.5), c + vec2(3.5, -3.5)], st);
-            }
-            let tip = format!(
-                "plans/{}.toml{}{}",
-                tab.name,
-                if tab.dirty {
-                    if tab.current {
-                        " · unsaved changes"
-                    } else {
-                        " · changed since you last opened it"
-                    }
-                } else {
-                    ""
-                },
-                if tab.errors > 0 {
-                    format!(" · check fails ({} problems)", tab.errors)
-                } else {
-                    String::new()
-                }
-            );
-            let resp = resp.on_hover_text(tip);
-            if close_resp.clicked() || resp.middle_clicked() {
-                close.push(tab.name.clone());
-            } else if resp.clicked() {
-                open = Some(tab.name.clone());
-            }
-            resp.context_menu(|ui| {
-                ui.set_min_width(180.0);
-                if ui.button("Rename…").clicked() {
-                    state.tab_form = Some(Form {
-                        kind: FormKind::Rename(tab.name.clone()),
-                        name: tab.name.clone(),
-                        error: None,
-                    });
-                    ui.close();
-                }
-                if ui.button("Duplicate as new plan…").clicked() {
-                    state.tab_form = Some(Form {
-                        kind: FormKind::Duplicate(tab.name.clone()),
-                        name: free_name(&tab.name, &names),
-                        error: None,
-                    });
-                    ui.close();
-                }
-                if ui.button("Reference in chat").clicked() {
-                    actions.push(Action::AddRef(Reference::new(Target::Plan {
-                        name: tab.name.clone(),
-                    })));
-                    ui.close();
-                }
-                ui.separator();
-                if ui.button("Close tab").clicked() {
-                    close.push(tab.name.clone());
-                    ui.close();
-                }
-                if ui
-                    .add_enabled(tabs.len() > 1, egui::Button::new("Close other tabs"))
-                    .clicked()
-                {
-                    close_others = Some(tab.name.clone());
-                    ui.close();
-                }
-            });
-        }
-        ui.add_space(4.0);
-        let busy = state.pending_job.is_some();
-        if ui
-            .add_enabled(!busy, egui::Button::new("+").small())
-            .on_hover_text("Draft a new plan on the beat grid from the shot log")
-            .clicked()
-        {
-            super::open_draft_form(state, project);
-        }
-        super::compare::menu(state, project, ui);
-        if let Some((_, name)) = &state.pending_job {
-            ui.spinner();
-            ui.label(
-                egui::RichText::new(format!("drafting {name}…"))
-                    .size(11.0)
-                    .color(theme::rgb(t.text_muted)),
-            );
-        }
-        let reopenable: Vec<&String> = names
-            .iter()
-            .filter(|n| closed.contains(*n) && Some(n.as_str()) != state.name.as_deref())
-            .collect();
-        if !reopenable.is_empty() {
-            ui.menu_button(
-                egui::RichText::new(format!("{} closed", reopenable.len()))
-                    .size(11.0)
-                    .color(theme::rgb(t.text_muted)),
-                |ui| {
-                    for n in reopenable {
-                        if ui.button(n).clicked() {
-                            reopen = Some(n.clone());
-                            ui.close();
-                        }
-                    }
-                },
+    for tab in &tabs {
+        let font = theme::medium(ui.ctx(), theme::BODY_SIZE);
+        let galley =
+            ui.painter()
+                .layout_no_wrap(tab.name.clone(), font, egui::Color32::PLACEHOLDER);
+        let count = (tab.errors > 0).then(|| tab.errors.to_string());
+        let count_galley = count.as_ref().map(|c| {
+            ui.painter().layout_no_wrap(
+                c.clone(),
+                theme::tabular(ui.ctx(), theme::SMALL_SIZE),
+                theme::rgb(t.danger),
             )
-            .response
-            .on_hover_text("Closed tabs: pick one to reopen it");
+        });
+        let count_w = count_galley
+            .as_ref()
+            .map_or(0.0, |g| GAP + icons::SMALL - 2.0 + 2.0 + g.size().x);
+        let dot_w = if tab.dirty { GAP + 6.0 } else { 0.0 };
+        let w = PAD_LEFT
+            + CLOSE
+            + GAP
+            + icons::SIZE
+            + GAP
+            + galley.size().x
+            + dot_w
+            + count_w
+            + PAD_RIGHT;
+        let (rect, resp) = ui.allocate_exact_size(vec2(w, theme::CONTROL_HEIGHT), Sense::click());
+        resp.widget_info(|| {
+            egui::WidgetInfo::selected(egui::Role::Tab, true, tab.current, &tab.name)
+        });
+        let close_rect = Rect::from_min_size(
+            pos2(
+                rect.left() + PAD_LEFT - 2.0,
+                rect.center().y - (CLOSE + 4.0) / 2.0,
+            ),
+            vec2(CLOSE + 4.0, CLOSE + 4.0),
+        );
+        let close_resp = ui.interact(
+            close_rect,
+            egui::Id::unique("plan_tab_close").with(&tab.name),
+            Sense::click(),
+        );
+        close_resp.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Close {}", tab.name))
+        });
+        let close_resp = widgets::tip(close_resp, t, "Close the tab (the plan file stays)", "");
+        let hovered = resp.hovered() || close_resp.hovered();
+        let p = ui.painter();
+        let fill = if tab.current {
+            Some(theme::selected_fill(t))
+        } else if hovered {
+            Some(theme::rgb(t.raised))
+        } else {
+            None
+        };
+        if let Some(fill) = fill {
+            p.rect_filled(rect, CornerRadius::same(theme::RADIUS_MD), fill);
         }
+        let ink = theme::rgb(if tab.current { t.text } else { t.text_muted });
+        // The close cross: always there, 30 % until the pointer is on it.
+        if close_resp.hovered() {
+            p.rect_filled(close_rect, CornerRadius::same(4), theme::ink_hover(t));
+        }
+        icons::paint(
+            p,
+            close_rect,
+            icons::X,
+            CLOSE,
+            theme::rgb(t.text_muted).gamma_multiply(if close_resp.hovered() { 1.0 } else { 0.3 }),
+        );
+        let mut x = rect.left() + PAD_LEFT + CLOSE + GAP;
+        icons::paint(
+            p,
+            Rect::from_min_size(
+                pos2(x, rect.center().y - icons::SIZE / 2.0),
+                Vec2::splat(icons::SIZE),
+            ),
+            icons::FILM,
+            icons::SIZE,
+            ink,
+        );
+        x += icons::SIZE + GAP;
+        let gw = galley.size().x;
+        p.galley(
+            pos2(x, rect.center().y - galley.size().y / 2.0),
+            galley,
+            ink,
+        );
+        x += gw;
+        if tab.dirty {
+            p.circle_filled(
+                pos2(x + GAP + 3.0, rect.center().y),
+                3.0,
+                theme::rgb(t.accent),
+            );
+            x += dot_w;
+        }
+        if let Some(g) = count_galley {
+            x += GAP;
+            let red = theme::rgb(t.danger);
+            icons::paint(
+                p,
+                Rect::from_min_size(
+                    pos2(x, rect.center().y - (icons::SMALL - 2.0) / 2.0),
+                    Vec2::splat(icons::SMALL - 2.0),
+                ),
+                icons::CIRCLE_X,
+                icons::SMALL - 2.0,
+                red,
+            );
+            x += icons::SMALL;
+            p.galley(pos2(x, rect.center().y - g.size().y / 2.0), g, red);
+        }
+        let tip = format!(
+            "plans/{}.toml{}{}",
+            tab.name,
+            if tab.dirty {
+                if tab.current {
+                    " · unsaved changes"
+                } else {
+                    " · changed since you last opened it"
+                }
+            } else {
+                ""
+            },
+            if tab.errors > 0 {
+                format!(" · check fails ({} problems)", tab.errors)
+            } else {
+                String::new()
+            }
+        );
+        let resp = widgets::tip(resp, t, &tip, "");
+        if close_resp.clicked() || resp.middle_clicked() {
+            close.push(tab.name.clone());
+        } else if resp.clicked() {
+            open = Some(tab.name.clone());
+        }
+        resp.context_menu(|ui| {
+            ui.set_min_width(200.0);
+            if widgets::menu_item(ui, t, Some(icons::PENCIL), "Rename…", "", false).clicked() {
+                state.tab_form = Some(Form {
+                    kind: FormKind::Rename(tab.name.clone()),
+                    name: tab.name.clone(),
+                    error: None,
+                });
+                ui.close();
+            }
+            if widgets::menu_item(
+                ui,
+                t,
+                Some(icons::COPY),
+                "Duplicate as new plan…",
+                "",
+                false,
+            )
+            .clicked()
+            {
+                state.tab_form = Some(Form {
+                    kind: FormKind::Duplicate(tab.name.clone()),
+                    name: free_name(&tab.name, &names),
+                    error: None,
+                });
+                ui.close();
+            }
+            if widgets::menu_item(ui, t, Some(icons::AT_SIGN), "Reference in chat", "", false)
+                .clicked()
+            {
+                actions.push(Action::AddRef(Reference::new(Target::Plan {
+                    name: tab.name.clone(),
+                })));
+                ui.close();
+            }
+            widgets::menu_separator(ui, t);
+            if widgets::menu_item(ui, t, Some(icons::X), "Close tab", "", false).clicked() {
+                close.push(tab.name.clone());
+                ui.close();
+            }
+            if ui
+                .add_enabled_ui(tabs.len() > 1, |ui| {
+                    widgets::menu_item(ui, t, None, "Close other tabs", "", false)
+                })
+                .inner
+                .clicked()
+            {
+                close_others = Some(tab.name.clone());
+                ui.close();
+            }
+        });
+    }
+    // "+": a new plan, or one of the closed tabs.
+    let busy = state.pending_job.is_some();
+    let (rect, plus) = ui.allocate_exact_size(Vec2::splat(theme::CONTROL_HEIGHT), Sense::click());
+    plus.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::Role::Button, true, "New or reopen a plan")
     });
+    let open_menu = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&plus));
+    if plus.hovered() || open_menu {
+        ui.painter().rect_filled(
+            rect,
+            CornerRadius::same(theme::RADIUS_MD),
+            theme::ink(t, theme::INK_10),
+        );
+    }
+    icons::paint(
+        ui.painter(),
+        rect,
+        icons::PLUS,
+        icons::SIZE,
+        if plus.hovered() || open_menu {
+            theme::rgb(t.text_muted)
+        } else {
+            theme::ring(t)
+        },
+    );
+    let plus = widgets::tip(plus, t, "New plan, or reopen a closed tab", "");
+    let reopenable: Vec<&String> = names
+        .iter()
+        .filter(|n| closed.contains(*n) && Some(n.as_str()) != state.name.as_deref())
+        .collect();
+    let mut draft = false;
+    let _ = egui::Popup::menu(&plus)
+        .width(220.0)
+        .gap(theme::SPACE_XS)
+        .show(|ui| {
+            if ui
+                .add_enabled_ui(!busy, |ui| {
+                    widgets::menu_item(ui, t, Some(icons::PLUS), "Draft new plan…", "", false)
+                })
+                .inner
+                .clicked()
+            {
+                draft = true;
+                ui.close();
+            }
+            widgets::menu_separator(ui, t);
+            if reopenable.is_empty() {
+                ui.horizontal(|ui| {
+                    ui.add_space(theme::SPACE_SM);
+                    ui.label(egui::RichText::new("All plans open").color(theme::ink(t, 102)));
+                });
+            }
+            for n in &reopenable {
+                if widgets::menu_item(ui, t, Some(icons::FILM), n, "", false).clicked() {
+                    reopen = Some((*n).clone());
+                    ui.close();
+                }
+            }
+        });
+    if draft {
+        super::open_draft_form(state, project);
+    }
 
     if let Some(keep) = close_others {
         closed.extend(names.iter().filter(|n| **n != keep).cloned());
