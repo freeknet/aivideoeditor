@@ -4328,6 +4328,13 @@ mod tests {
             .state_mut()
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("no app"))?;
+        // The local model needs no key or installed CLI, so Send's state
+        // does not depend on the machine (CI has no `claude`, no API key).
+        app.pages
+            .assistant
+            .prefs
+            .get_or_insert_with(super::store::Prefs::default)
+            .model = Some("local".into());
         app.pages.assistant.input = "and @shot:reel-a#2 too".into();
         h.run_steps(3);
         let send = h
