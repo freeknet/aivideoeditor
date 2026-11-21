@@ -187,6 +187,9 @@ pub(crate) struct Stream {
     pub(crate) must_stop: bool,
     /// Whether a turn is running (a `result` not yet seen).
     pub(crate) busy: bool,
+    /// The prompt size of the last request (from an assistant message's
+    /// usage): how full the context is.
+    context: u64,
 }
 
 impl Stream {
@@ -202,6 +205,7 @@ impl Stream {
             auth_failed: false,
             must_stop: false,
             busy: false,
+            context: 0,
         }
     }
 
@@ -291,6 +295,13 @@ impl Stream {
                 },
                 error: true,
             }];
+        }
+        let u = &m["usage"];
+        let n = |k: &str| u[k].as_u64().unwrap_or(0);
+        let prompt =
+            n("input_tokens") + n("cache_read_input_tokens") + n("cache_creation_input_tokens");
+        if prompt > 0 {
+            self.context = prompt;
         }
         let mut out = Vec::new();
         let mut blocks = Vec::new();
@@ -432,6 +443,16 @@ impl Stream {
         let u = &v["usage"];
         let n = |k: &str| u[k].as_u64().unwrap_or(0);
         let cached = n("cache_read_input_tokens");
+        // `modelUsage` names each model's context window.
+        let window = v["modelUsage"]
+            .as_object()
+            .and_then(|models| {
+                models
+                    .values()
+                    .filter_map(|m| m["contextWindow"].as_u64())
+                    .max()
+            })
+            .unwrap_or(0);
         out.push(Event::Done {
             secs: v["duration_ms"].as_f64().map_or_else(
                 || self.started.elapsed().as_secs_f32(),
@@ -442,6 +463,8 @@ impl Stream {
                 input: n("input_tokens") + cached + n("cache_creation_input_tokens"),
                 cached,
                 output: n("output_tokens"),
+                context: self.context,
+                window,
             },
             cost: v["total_cost_usd"].as_f64(),
         });
@@ -537,16 +560,16 @@ pub(crate) struct Session {
     stream: Arc<Mutex<Stream>>,
     /// False once the process has exited.
     alive: Arc<AtomicBool>,
-    /// The work folder and plan this session belongs to.
+    /// The work folder and the chat (id) this session serves.
     pub(crate) key: (PathBuf, String),
 }
 
 impl Session {
-    /// Starts `claude` with `cfg`; `on_event` is called after each event
-    /// (to repaint).
+    /// Starts `claude` with `cfg` for chat `chat`; `on_event` is called
+    /// after each event (to repaint).
     pub(crate) fn start(
         cfg: &Config,
-        plan: &str,
+        chat: &str,
         on_event: impl Fn() + Send + 'static,
     ) -> Result<Self, String> {
         let mut cmd = Command::new(&cfg.exe);
@@ -639,7 +662,7 @@ impl Session {
             rx,
             stream,
             alive,
-            key: (cfg.work.clone(), plan.to_owned()),
+            key: (cfg.work.clone(), chat.to_owned()),
         })
     }
 
@@ -684,9 +707,10 @@ impl Drop for Session {
     }
 }
 
-/// The file the session id is kept in: `<work>/chat/<plan>.session`.
-pub(crate) fn session_file(work: &Path, plan: &str) -> PathBuf {
-    work.join("chat").join(format!("{plan}.session"))
+/// The file chat `chat`'s session id is kept in:
+/// `<work>/chat/chats/<id>.session`.
+pub(crate) fn session_file(work: &Path, chat: &str) -> PathBuf {
+    super::store::session_path(work, chat)
 }
 
 #[cfg(test)]
@@ -812,6 +836,27 @@ mod tests {
             events.last()
         );
         assert!(!s.busy, "turn over");
+        Ok(())
+    }
+
+    #[test]
+    fn the_last_request_says_how_full_the_context_is() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let mut s = Stream::new(dir.path());
+        s.begin();
+        let events = feed(
+            &mut s,
+            &[
+                r#"{"type":"assistant","message":{"id":"m1","role":"assistant","usage":{"input_tokens":5,"cache_read_input_tokens":40000,"cache_creation_input_tokens":2000,"output_tokens":9},"content":[{"type":"text","text":"Hi"}]},"parent_tool_use_id":null,"session_id":"s"}"#,
+                r#"{"type":"result","subtype":"success","is_error":false,"duration_ms":10,"session_id":"s","usage":{"input_tokens":5,"output_tokens":9},"modelUsage":{"claude-opus-5-5":{"inputTokens":5,"contextWindow":200000}}}"#,
+            ],
+        );
+        assert!(
+            matches!(events.last(), Some(Event::Done { usage, .. })
+                if usage.context == 42_005 && usage.window == 200_000),
+            "context and window: {:?}",
+            events.last()
+        );
         Ok(())
     }
 

@@ -222,6 +222,13 @@ pub(crate) enum LogLine {
         /// What the turn cost, when the runtime reports it (Claude Code).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cost_usd: Option<f64>,
+        /// The last request's prompt, cache included: how full the context
+        /// was at the end of the turn (0: not reported).
+        #[serde(default, skip_serializing_if = "is_zero")]
+        context_tokens: u64,
+        /// The model's context window, when the runtime said (0: not said).
+        #[serde(default, skip_serializing_if = "is_zero")]
+        context_window: u64,
     },
     /// An image a tool returned (a `look` contact sheet), saved beside the
     /// log and shown under the call.
@@ -239,6 +246,11 @@ pub(crate) enum LogLine {
         #[serde(default)]
         error: bool,
     },
+}
+
+/// For serde: leave a zero count out.
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 /// Seconds since the Unix epoch.

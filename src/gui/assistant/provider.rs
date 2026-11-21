@@ -75,6 +75,11 @@ pub(crate) struct Usage {
     pub(crate) cached: u64,
     /// Output tokens.
     pub(crate) output: u64,
+    /// The prompt of the turn's last request, cache included: how full the
+    /// context is (0: not reported).
+    pub(crate) context: u64,
+    /// The model's context window, when the runtime says (0: not said).
+    pub(crate) window: u64,
 }
 
 /// The model's next message.
@@ -612,6 +617,7 @@ pub(crate) fn local_reply(v: &Value) -> Result<Reply, String> {
             input: n("prompt_tokens"),
             cached: 0,
             output: n("completion_tokens"),
+            ..Usage::default()
         },
         model: v["model"].as_str().unwrap_or("local").to_owned(),
     })

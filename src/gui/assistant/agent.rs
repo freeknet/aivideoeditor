@@ -175,6 +175,7 @@ pub(crate) fn run(mut job: Job, emit: &mut dyn FnMut(Event), cancel: &AtomicBool
         usage.input += reply.usage.input;
         usage.cached += reply.usage.cached;
         usage.output += reply.usage.output;
+        usage.context = reply.usage.input;
         if !reply.model.is_empty() {
             model.clone_from(&reply.model);
         }
@@ -378,6 +379,7 @@ mod tests {
                 input: 10,
                 cached: 5,
                 output: 3,
+                ..Usage::default()
             },
             model: "mock-1".into(),
         }

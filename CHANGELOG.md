@@ -66,6 +66,19 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   buttons, and a floating tool island (selection, slip, zoom and hand tools). The hint
   line is gone (hints live in tooltips) and the check bar shows Lucide count pills.
   Compare, storyboard and comments use the same tokens.
+- Chat tabs and history, as Selects: a night holds any number of chats, each about a
+  plan (an attribute) with its own log (`<work>/chat/chats/<id>.jsonl`, listed in
+  `chat/chats.json`) and its own Claude Code session. Old per-plan logs are adopted on
+  load as chats titled after their plan, read in place until next written. The Chats
+  menu lists recent chats with plan and relative time, New chat (Ctrl+Shift+N), Load
+  older, Rename, Archive and Delete (confirmed); a wide panel shows the open chats as
+  28 px tabs with a close cross and "Close other tabs". A new chat is titled from its
+  first message; double-click the title to rename. Find in chat (Ctrl+Shift+F; Ctrl+F
+  stays the workspace search) highlights matches with a counter and next / previous.
+  A message sent while a reply streams waits ("Waiting to send", "Send now" to stop
+  the reply and send it, "Cancel and edit"); Arrow Up on an empty composer recalls the
+  earlier prompts with their references; the composer shows "Context N%" when the
+  runtime reports how full the context is.
 - The assistant panel follows Selects' chat: a 40 px header with a Chats menu (the
   plan picker and New chat), the plan's name and History / settings icon buttons; an
   empty state of one quiet line and outline-pill quick actions; your messages as an
