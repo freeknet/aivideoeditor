@@ -12,6 +12,18 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Chat cards for new plans and slow steps. "Suggest a first cut" (or the agent calling
+  `plan_draft` with no length or aspect, which now answers `SETTINGS_NEEDED`) shows a
+  "Here's our plan" card: length 15/30/60/custom, aspect, pacing, a hero shot from the
+  selection and switches for no repeated shots, people spacing and drop on the hero.
+  Continue starts the same `ave plan` job as the plan page's "Draft new…" window, writes
+  the switches into the plan's rules and puts what needs judgment (pacing, the hero) in
+  the composer for the agent. A new `run_step` tool (index, caption, render) never runs
+  anything itself: the chat shows "Allow this?" with the step's estimated time from the
+  night's measured speeds, and Approve starts the job with a live progress row (percent,
+  time left, Stop); with "Let it apply edits" on, steps start at once, labelled
+  auto-approved. The proposal card is now covered by a headless test (Apply writes a plan
+  version) and the screenshot example shoots all three cards.
 - A design system matched to Selects' dark workspace (`docs/DESIGN.md`): its exact
   tokens (neutral surfaces, white-10 % hairlines, ink overlays, neutral selection,
   lime key, 6/8/10/12/14 px radii, 4 px grid, 10/11/12/14 px type), the Mona Sans
