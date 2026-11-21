@@ -44,6 +44,17 @@ pub(crate) const PAGE_KEY: &str = "assistant";
 /// The per-night option that lets the agent save edits itself.
 pub(crate) const ALLOW_COMMIT: &str = "allow_commit";
 
+/// The tool that asks to start a slow engine step (index, caption, render).
+/// It runs nothing itself: the app turns the call into an approval card.
+pub(crate) const RUN_STEP: &str = "run_step";
+
+/// How `run_step` answers: the request is with the person.
+pub(crate) const APPROVAL_REQUESTED: &str = "APPROVAL_REQUESTED";
+
+/// How `plan_draft` answers the agent when it names no length or aspect:
+/// the person picks the first cut's settings on a card.
+pub(crate) const SETTINGS_NEEDED: &str = "SETTINGS_NEEDED";
+
 /// Who is calling a tool: the agent, whose saves the person must allow, or
 /// the person (Apply on a card), who may always save.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -187,7 +198,11 @@ pub(crate) fn tools() -> Value {
         {"name": "plan_revert", "description": "Restore a saved version (saved as a new version, nothing is lost).",
          "inputSchema": {"type": "object", "required": ["name", "version"], "properties": {"name": {"type": "string"}, "version": {"type": "integer"}}}},
         {"name": "people_map", "description": "Performers: name → clips/ranges, as the no-repeated-performer rule sees them.",
-         "inputSchema": {"type": "object", "properties": {}}}
+         "inputSchema": {"type": "object", "properties": {}}},
+        {"name": RUN_STEP, "description": "Ask to start a slow engine step: index the footage, caption the shot log, or render a plan to video. Nothing runs here: the ave app shows the person an approval card with the estimated time and, if they approve, runs it as a job with live progress in the chat. End your turn after calling it.",
+         "inputSchema": {"type": "object", "required": ["step"], "properties": {
+            "step": {"type": "string", "enum": ["index", "caption", "render"]},
+            "plan": {"type": "string", "description": "The plan to render (render only)."}}}}
     ])
 }
 
@@ -237,6 +252,7 @@ pub(crate) fn call(work: &Path, name: &str, args: &Value, caller: Caller) -> Res
                 "{name} restored from v{n} (saved as v{saved})"
             )))
         }
+        RUN_STEP => run_step(&project, args),
         "people_map" => {
             let mut by: std::collections::BTreeMap<&str, Vec<&str>> =
                 std::collections::BTreeMap::new();
@@ -622,11 +638,47 @@ pub(crate) fn commit_edit(
         .context("the edit was not saved")
 }
 
+/// `run_step`: checked, never run here (see [`RUN_STEP`]).
+fn run_step(p: &Project, args: &Value) -> Result<Vec<Value>> {
+    let what = match str_arg(args, "step")? {
+        "index" => {
+            anyhow::ensure!(
+                p.settings.footage.is_some(),
+                "the night has no footage folder; the person sets it on the night page"
+            );
+            "index the footage".to_owned()
+        }
+        "caption" => {
+            anyhow::ensure!(p.index.is_some(), "index the night first");
+            "caption the shot log".to_owned()
+        }
+        "render" => {
+            let name = str_arg(args, "plan")?;
+            anyhow::ensure!(plan_path(p, name).exists(), "there is no plan {name}");
+            format!("render {name}")
+        }
+        other => anyhow::bail!("step must be index, caption or render, not {other}"),
+    };
+    Ok(text(format!(
+        "{APPROVAL_REQUESTED}: the person is asked to approve: {what}. The ave app shows them \
+         the estimated time and, if they approve, runs it as a job with live progress. Nothing \
+         has started yet. End your turn now and say you asked (outside the ave app nothing runs)."
+    )))
+}
+
 /// `plan_draft`.
 fn plan_draft(p: &Project, args: &Value, caller: Caller) -> Result<Vec<Value>> {
     let index = p.index.as_ref().context("the night is not indexed yet")?;
     let music = p.music.as_ref().context("the music is not mapped yet")?;
     let name = str_arg(args, "name")?;
+    if caller == Caller::Agent && args.get("seconds").is_none() && args.get("aspect").is_none() {
+        return Ok(text(format!(
+            "{SETTINGS_NEEDED}: nothing was drafted. The person picks the first cut's length, \
+             aspect, pacing, hero shot and rules on a card in the ave app; end your turn now and \
+             their choice comes back as the next message. Outside the app, ask them for the \
+             length and aspect, then call plan_draft again with seconds and aspect."
+        )));
+    }
     let aspect: crate::plan::Aspect =
         serde_json::from_value(args.get("aspect").cloned().unwrap_or(json!("9x16")))?;
     let end_card = args["end_card"]
@@ -905,6 +957,36 @@ pub(crate) mod tests {
                 .is_some_and(|a| a.iter().all(|t| t["input_schema"]["type"] == "object")),
             "Messages API shape"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn run_step_asks_and_runs_nothing() -> anyhow::Result<()> {
+        use super::{Caller, call};
+        let dir = night(2)?;
+        let work = dir.path();
+        let asked = first_text(&call(
+            work,
+            super::RUN_STEP,
+            &json!({"step": "render", "plan": "t"}),
+            Caller::Agent,
+        )?);
+        assert!(
+            asked.starts_with(super::APPROVAL_REQUESTED) && asked.contains("render t"),
+            "the request goes to the person: {asked}"
+        );
+        assert!(!work.join("renders").exists(), "nothing was rendered");
+        for bad in [
+            json!({"step": "render", "plan": "nope"}),
+            json!({"step": "caption"}),
+            json!({"step": "index"}),
+            json!({"step": "dance"}),
+        ] {
+            assert!(
+                call(work, super::RUN_STEP, &bad, Caller::Agent).is_err(),
+                "refused up front: {bad}"
+            );
+        }
         Ok(())
     }
 
