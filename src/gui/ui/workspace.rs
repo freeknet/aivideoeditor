@@ -325,6 +325,13 @@ fn focus_id() -> egui::Id {
     egui::Id::unique("workspace-focused-panel")
 }
 
+/// Whether the panel `key` (`"timeline"`, `"viewer"`, …) is the focused
+/// one: the panel that last received a pointer-down. Panels that paint a
+/// selection use it to pick Selects' key colour (focused) or white.
+pub(crate) fn panel_focused(ctx: &egui::Context, key: &str) -> bool {
+    ctx.data(|data| data.get_temp::<egui::Id>(focus_id())) == Some(egui::Id::unique(key))
+}
+
 /// Makes the panel `key` the focused one when a press lands in `rect`
 /// (the panel that last received a pointer-down is the focused one).
 fn claim_focus(ctx: &egui::Context, key: &str, rect: egui::Rect) {

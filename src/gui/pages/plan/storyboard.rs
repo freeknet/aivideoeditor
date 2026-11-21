@@ -18,14 +18,14 @@
 
 use std::collections::BTreeSet;
 
-use egui::{Align2, Color32, CornerRadius, FontId, Rect, Sense, Stroke, Ui, pos2, vec2};
+use egui::{Align2, Color32, CornerRadius, Rect, Sense, Ui, pos2, vec2};
 
 use super::timeline::Map;
 use super::{Io, Shown, State};
-use crate::gui::ui::theme;
+use crate::gui::ui::{theme, widgets};
 
 /// Height of the section band at the top of the lane.
-const BAND_H: f32 = 13.0;
+const BAND_H: f32 = 14.0;
 
 /// Song sections overlapping the plan, as (name, start s, end s) relative to
 /// the plan's start.
@@ -54,40 +54,37 @@ pub(super) fn lane(
 ) {
     let t = s.theme;
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, CornerRadius::ZERO, theme::rgb(t.panel));
     let band = Rect::from_min_size(rect.min, vec2(rect.width(), BAND_H));
-    let cards = Rect::from_min_max(pos2(rect.left(), band.bottom() + 1.0), rect.max);
+    let cards = Rect::from_min_max(pos2(rect.left(), band.bottom() + 2.0), rect.max);
 
-    // Section bands and dividers.
+    // Section bands.
     for (n, (name, a, b)) in sections(s).iter().enumerate() {
         let (x0, x1) = (m.x(*a), m.x(*b));
         if x1 < rect.left() || x0 > rect.right() {
             continue;
         }
-        let r = Rect::from_min_max(pos2(x0, band.top()), pos2(x1, band.bottom()));
-        let fill = if n % 2 == 0 {
-            theme::translucent(t.accent, 34)
-        } else {
-            theme::translucent(t.accent, 18)
-        };
-        painter.rect_filled(r.shrink2(vec2(0.5, 0.0)), CornerRadius::ZERO, fill);
-        let clip = painter.with_clip_rect(r.intersect(rect));
-        clip.text(
-            pos2(r.left().max(rect.left()) + 4.0, r.center().y),
-            Align2::LEFT_CENTER,
-            name.to_uppercase(),
-            FontId::proportional(9.0),
-            theme::rgb(t.text_muted),
+        let r = Rect::from_min_max(
+            pos2(x0.floor(), band.top()),
+            pos2(x1.floor() - 1.0, band.bottom()),
         );
-        painter.vline(
-            x0,
-            band.top()..=rect.bottom(),
-            Stroke::new(1.0, theme::rgb(t.border_strong)),
+        let fill = if n % 2 == 0 {
+            theme::ink(t, theme::INK_08)
+        } else {
+            theme::ink(t, theme::INK_05)
+        };
+        painter.rect_filled(r, CornerRadius::same(theme::RADIUS_XS), fill);
+        painter.with_clip_rect(r.intersect(rect)).text(
+            pos2(r.left().max(rect.left()) + 6.0, r.center().y),
+            Align2::LEFT_CENTER,
+            name,
+            theme::medium(ui.ctx(), theme::TINY_SIZE),
+            theme::rgb(t.text_muted),
         );
     }
 
     // Cards.
     let ratio = super::aspect_ratio(s.plan.aspect);
+    let outline = super::timeline::selection_color(ui, t);
     let mut clicked = None;
     for (k, (shot, &(start, dur))) in s.plan.shots.iter().zip(&s.timing).enumerate() {
         let (x0, x1) = (m.x(start), m.x(start + dur));
@@ -95,44 +92,39 @@ pub(super) fn lane(
             continue;
         }
         let card = Rect::from_min_max(
-            pos2(x0 + 1.5, cards.top() + 1.0),
-            pos2(x1 - 1.5, cards.bottom() - 2.0),
+            pos2(x0.floor(), cards.top()),
+            pos2(x1.floor() - 1.0, cards.bottom()),
         );
         if card.width() < 4.0 {
             continue;
         }
-        let resp = ui
-            .interact(card, egui::Id::unique("plan_story").with(k), Sense::click())
-            .on_hover_text(if shot.note.is_empty() {
-                format!("Shot {} · {} · no note", k + 1, shot.clip)
-            } else {
-                format!("Shot {} · {}\n{}", k + 1, shot.clip, shot.note)
-            });
+        let resp = ui.interact(card, egui::Id::unique("plan_story").with(k), Sense::click());
+        let tip = if shot.note.is_empty() {
+            format!("Shot {} · {} · no note", k + 1, shot.clip)
+        } else {
+            format!("Shot {} · {}\n{}", k + 1, shot.clip, shot.note)
+        };
+        let resp = widgets::tip(resp, t, &tip, "");
         if resp.clicked() {
             clicked = Some(k);
         }
         let selected = s.sel.contains(&k);
         painter.rect(
             card,
-            CornerRadius::same(3),
-            theme::rgb(if selected { t.selection } else { t.raised }),
-            Stroke::new(
-                if selected { 1.5 } else { 1.0 },
-                theme::rgb(if selected {
-                    t.accent
-                } else if resp.hovered() {
-                    t.border_strong
-                } else {
-                    t.border
-                }),
-            ),
+            CornerRadius::same(4),
+            if resp.hovered() {
+                theme::ink(t, theme::INK_08)
+            } else {
+                theme::ink(t, theme::INK_05)
+            },
+            theme::ink_line(t),
             egui::StrokeKind::Inside,
         );
-        let th_h = card.height() - 6.0;
-        let th_w = (th_h * ratio).min(card.width() - 6.0);
-        let mut text_left = card.left() + 4.0;
+        let th_h = card.height() - 8.0;
+        let th_w = (th_h * ratio).min(card.width() - 8.0);
+        let mut text_left = card.left() + 6.0;
         if th_w >= 10.0 {
-            let th = Rect::from_min_size(card.min + vec2(3.0, 3.0), vec2(th_w, th_h));
+            let th = Rect::from_min_size(card.min + vec2(4.0, 4.0), vec2(th_w, th_h));
             if th.left() >= rect.left() && th.right() <= rect.right() {
                 if let Some(path) = s.clip_path(&shot.clip) {
                     io.thumbs.paint(
@@ -141,32 +133,34 @@ pub(super) fn lane(
                         &path,
                         f64::from(shot.t_in),
                         shot.cx,
-                        theme::rgb(t.hover),
+                        theme::rgb(t.raised),
                     );
                 }
-                text_left = th.right() + 4.0;
+                text_left = th.right() + 6.0;
             }
         }
-        let text = Rect::from_min_max(pos2(text_left, card.top() + 3.0), card.max - vec2(3.0, 2.0));
+        let text = Rect::from_min_max(pos2(text_left, card.top() + 4.0), card.max - vec2(4.0, 4.0));
         if text.width() > 16.0 {
             let tp = painter.with_clip_rect(text.intersect(rect));
-            let ink = theme::rgb(if selected { t.selection_text } else { t.text });
             tp.text(
                 text.min,
                 Align2::LEFT_TOP,
-                format!("#{} · {}b", k + 1, shot.beats),
-                FontId::proportional(10.0),
-                ink,
+                format!("{}  ·  {} beats", k + 1, shot.beats),
+                theme::medium(ui.ctx(), theme::SMALL_SIZE),
+                theme::rgb(t.text),
             );
             if !shot.note.is_empty() {
                 let galley = ui.painter().layout(
                     shot.note.clone(),
-                    FontId::proportional(9.5),
+                    theme::font(theme::SMALL_SIZE),
                     theme::rgb(t.text_muted),
                     text.width().max(8.0),
                 );
-                tp.galley(text.min + vec2(0.0, 13.0), galley, Color32::PLACEHOLDER);
+                tp.galley(text.min + vec2(0.0, 15.0), galley, Color32::PLACEHOLDER);
             }
+        }
+        if selected {
+            super::timeline::paint_selected(&painter, card, outline);
         }
     }
     if let Some(k) = clicked {
