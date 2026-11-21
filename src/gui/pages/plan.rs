@@ -1780,6 +1780,12 @@ fn keys(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &egui::Ui, hovere
         if plain(Key::T) {
             state.tool = Tool::Slip;
         }
+        if ui.input_mut(|i| crate::gui::ui::keymap::consume(i, "tool-zoom", s.preset)) {
+            state.tool = Tool::Zoom;
+        }
+        if ui.input_mut(|i| crate::gui::ui::keymap::consume(i, "tool-hand", s.preset)) {
+            state.tool = Tool::Hand;
+        }
         if ui.input(|i| i.key_pressed(Key::Z) && i.modifiers.shift && !i.modifiers.command) {
             state.view.fit = true;
         }
