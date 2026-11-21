@@ -231,6 +231,17 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- The timeline's A1 waveform no longer shows red "clipped" marks along a loud but
+  mastered track. The music is now decoded at its own rate and channels (ffmpeg's
+  stereo-to-mono downmix summed past full scale, and resampling rang over it), and a
+  column is marked only where a channel holds three consecutive samples at 0.999 of
+  full scale or more. Bars are 1.5 px on a 2 px pitch at 55 % white, so a loud master
+  reads as a shape rather than a white wall.
+- Short V1 clips no longer show cut-off names ("4 M", "15 I"): a clip draws its name
+  only when it is at least the text's width plus 12 px, else just the shot number if
+  that fits, else nothing, and the text never runs past the clip.
+- The timeline's Zoom and Hand tools have shortcuts, Z and H (the same in Premiere
+  and Final Cut), listed on the shortcut sheet and shown in the tool island tooltips.
 - Symbols (▾ ✕ ▶ …) draw on Linux and macOS: the symbol-font fallback now looks
   in the per-family folders (`/usr/share/fonts/truetype/dejavu`, `…/noto`,
   `/System/Library/Fonts`) and loads every fallback it finds, not just the first.

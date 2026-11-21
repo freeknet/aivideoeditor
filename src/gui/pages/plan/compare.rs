@@ -809,7 +809,13 @@ pub(super) fn view(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut U
                 Some(kind) => format!("{}  {} · {}", k + 1, shot.clip, kind.label()),
                 None => format!("{}  {}", k + 1, shot.clip),
             };
-            timeline::paint_name(&lp, block, lane_rect.left(), &name);
+            timeline::paint_name(
+                &lp,
+                block,
+                lane_rect.left(),
+                &name,
+                Some(&(k + 1).to_string()),
+            );
             let selected = c
                 .row
                 .and_then(|r| changes.get(r))
@@ -862,7 +868,7 @@ pub(super) fn view(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut U
             );
             timeline::paint_clip(&lp, block, timeline::GRAPHIC_CLIP);
             timeline::paint_clip_border(&lp, block, timeline::GRAPHIC_CLIP);
-            timeline::paint_name(&lp, block, lane_rect.left(), "End card");
+            timeline::paint_name(&lp, block, lane_rect.left(), "End card", None);
         }
     }
     // The playhead, on the side the viewer plays.
