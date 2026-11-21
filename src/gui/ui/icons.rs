@@ -265,6 +265,8 @@ pub const SPARKLE: char = '\u{e47e}';
 pub const SPARKLES: char = '\u{e412}';
 /// `split`: split a clip.
 pub const SPLIT: char = '\u{e440}';
+/// `square`: stop (the composer's send button while a reply streams).
+pub const SQUARE: char = '\u{e167}';
 /// `star`: a pick, a rating.
 pub const STAR: char = '\u{e176}';
 /// `step-back`: one frame back.

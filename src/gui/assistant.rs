@@ -32,6 +32,7 @@
 //! | [`links`] | `ave://` links in the agent's text, shown as chips |
 //! | [`store`] | chat logs, plan versions, preferences |
 //! | [`complete`] | the `@` autocomplete and chip/token merging |
+//! | [`look`] | the chat's own drawing pieces (activity rows, the mode switch) |
 //! | [`markdown`] | the bold/bullet text the model writes |
 //!
 //! A conversation belongs to one plan and lives in `<work>/chat/<plan>.jsonl`;
@@ -43,6 +44,7 @@ mod claude_code;
 mod complete;
 mod context;
 mod links;
+mod look;
 mod markdown;
 mod model;
 pub(crate) mod ops;
@@ -57,7 +59,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Instant, SystemTime};
 
-use egui::{Align, CornerRadius, Layout, RichText, Sense, Stroke, Ui, Vec2};
+use egui::{Align, CornerRadius, Layout, Margin, Rect, RichText, Sense, Stroke, Ui, Vec2};
 
 use self::agent::Event;
 use self::model::{Block, LogLine, Msg, Proposal, Role, Status};
@@ -65,8 +67,8 @@ use self::ops::{EditOp, Effect, Night, OpError, Scope};
 use self::provider::Delta;
 use crate::gui::app::Action;
 use crate::gui::pages::PageCtx;
-use crate::gui::ui::theme::{self, SPACE_SM, SPACE_XS};
-use crate::gui::ui::widgets;
+use crate::gui::ui::theme::{self, SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XS};
+use crate::gui::ui::{icons, widgets};
 use crate::plan::{Plan, Problem, Shot};
 use crate::project::Project;
 use crate::refs::{Modifier, Reference, Target};
@@ -120,6 +122,16 @@ enum Tab {
     Chat,
     /// Applied proposals and plan versions.
     History,
+}
+
+/// What the composer box is for, as Selects' Chat / Comments switch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum Mode {
+    /// Talking to the assistant.
+    #[default]
+    Chat,
+    /// The open plan's review comments.
+    Comments,
 }
 
 /// A question the model is waiting on.
@@ -233,6 +245,8 @@ pub(crate) struct State {
     scope: Option<ScopeChoice>,
     /// The tab on show.
     tab: Tab,
+    /// Chat or comments, as the composer's switch says.
+    mode: Mode,
     /// Whether the settings strip is open.
     settings_open: bool,
     /// The API key being typed.
@@ -290,8 +304,15 @@ pub(crate) fn panel(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
         state.claude = Some(claude_code::find());
     }
     let Some(project) = ctx.project.as_ref() else {
-        widgets::title(ui, ctx.theme, "Assistant");
-        widgets::muted(ui, ctx.theme, "Open a night to talk about its plans.");
+        widgets::panel_header(ui, ctx.theme, "Assistant", |_| {});
+        widgets::empty_state(
+            ui,
+            ctx.theme,
+            icons::MESSAGE_SQUARE,
+            "No night open",
+            "Open a night to talk about its plans.",
+            |_| {},
+        );
         return;
     };
     sync_chat(project, state, &ctx.selection.clone());
@@ -301,34 +322,55 @@ pub(crate) fn panel(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
     if state.settings_open {
         settings(ctx, state, ui);
     }
-    if let Some(e) = state.error.clone() {
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new(e).small().color(theme::rgb(ctx.theme.danger)));
-            if ui.small_button("✕").clicked() {
-                state.error = None;
-            }
-        });
-    }
     if state.chat.is_none() {
-        ui.add_space(SPACE_SM);
-        widgets::muted(
+        if let Some(e) = state.error.clone() {
+            error_row(ctx, state, ui, &e);
+        }
+        widgets::empty_state(
             ui,
             ctx.theme,
-            "This night has no plans yet. Draft one (ave plan) and the assistant can edit it.",
+            icons::FILE_TEXT,
+            "No plans yet",
+            "Draft one (ave plan) and the assistant can edit it.",
+            |_| {},
         );
         return;
     }
     match state.tab {
         Tab::Chat => {
+            // Selects' composer form: 12 px in from the panel's sides, 12
+            // px off its foot (the panel's own inset is 8).
             egui::Panel::bottom("assistant_composer")
                 .resizable(false)
-                .show_separator_line(true)
-                .frame(egui::Frame::new().inner_margin(theme::margin_xy(0.0, SPACE_SM)))
+                .show_separator_line(false)
+                .frame(egui::Frame::new().inner_margin(Margin {
+                    left: theme::as_margin(SPACE_XS),
+                    right: theme::as_margin(SPACE_XS),
+                    top: theme::as_margin(SPACE_SM),
+                    bottom: theme::as_margin(SPACE_XS),
+                }))
                 .show(ui, |ui| composer(ctx, state, ui));
-            conversation(ctx, state, ui);
+            match state.mode {
+                Mode::Chat => conversation(ctx, state, ui),
+                Mode::Comments => comments(ctx, state, ui),
+            }
         }
-        Tab::History => history(ctx, state, ui),
+        Tab::History => {
+            if let Some(e) = state.error.clone() {
+                error_row(ctx, state, ui, &e);
+            }
+            history(ctx, state, ui);
+        }
     }
+}
+
+/// The last error as a notice row with a dismiss button.
+fn error_row(ctx: &PageCtx<'_>, state: &mut State, ui: &mut Ui, error: &str) {
+    look::notice_row(ui, ctx.theme, error, look::Tone::Error, |ui| {
+        if widgets::icon_btn(ui, ctx.theme, icons::X, "Dismiss", "").clicked() {
+            state.error = None;
+        }
+    });
 }
 
 /// Opens the right conversation: the plan saved for this night, else the
@@ -696,77 +738,141 @@ fn header(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                 .collect()
         })
         .unwrap_or_default();
+    let theme = ctx.theme;
     let mut switch_to = None;
-    ui.horizontal(|ui| {
-        let current = state
-            .chat
-            .as_ref()
-            .map(|c| c.plan.clone())
-            .unwrap_or_default();
-        ui.add_enabled_ui(state.turn.is_none(), |ui| {
-            egui::ComboBox::from_id_salt("assistant_plan")
-                .selected_text(
-                    RichText::new(if current.is_empty() {
-                        "no plan"
-                    } else {
-                        &current
-                    })
-                    .strong(),
-                )
-                .width(120.0)
-                .show_ui(ui, |ui| {
-                    for s in &stems {
-                        if ui.selectable_label(*s == current, s).clicked() && *s != current {
-                            switch_to = Some(s.clone());
+    let mut new_chat = false;
+    let current = state
+        .chat
+        .as_ref()
+        .map(|c| c.plan.clone())
+        .unwrap_or_default();
+    let idle = state.turn.is_none();
+    let can_reset = idle && state.chat.as_ref().is_some_and(|c| !c.log.is_empty());
+    let tab = state.tab;
+    widgets::panel_bar(
+        ui,
+        theme,
+        |ui| {
+            // Selects' Chats button: the conversation list. Here a
+            // conversation belongs to a plan, so the list is the plans.
+            let id = ui.make_persistent_id("assistant-chats");
+            let open = egui::Popup::is_id_open(ui.ctx(), id);
+            let button = widgets::icon_toggle_sized(
+                ui,
+                theme,
+                icons::MENU,
+                "Chats: the plan this conversation is about",
+                "",
+                open,
+                32.0,
+            );
+            let _ = egui::Popup::menu(&button)
+                .id(id)
+                .width(280.0)
+                .gap(SPACE_XS)
+                .show(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.add_space(SPACE_SM);
+                        widgets::menu_heading(ui, theme, "Plans");
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            let r = ui
+                                .add_enabled_ui(can_reset, |ui| {
+                                    widgets::button_with(
+                                        ui,
+                                        theme,
+                                        widgets::ButtonKind::Ghost,
+                                        Some(icons::PLUS),
+                                        "New chat",
+                                    )
+                                })
+                                .inner;
+                            if widgets::tip(
+                                r,
+                                theme,
+                                "Start a fresh conversation (the old one is kept beside it)",
+                                "",
+                            )
+                            .clicked()
+                            {
+                                new_chat = true;
+                                ui.close();
+                            }
+                        });
+                    });
+                    widgets::menu_separator(ui, theme);
+                    ui.add_enabled_ui(idle, |ui| {
+                        for s in &stems {
+                            if widgets::menu_item(ui, theme, None, s, "", *s == current).clicked() {
+                                if *s != current {
+                                    switch_to = Some(s.clone());
+                                }
+                                ui.close();
+                            }
                         }
-                    }
-                })
-                .response
+                    });
+                });
+            let title = match tab {
+                Tab::Chat => current.clone(),
+                Tab::History => format!("History of {current}"),
+            };
+            let mut job = egui::text::LayoutJob::simple_singleline(
+                title,
+                theme::font(theme::BODY_SIZE),
+                theme::rgb(theme.text_muted),
+            );
+            job.wrap.max_width = (ui.available_width() - 32.0 * 2.0 - SPACE_SM * 2.0).max(0.0);
+            job.wrap.max_rows = 1;
+            job.wrap.break_anywhere = true;
+            ui.add_space(SPACE_XS);
+            ui.add(egui::Label::new(job).selectable(false))
                 .on_hover_text("The plan this conversation is about");
-        });
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui
-                .small_button("⚙")
-                .on_hover_text("Assistant settings: model key, local server, autonomy")
-                .clicked()
+        },
+        |ui| {
+            if widgets::icon_toggle_sized(
+                ui,
+                theme,
+                icons::SETTINGS_2,
+                "Assistant settings: model key, local server, autonomy",
+                "",
+                state.settings_open,
+                32.0,
+            )
+            .clicked()
             {
                 state.settings_open = !state.settings_open;
             }
-            let can_reset =
-                state.turn.is_none() && state.chat.as_ref().is_some_and(|c| !c.log.is_empty());
-            if ui
-                .add_enabled(can_reset, egui::Button::new("New").small())
-                .on_hover_text("Start a fresh conversation (the old one is kept beside it)")
-                .clicked()
-                && let Some(chat) = state.chat.as_mut()
+            if widgets::icon_toggle_sized(
+                ui,
+                theme,
+                icons::HISTORY,
+                "History: applied proposals and plan versions",
+                "",
+                state.tab == Tab::History,
+                32.0,
+            )
+            .clicked()
             {
-                let old = chat.log_path();
-                let kept = old.with_file_name(format!("{}.{}.jsonl", chat.plan, model::now()));
-                // A new conversation is a new Claude Code session too.
-                state.session = None;
-                let _ = std::fs::remove_file(claude_code::session_file(&chat.work, &chat.plan));
-                if let Err(e) = std::fs::rename(&old, &kept) {
-                    state.error = Some(format!("could not archive the conversation: {e}"));
-                } else {
-                    *chat = open_chat(&chat.work.clone(), &chat.plan.clone());
-                    state.cards.clear();
-                }
+                state.tab = match state.tab {
+                    Tab::Chat => Tab::History,
+                    Tab::History => Tab::Chat,
+                };
             }
-        });
-    });
-    // Tabs on their own row: beside the plan picker they collided with the
-    // header buttons in a narrow panel.
-    ui.horizontal(|ui| {
-        for tab in [Tab::Chat, Tab::History] {
-            let label = match tab {
-                Tab::Chat => "Chat",
-                Tab::History => "History",
-            };
-            if ui.selectable_label(state.tab == tab, label).clicked() {
-                state.tab = tab;
-            }
+        },
+    );
+    if new_chat && let Some(chat) = state.chat.as_mut() {
+        let old = chat.log_path();
+        let kept = old.with_file_name(format!("{}.{}.jsonl", chat.plan, model::now()));
+        // A new conversation is a new Claude Code session too.
+        state.session = None;
+        let _ = std::fs::remove_file(claude_code::session_file(&chat.work, &chat.plan));
+        if let Err(e) = std::fs::rename(&old, &kept) {
+            state.error = Some(format!("could not archive the conversation: {e}"));
+        } else {
+            *chat = open_chat(&chat.work.clone(), &chat.plan.clone());
+            state.cards.clear();
+            state.tab = Tab::Chat;
         }
-    });
+    }
     if let Some(plan) = switch_to
         && let Some(project) = ctx.project.as_ref()
     {
@@ -780,74 +886,55 @@ fn header(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
 fn settings(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
     let theme = ctx.theme;
     egui::Frame::new()
-        .fill(theme::rgb(theme.raised))
-        .stroke(Stroke::new(1.0, theme::rgb(theme.border)))
-        .corner_radius(CornerRadius::same(theme::RADIUS))
-        .inner_margin(theme::margin(SPACE_SM))
+        .stroke(theme::ink_line(theme))
+        .fill(theme::ink(theme, theme::INK_03))
+        .corner_radius(CornerRadius::same(theme::RADIUS_LG))
+        .inner_margin(theme::margin(SPACE_MD))
+        .outer_margin(Margin {
+            left: 0,
+            right: 0,
+            top: theme::as_margin(SPACE_SM),
+            bottom: 0,
+        })
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = SPACE_SM;
             let Some(prefs) = state.prefs.as_mut() else {
                 return;
             };
             let env_key = std::env::var("ANTHROPIC_API_KEY").is_ok_and(|k| !k.trim().is_empty());
-            ui.label(RichText::new("Claude API key").strong());
+            widgets::menu_heading(ui, theme, "Claude API key");
             if env_key {
                 widgets::muted(ui, theme, "Using ANTHROPIC_API_KEY from the environment.");
             } else {
+                let at = store::prefs_path().map(|p| p.display().to_string()).unwrap_or_default();
                 ui.horizontal(|ui| {
                     ui.add(
                         egui::TextEdit::singleline(&mut state.key_draft)
                             .password(true)
                             .hint_text(if prefs.api_key.is_some() { "saved — paste to replace" } else { "sk-ant-…" })
-                            .desired_width(ui.available_width() - 60.0),
-                    );
-                    if ui.button("Save").clicked() {
+                            .desired_width(ui.available_width() - 64.0),
+                    )
+                    .accessible_name("Claude API key")
+                    .on_hover_text(format!("Stored in plain text at {at}. Or set ANTHROPIC_API_KEY. Keys: console.anthropic.com."));
+                    if widgets::outline_button(ui, theme, "Save").clicked() {
                         let key = state.key_draft.trim().to_owned();
                         prefs.api_key = (!key.is_empty()).then_some(key);
                         state.key_draft.clear();
                         state.error = prefs.save().err().map(|e| format!("{e:#}"));
                     }
                 });
-                let at = store::prefs_path().map(|p| p.display().to_string()).unwrap_or_default();
-                widgets::muted(
-                    ui,
-                    theme,
-                    &format!("Stored in plain text at {at}. Or set ANTHROPIC_API_KEY. Keys: console.anthropic.com."),
-                );
             }
-            ui.add_space(SPACE_XS);
-            ui.label(RichText::new("Local model server").strong());
+            widgets::menu_heading(ui, theme, "Local model server");
             ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut state.url_draft).desired_width(ui.available_width() - 60.0))
-                    .accessible_name("Local model server");
-                if ui.button("Save").clicked() {
+                ui.add(egui::TextEdit::singleline(&mut state.url_draft).desired_width(ui.available_width() - 64.0))
+                    .accessible_name("Local model server")
+                    .on_hover_text("llama.cpp's server (AVE_LLM_URL). Small local models plan poorly; use it offline.");
+                if widgets::outline_button(ui, theme, "Save").clicked() {
                     prefs.local_url = Some(state.url_draft.trim().to_owned());
                     state.error = prefs.save().err().map(|e| format!("{e:#}"));
                 }
             });
-            widgets::muted(ui, theme, "llama.cpp's server (AVE_LLM_URL). Small local models plan poorly; use it offline.");
-            ui.add_space(SPACE_XS);
-            let mut allow = allow_commit(ctx);
-            ui.label(RichText::new("Permission").strong());
-            ui.horizontal_wrapped(|ui| {
-                let mut changed = false;
-                changed |= ui
-                    .radio_value(&mut allow, false, "Ask")
-                    .on_hover_text("The assistant stages every edit as a card; you apply it.")
-                    .changed();
-                changed |= ui
-                    .radio_value(&mut allow, true, "Let the assistant apply edits")
-                    .on_hover_text("The assistant may save edits itself; each one is a card you can revert.")
-                    .changed();
-                if changed {
-                    state.error = set_page_option(
-                        ctx,
-                        crate::mcp::ALLOW_COMMIT,
-                        toml::Value::Boolean(allow),
-                    );
-                }
-            });
-            ui.add_space(SPACE_XS);
             let mut auto = auto_apply(ctx);
             if widgets::switch(ui, theme, &mut auto, "Apply proposals that keep the check clean")
                 .on_hover_text("Off: every proposal waits for you (suggest only). On: proposals that add no check problems are applied at once, still as a revertible version.")
@@ -911,7 +998,7 @@ fn runtime(state: &State) -> Runtime {
 fn blocked_reason(state: &State) -> Option<String> {
     match runtime(state) {
         Runtime::Api(_) if state.prefs.as_ref().and_then(store::Prefs::key).is_none() => Some(
-            "No Claude API key. Set ANTHROPIC_API_KEY, paste a key under ⚙, or pick Claude Code or              the local model."
+            "No Claude API key. Set ANTHROPIC_API_KEY, paste a key in the assistant settings, or pick Claude Code or the local model."
                 .to_owned(),
         ),
         Runtime::ClaudeCode(_) | Runtime::Api(_) | Runtime::Local => None,
@@ -931,7 +1018,7 @@ fn fallback_note(state: &State) -> Option<String> {
     Some(match (&state.claude, &state.claude_down) {
         (_, Some(why)) => format!("{why} Using {using}."),
         (Some(None) | None, None) => format!(
-            "Claude Code is not installed (no `claude` on PATH); using {using}. Install it from              claude.com/code and log in once."
+            "Claude Code is not installed (no `claude` on PATH); using {using}. Install it from claude.com/code and log in once."
         ),
         (Some(Some(_)), None) => format!("Using {using}."),
     })
@@ -1020,94 +1107,38 @@ fn resolve_scope(
     }
 }
 
-/// The composer: question buttons, scope and reference chips, the input,
-/// and the add / model / send row.
+/// The composer, as Selects': the answer card when the model asked
+/// something, then one dark box holding the notices, the Chat / Comments
+/// switch, the scope pills, the staged references, the input and the
+/// add / model / send toolbar.
 fn composer(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
     let theme = ctx.theme;
     let busy = state.turn.is_some();
     let mut send: Option<String> = None;
+    let id = ui.make_persistent_id("assistant_input");
 
-    if let Some(ask) = state.chat.as_ref().and_then(|c| c.ask.clone())
+    if state.mode == Mode::Chat
+        && let Some(ask) = state.chat.as_ref().and_then(|c| c.ask.clone())
         && !busy
     {
-        ui.horizontal_wrapped(|ui| {
-            ui.label(
-                RichText::new("Answer:")
-                    .small()
-                    .color(theme::rgb(theme.text_muted)),
-            )
-            .on_hover_text(&ask.question);
-            for o in &ask.options {
-                if widgets::button(ui, theme, o, widgets::Emphasis::Secondary).clicked() {
-                    send = Some(o.clone());
-                }
-            }
-        });
-        ui.add_space(SPACE_XS);
+        if let Some(answer) = options_card(ctx, ui, &ask, id) {
+            send = Some(answer);
+        }
+        ui.add_space(SPACE_SM);
     }
 
     let refs = complete::merge(ctx.refs, &state.input);
     let selection = ctx.selection.clone();
     let scope = effective_scope(state, &refs, &selection);
     let (change, keep) = scoped_shots(state, &refs, &selection);
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = Vec2::splat(SPACE_XS);
-        for choice in [
-            ScopeChoice::Whole,
-            ScopeChoice::Selected,
-            ScopeChoice::Build,
-            ScopeChoice::FromDrop,
-        ] {
-            let on = scope == choice;
-            let mut label = choice.label().to_owned();
-            if choice == ScopeChoice::Selected {
-                label = format!("{label} ({})", change.len());
-            }
-            let text = RichText::new(label).small().color(theme::rgb(if on {
-                theme.text
-            } else {
-                theme.text_muted
-            }));
-            let r = ui
-                .selectable_label(on, text)
-                .on_hover_text(if state.scope.is_none() && on {
-                    "Scope follows the selection; click to pin one"
-                } else {
-                    "What the assistant may change"
-                });
-            if r.clicked() {
-                state.scope = if state.scope == Some(choice) {
-                    None
-                } else {
-                    Some(choice)
-                };
-            }
-        }
-        if !keep.is_empty() {
-            ui.label(
-                RichText::new(format!(
-                    "· keeping {}",
-                    keep.iter()
-                        .map(|k| format!("#{k}"))
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                ))
-                .small()
-                .color(theme::rgb(theme.text_muted)),
-            );
-        }
-    });
 
-    chips(ctx, state, ui, &refs);
-
-    // The input, with Enter to send and the `@` list.
-    let id = ui.make_persistent_id("assistant_input");
+    // The `@` list and Enter to send, from the cursor as it was last frame.
     let focused = ui.memory(|m| m.has_focus(id));
     let cursor = egui::text_edit::TextEditState::load(ui.ctx(), id)
         .and_then(|s| s.cursor.char_range())
         .map(|r| usize::from(r.primary.index));
     let active = cursor
-        .filter(|_| focused)
+        .filter(|_| focused && state.mode == Mode::Chat)
         .and_then(|c| complete::active(&state.input, c))
         .filter(|_| state.dismissed.as_deref() != Some(state.input.as_str()));
     let cands = active
@@ -1138,47 +1169,86 @@ fn composer(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
     {
         send = Some(state.input.clone());
     }
-    let hint = if state.chat.as_ref().is_some_and(|c| c.ask.is_some()) {
-        "Answer, or say what you mean…"
+
+    let blocked = blocked_reason(state);
+    let border = if focused {
+        theme::ring(theme)
     } else {
-        "Ask for an edit or about the footage…  @ to reference, + ! > ~ * for intent"
+        theme::rgb(theme.raised)
     };
-    let output = egui::TextEdit::multiline(&mut state.input)
-        .id(id)
-        .hint_text(hint)
-        .desired_rows(3)
-        .desired_width(f32::INFINITY)
-        .return_key(egui::KeyboardShortcut::new(
-            egui::Modifiers::SHIFT,
-            egui::Key::Enter,
-        ))
-        .show(ui);
-    if output.response.changed() {
-        state.pick = 0;
-    }
-    let input_rect = output.response.rect;
+    let frame = egui::Frame::new()
+        .fill(theme::rgb(theme.app))
+        .stroke(Stroke::new(1.0, border))
+        .corner_radius(CornerRadius::same(theme::RADIUS_XL))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = 0.0;
+            // Notices: what failed, why sending is blocked, which runtime
+            // is answering instead of the one picked.
+            if let Some(e) = state.error.clone() {
+                error_row(ctx, state, ui, &e);
+            }
+            if let Some(reason) = &blocked {
+                look::notice_row(ui, theme, reason, look::Tone::Warning, |_| {});
+            } else if let Some(note) = fallback_note(state) {
+                let down = state.claude_down.is_some();
+                let mut retry = false;
+                look::notice_row(ui, theme, &note, look::Tone::Hint, |ui| {
+                    if down && widgets::ghost_button(ui, theme, "Retry Claude Code").clicked() {
+                        retry = true;
+                    }
+                });
+                if retry {
+                    state.claude_down = None;
+                }
+            }
+            egui::Frame::new()
+                .inner_margin(Margin {
+                    left: 10,
+                    right: 10,
+                    top: 10,
+                    bottom: 0,
+                })
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        look::mode_switch(
+                            ui,
+                            theme,
+                            &mut state.mode,
+                            &[(Mode::Chat, "Chat"), (Mode::Comments, "Comments")],
+                        );
+                    });
+                });
+            match state.mode {
+                Mode::Chat => {
+                    scope_row(ctx, state, ui, scope, &change, &keep);
+                    staged_refs(ctx, ui, &refs);
+                    input(ctx, state, ui, id);
+                    toolbar(ctx, state, ui, blocked.as_deref(), &mut send);
+                }
+                Mode::Comments => comments_toolbar(ctx, state, ui, id),
+            }
+        });
 
     if !cands.is_empty() {
-        let area = egui::Area::new(id.with("ac"))
+        let anchor = frame.response.rect;
+        let _ = egui::Area::new(id.with("ac"))
             .order(egui::Order::Foreground)
-            .fixed_pos(input_rect.left_top() - Vec2::new(0.0, SPACE_XS))
+            .fixed_pos(anchor.left_top() + Vec2::new(SPACE_MD, -SPACE_SM))
             .pivot(egui::Align2::LEFT_BOTTOM)
             .show(ui.ctx(), |ui| {
-                egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    ui.set_width(input_rect.width().max(220.0));
+                widgets::popover_frame(theme).show(ui, |ui| {
+                    ui.set_width((anchor.width() - SPACE_MD * 2.0).max(220.0));
+                    ui.spacing_mut().item_spacing.y = 0.0;
                     for (k, c) in cands.iter().enumerate() {
                         let on = k == state.pick.min(cands.len() - 1);
-                        let r = ui.add(
-                            egui::Button::selectable(
-                                on,
-                                egui::RichText::new(format!("{}  ", c.label)).strong(),
-                            )
-                            .right_text(
-                                RichText::new(&c.detail)
-                                    .small()
-                                    .color(theme::rgb(theme.text_muted)),
-                            )
-                            .min_size(Vec2::new(ui.available_width(), 0.0)),
+                        let r = look::completion_row(
+                            ui,
+                            theme,
+                            look::token_icon(&c.token),
+                            &c.label,
+                            &c.detail,
+                            on,
                         );
                         if r.clicked() {
                             accept = Some(k);
@@ -1187,14 +1257,8 @@ fn composer(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                             state.pick = k;
                         }
                     }
-                    ui.label(
-                        RichText::new("↑↓ choose · Enter insert · Esc close")
-                            .small()
-                            .color(theme::rgb(theme.text_faint)),
-                    );
                 });
             });
-        let _ = area;
     }
     if let (Some(k), Some(a)) = (accept, active.as_ref())
         && let Some(c) = cands.get(k)
@@ -1211,73 +1275,6 @@ fn composer(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
         state.pick = 0;
     }
 
-    // The bottom row.
-    let blocked = blocked_reason(state);
-    ui.horizontal(|ui| {
-        add_menu(ctx, state, ui);
-        let current = model_id(state);
-        let label = MODELS
-            .iter()
-            .find(|(m, _)| *m == current)
-            .map_or(current.as_str(), |(_, l)| l);
-        egui::ComboBox::from_id_salt("assistant_model")
-            .selected_text(RichText::new(label).small())
-            .width(130.0)
-            .show_ui(ui, |ui| {
-                for (m, l) in MODELS {
-                    if ui.selectable_label(current == m, l).clicked()
-                        && let Some(prefs) = state.prefs.as_mut()
-                    {
-                        prefs.model = Some(m.to_owned());
-                        state.error = prefs.save().err().map(|e| format!("{e:#}"));
-                    }
-                }
-            })
-            .response
-            .accessible_name("Model");
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if let Some(turn) = &state.turn {
-                if widgets::button(ui, theme, "Stop", widgets::Emphasis::Secondary).clicked() {
-                    turn.cancel.store(true, Ordering::Relaxed);
-                }
-                ui.add(egui::Spinner::new());
-                ui.label(
-                    RichText::new(format!("{:.0}s", turn.started.elapsed().as_secs_f32()))
-                        .small()
-                        .color(theme::rgb(theme.text_muted)),
-                );
-            } else {
-                let can = blocked.is_none() && !state.input.trim().is_empty();
-                let r = ui.add_enabled_ui(can, |ui| {
-                    widgets::button(ui, theme, "Send", widgets::Emphasis::Primary)
-                });
-                let r = r
-                    .inner
-                    .on_hover_text("Enter to send · Shift+Enter for a new line");
-                if r.clicked() {
-                    send = Some(state.input.clone());
-                }
-            }
-        });
-    });
-    if let Some(reason) = &blocked {
-        ui.label(
-            RichText::new(reason)
-                .small()
-                .color(theme::rgb(theme.warning)),
-        );
-    } else if let Some(note) = fallback_note(state) {
-        ui.horizontal_wrapped(|ui| {
-            ui.label(
-                RichText::new(note)
-                    .small()
-                    .color(theme::rgb(theme.text_muted)),
-            );
-            if state.claude_down.is_some() && ui.small_button("Retry Claude Code").clicked() {
-                state.claude_down = None;
-            }
-        });
-    }
     if let Some(text) = send
         && !busy
     {
@@ -1289,104 +1286,152 @@ fn composer(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
     }
 }
 
-/// The reference chips above the input.
-fn chips(
-    ctx: &mut PageCtx<'_>,
+/// The scope pills under the switch: what the request may change, and the
+/// shots marked keep.
+fn scope_row(
+    ctx: &PageCtx<'_>,
     state: &mut State,
     ui: &mut Ui,
-    refs: &[(Reference, complete::Origin)],
+    scope: ScopeChoice,
+    change: &BTreeSet<usize>,
+    keep: &BTreeSet<usize>,
 ) {
-    if refs.is_empty() {
+    let theme = ctx.theme;
+    egui::Frame::new()
+        .inner_margin(Margin {
+            left: 12,
+            right: 12,
+            top: 8,
+            bottom: 0,
+        })
+        .show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = Vec2::splat(SPACE_XS);
+                for choice in [
+                    ScopeChoice::Whole,
+                    ScopeChoice::Selected,
+                    ScopeChoice::Build,
+                    ScopeChoice::FromDrop,
+                ] {
+                    let on = scope == choice;
+                    let label = match choice {
+                        ScopeChoice::Selected => format!("{} ({})", choice.label(), change.len()),
+                        ScopeChoice::Whole | ScopeChoice::Build | ScopeChoice::FromDrop => {
+                            choice.label().to_owned()
+                        }
+                    };
+                    let hint = if state.scope.is_none() && on {
+                        "Scope follows the selection; click to pin one"
+                    } else {
+                        "What the assistant may change"
+                    };
+                    let r = widgets::tip(look::scope_pill(ui, theme, &label, on), theme, hint, "");
+                    if r.clicked() {
+                        state.scope = if state.scope == Some(choice) {
+                            None
+                        } else {
+                            Some(choice)
+                        };
+                    }
+                }
+                if !keep.is_empty() {
+                    ui.label(
+                        RichText::new(format!(
+                            "keeping {}",
+                            keep.iter()
+                                .map(|k| format!("#{k}"))
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        ))
+                        .size(theme::BODY_SIZE)
+                        .color(theme::rgb(theme.text_muted)),
+                    );
+                }
+            });
+        });
+}
+
+/// The references staged from the app (R on a shot, the `+` menu), as
+/// Selects shows mentions: lime text, no chip. Clicking one cycles its
+/// intent; the small cross drops it. Tokens typed in the message are lime
+/// in the input itself.
+fn staged_refs(ctx: &mut PageCtx<'_>, ui: &mut Ui, refs: &[(Reference, complete::Origin)]) {
+    let staged: Vec<(usize, &Reference)> = refs
+        .iter()
+        .filter_map(|(r, origin)| match origin {
+            complete::Origin::Chip(i) => Some((*i, r)),
+            complete::Origin::Typed => None,
+        })
+        .collect();
+    if staged.is_empty() {
         return;
     }
     let theme = ctx.theme;
     let mut cycle: Option<usize> = None;
     let mut remove: Option<usize> = None;
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = Vec2::splat(SPACE_XS);
-        for (k, (r, origin)) in refs.iter().enumerate() {
-            let facts = ctx
-                .project
-                .as_ref()
-                .map(|p| {
-                    crate::refs::resolve(r, p)
-                        .map_or_else(|e| format!("unresolved: {e}"), |x| x.facts)
-                })
-                .unwrap_or_default();
-            let glyph = if r.modifier.prefix().is_empty() {
-                "·"
-            } else {
-                r.modifier.prefix()
-            };
-            let fill = match r.modifier {
-                Modifier::Avoid => theme.danger,
-                Modifier::Keep => theme.success,
-                Modifier::Hero => theme.warning,
-                Modifier::About | Modifier::Replace | Modifier::Like => theme.accent,
-            };
-            egui::Frame::new()
-                .fill(theme::translucent(fill, 40))
-                .stroke(Stroke::new(1.0, theme::translucent(fill, 140)))
-                .corner_radius(CornerRadius::same(theme::RADIUS))
-                .inner_margin(theme::margin_xy(SPACE_XS + 2.0, 1.0))
-                .show(ui, |ui| {
-                    ui.spacing_mut().item_spacing.x = 3.0;
-                    let typed = matches!(origin, complete::Origin::Typed);
-                    let chip = ui
+    let mut clear = false;
+    egui::Frame::new()
+        .inner_margin(Margin {
+            left: 16,
+            right: 12,
+            top: 10,
+            bottom: 0,
+        })
+        .show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = Vec2::new(SPACE_XS, SPACE_XS);
+                for (i, r) in &staged {
+                    let facts = ctx
+                        .project
+                        .as_ref()
+                        .map(|p| {
+                            crate::refs::resolve(r, p)
+                                .map_or_else(|e| format!("unresolved: {e}"), |x| x.facts)
+                        })
+                        .unwrap_or_default();
+                    let token = format!("{}@{}", r.modifier.prefix(), r.short());
+                    let mention = ui
                         .add(
                             egui::Label::new(
-                                RichText::new(format!("{glyph} {}", r.short()))
-                                    .small()
-                                    .color(theme::rgb(theme.text)),
+                                RichText::new(token)
+                                    .size(theme::LARGE_SIZE)
+                                    .color(theme::rgb(theme.accent)),
                             )
                             .sense(Sense::click()),
                         )
                         .on_hover_text(format!(
-                            "{r}\n{} · {facts}\n{}",
-                            r.modifier.label(),
-                            if typed {
-                                "typed in the message"
-                            } else {
-                                "click to change intent"
-                            }
+                            "{r}\n{} · {facts}\nclick to change intent",
+                            r.modifier.label()
                         ));
-                    if chip.clicked() && !typed {
-                        cycle = Some(k);
+                    if mention.clicked() {
+                        cycle = Some(*i);
                     }
-                    if ui
+                    if small_x(ui, theme, "Remove reference").clicked() {
+                        remove = Some(*i);
+                    }
+                    ui.add_space(SPACE_XS);
+                }
+                if staged.len() > 1
+                    && ui
                         .add(
                             egui::Label::new(
-                                RichText::new("×")
-                                    .small()
+                                RichText::new("Clear all")
+                                    .size(theme::BODY_SIZE)
                                     .color(theme::rgb(theme.text_muted)),
                             )
                             .sense(Sense::click()),
                         )
-                        .on_hover_text("Remove")
                         .clicked()
-                    {
-                        remove = Some(k);
-                    }
-                });
-        }
-        if !ctx.refs.is_empty()
-            && ui
-                .add(
-                    egui::Label::new(
-                        RichText::new("clear all")
-                            .small()
-                            .color(theme::rgb(theme.text_muted)),
-                    )
-                    .sense(Sense::click()),
-                )
-                .clicked()
-        {
-            ctx.actions.push(Action::ClearRefs);
-        }
-    });
-    if let Some(k) = cycle
-        && let Some((_, complete::Origin::Chip(i))) = refs.get(k)
-        && let Some(r) = ctx.refs.get_mut(*i)
+                {
+                    clear = true;
+                }
+            });
+        });
+    if clear {
+        ctx.actions.push(Action::ClearRefs);
+    }
+    if let Some(i) = cycle
+        && let Some(r) = ctx.refs.get_mut(i)
     {
         let at = Modifier::ALL
             .iter()
@@ -1394,93 +1439,634 @@ fn chips(
             .unwrap_or(0);
         r.modifier = Modifier::ALL[(at + 1) % Modifier::ALL.len()];
     }
-    if let Some(k) = remove
-        && let Some((r, origin)) = refs.get(k)
+    if let Some(i) = remove
+        && i < ctx.refs.len()
     {
-        match origin {
-            complete::Origin::Chip(i) => {
-                if *i < ctx.refs.len() {
-                    ctx.refs.remove(*i);
+        ctx.refs.remove(i);
+    }
+}
+
+/// A 14 px cross that removes something: muted, the text colour under the
+/// pointer.
+fn small_x(ui: &mut Ui, theme: &crate::theme::Palette, label: &str) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(icons::SMALL), Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+    let ink = if response.hovered() {
+        theme::rgb(theme.text)
+    } else {
+        theme::rgb(theme.text_muted)
+    };
+    icons::paint(ui.painter(), rect, icons::X, 12.0, ink);
+    widgets::tip(response, theme, label, "")
+}
+
+/// The message input: 14 px, four rows, frameless inside the box, typed
+/// references painted lime. Enter sends, Shift+Enter breaks the line.
+fn input(ctx: &PageCtx<'_>, state: &mut State, ui: &mut Ui, id: egui::Id) {
+    let theme = ctx.theme;
+    let hint = if state.chat.as_ref().is_some_and(|c| c.ask.is_some()) {
+        "Answer, or say what you mean…"
+    } else {
+        "Ask for an edit or about the footage…"
+    };
+    let intents: Vec<String> = Modifier::ALL
+        .iter()
+        .filter(|m| !m.prefix().is_empty())
+        .map(|m| format!("{} {}", m.prefix(), m.label()))
+        .collect();
+    let tooltip = format!(
+        "Type @ to reference a shot, person, bars or plan; before the @, {} \
+         set the intent. Shift+Enter for a new line.",
+        intents.join(", ")
+    );
+    let mut layouter = |ui: &Ui, buf: &dyn egui::TextBuffer, wrap: f32| {
+        let job = look::mention_job(
+            theme,
+            buf.as_str(),
+            theme::LARGE_SIZE,
+            theme::rgb(theme.text),
+            wrap,
+        );
+        ui.fonts_mut(|f| f.layout_job(job))
+    };
+    egui::Frame::new()
+        .inner_margin(Margin {
+            left: 16,
+            right: 16,
+            top: 12,
+            bottom: 6,
+        })
+        .show(ui, |ui| {
+            let output = egui::TextEdit::multiline(&mut state.input)
+                .id(id)
+                .frame(egui::Frame::NONE)
+                .margin(Margin::ZERO)
+                .hint_text(
+                    RichText::new(hint)
+                        .size(theme::LARGE_SIZE)
+                        .color(theme::rgb(theme.text_muted)),
+                )
+                .desired_rows(4)
+                .desired_width(f32::INFINITY)
+                .layouter(&mut layouter)
+                .return_key(egui::KeyboardShortcut::new(
+                    egui::Modifiers::SHIFT,
+                    egui::Key::Enter,
+                ))
+                .show(ui);
+            if output.response.changed() {
+                state.pick = 0;
+            }
+            let _ = widgets::tip(output.response.response, theme, &tooltip, "Enter");
+        });
+}
+
+/// The bottom row of the box: the add menu on the left; the model picker
+/// and the send (or stop) button on the right, all 32 px.
+fn toolbar(
+    ctx: &mut PageCtx<'_>,
+    state: &mut State,
+    ui: &mut Ui,
+    blocked: Option<&str>,
+    send: &mut Option<String>,
+) {
+    let theme = ctx.theme;
+    egui::Frame::new()
+        .inner_margin(theme::margin(10.0))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                add_menu(ctx, state, ui);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    if let Some(turn) = &state.turn {
+                        if widgets::filled_icon_button(
+                            ui,
+                            theme,
+                            widgets::ButtonKind::Secondary,
+                            icons::SQUARE,
+                            "Stop",
+                            "",
+                            32.0,
+                        )
+                        .clicked()
+                        {
+                            turn.cancel.store(true, Ordering::Relaxed);
+                        }
+                        ui.add_space(SPACE_XS);
+                        ui.label(
+                            RichText::new(format!("{:.0}s", turn.started.elapsed().as_secs_f32()))
+                                .font(theme::tabular(ui.ctx(), theme::TINY_SIZE))
+                                .color(theme::rgb(theme.text_faint)),
+                        );
+                    } else {
+                        let can = blocked.is_none() && !state.input.trim().is_empty();
+                        let r = ui
+                            .add_enabled_ui(can, |ui| {
+                                widgets::filled_icon_button(
+                                    ui,
+                                    theme,
+                                    widgets::ButtonKind::Secondary,
+                                    icons::ARROW_UP,
+                                    "Send",
+                                    "Enter",
+                                    32.0,
+                                )
+                            })
+                            .inner;
+                        if r.clicked() {
+                            *send = Some(state.input.clone());
+                        }
+                    }
+                    ui.add_space(SPACE_XS);
+                    model_menu(ctx, state, ui);
+                });
+            });
+        });
+}
+
+/// The model picker: a ghost trigger naming the model, opening the models
+/// and the permission choice (Selects puts Permissions in this menu).
+fn model_menu(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
+    let theme = ctx.theme;
+    let current = model_id(state);
+    let label = MODELS
+        .iter()
+        .find(|(m, _)| *m == current)
+        .map_or(current.as_str(), |(_, l)| l)
+        .to_owned();
+    let id = ui.make_persistent_id("assistant-model");
+    let open = egui::Popup::is_id_open(ui.ctx(), id);
+    let trigger = widgets::tip(
+        look::picker(ui, theme, &label, "Model", open),
+        theme,
+        "Model and permissions",
+        "",
+    );
+    let allow = allow_commit(ctx);
+    let mut pick: Option<&str> = None;
+    let mut permission: Option<bool> = None;
+    let _ = egui::Popup::menu(&trigger)
+        .id(id)
+        .width(240.0)
+        .gap(SPACE_XS)
+        .show(|ui| {
+            ui.horizontal(|ui| {
+                ui.add_space(SPACE_SM);
+                widgets::menu_heading(ui, theme, "Model");
+            });
+            for (m, l) in MODELS {
+                if widgets::menu_item(ui, theme, None, l, "", current == m).clicked() {
+                    pick = Some(m);
+                    ui.close();
                 }
             }
-            complete::Origin::Typed => state.input = complete::remove_token(&state.input, r),
+            widgets::menu_separator(ui, theme);
+            ui.horizontal(|ui| {
+                ui.add_space(SPACE_SM);
+                widgets::menu_heading(ui, theme, "Permissions");
+            });
+            for (value, name, hint) in [
+                (
+                    false,
+                    "Ask",
+                    "The assistant stages every edit as a card; you apply it.",
+                ),
+                (
+                    true,
+                    "Let it apply edits",
+                    "The assistant may save edits itself; each one is a card you can revert.",
+                ),
+            ] {
+                if widgets::menu_item(ui, theme, None, name, "", allow == value)
+                    .on_hover_text(hint)
+                    .clicked()
+                {
+                    permission = Some(value);
+                    ui.close();
+                }
+            }
+        });
+    if let Some(m) = pick
+        && let Some(prefs) = state.prefs.as_mut()
+    {
+        prefs.model = Some(m.to_owned());
+        state.error = prefs.save().err().map(|e| format!("{e:#}"));
+    }
+    if let Some(value) = permission
+        && value != allow
+    {
+        state.error = set_page_option(ctx, crate::mcp::ALLOW_COMMIT, toml::Value::Boolean(value));
+    }
+}
+
+/// The question the model asked, as Selects' options card above the
+/// composer: the question, then one bordered list of numbered answers and
+/// a last row for saying something else. Returns the answer picked.
+fn options_card(ctx: &PageCtx<'_>, ui: &mut Ui, ask: &Ask, input: egui::Id) -> Option<String> {
+    let theme = ctx.theme;
+    let mut chosen = None;
+    egui::Frame::new()
+        .fill(theme::rgb(theme.panel))
+        .stroke(Stroke::new(1.0, theme::accent_fill(theme)))
+        .corner_radius(CornerRadius::same(theme::RADIUS_XL))
+        .inner_margin(theme::margin_xy(SPACE_MD, 10.0))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.add(
+                egui::Label::new(
+                    RichText::new(&ask.question)
+                        .size(theme::LARGE_SIZE)
+                        .color(look::tone_200(theme)),
+                )
+                .wrap(),
+            );
+            ui.add_space(SPACE_SM);
+            egui::Frame::new()
+                .stroke(Stroke::new(1.0, theme::rgb(theme.raised)))
+                .corner_radius(CornerRadius::same(theme::RADIUS_MD))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    for (k, o) in ask.options.iter().enumerate() {
+                        if option_row(ui, theme, Some(k + 1), o).clicked() {
+                            chosen = Some(o.clone());
+                        }
+                    }
+                    if option_row(ui, theme, None, "Something else: type it below").clicked() {
+                        ui.memory_mut(|m| m.request_focus(input));
+                    }
+                });
+        });
+    chosen
+}
+
+/// One answer in the options card: a 20 px number circle, the answer in
+/// 14 px, a chevron on hover; a hairline above every row but the first.
+fn option_row(
+    ui: &mut Ui,
+    theme: &crate::theme::Palette,
+    number: Option<usize>,
+    label: &str,
+) -> egui::Response {
+    let width = ui.available_width();
+    let text_x = SPACE_MD - 2.0 + 20.0 + SPACE_SM;
+    let ink = if number.is_some() {
+        theme::rgb(theme.text)
+    } else {
+        theme::rgb(theme.text_muted)
+    };
+    let galley = ui.painter().layout(
+        label.to_owned(),
+        theme::font(theme::LARGE_SIZE),
+        ink,
+        (width - text_x - theme::SPACE_XL).max(40.0),
+    );
+    let height = (galley.size().y + SPACE_LG).max(36.0);
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+    let first = number == Some(1);
+    let lift = widgets::hover_t(ui, response.id, response.hovered());
+    let painter = ui.painter();
+    if !first {
+        painter.hline(
+            rect.x_range(),
+            rect.top() + 0.5,
+            Stroke::new(1.0, theme::rgb(theme.raised)),
+        );
+    }
+    if lift > 0.0 {
+        painter.rect_filled(
+            rect.shrink(1.0),
+            CornerRadius::same(theme::RADIUS),
+            theme::rgb(theme.raised).gamma_multiply(0.6 * lift),
+        );
+    }
+    let circle = Rect::from_center_size(
+        egui::pos2(rect.left() + SPACE_MD - 2.0 + 10.0, rect.top() + 18.0),
+        Vec2::splat(20.0),
+    );
+    match number {
+        Some(n) => {
+            painter.circle_filled(circle.center(), 10.0, theme::accent_fill(theme));
+            look::centred(
+                ui,
+                circle,
+                &n.to_string(),
+                theme::SMALL_SIZE,
+                theme::rgb(theme.text_muted),
+            );
         }
+        None => {
+            icons::paint(
+                painter,
+                circle,
+                icons::PEN,
+                icons::SMALL,
+                theme::rgb(theme.text_muted),
+            );
+        }
+    }
+    ui.painter().galley(
+        egui::pos2(rect.left() + text_x, rect.top() + 18.0 - 10.0),
+        galley,
+        ink,
+    );
+    if lift > 0.0 {
+        let slot = Rect::from_center_size(
+            egui::pos2(rect.right() - SPACE_MD, rect.top() + 18.0),
+            Vec2::splat(icons::SMALL),
+        );
+        icons::paint(
+            ui.painter(),
+            slot,
+            icons::CHEVRON_RIGHT,
+            icons::SMALL,
+            theme::rgb(theme.text_muted).gamma_multiply(lift),
+        );
+    }
+    response
+}
+
+/// The composer in Comments mode: one action, putting the open comments
+/// in a message for the assistant.
+fn comments_toolbar(ctx: &PageCtx<'_>, state: &mut State, ui: &mut Ui, input: egui::Id) {
+    let theme = ctx.theme;
+    let message = comments_message(ctx, state);
+    egui::Frame::new()
+        .inner_margin(theme::margin(10.0))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let can = message.is_some() && state.turn.is_none();
+                let r = ui
+                    .add_enabled_ui(can, |ui| {
+                        widgets::button_sized(
+                            ui,
+                            theme,
+                            widgets::ButtonKind::Ghost,
+                            Some(icons::MESSAGE_SQUARE),
+                            "Ask about open comments",
+                            32.0,
+                        )
+                    })
+                    .inner;
+                let r = widgets::tip(
+                    r,
+                    theme,
+                    "Write every open comment into a message, with its time and shot, to send from Chat",
+                    "",
+                );
+                if r.clicked()
+                    && let Some(text) = message
+                {
+                    if !state.input.trim().is_empty() {
+                        state.input.push_str("\n\n");
+                    }
+                    state.input.push_str(&text);
+                    state.mode = Mode::Chat;
+                    ui.memory_mut(|m| m.request_focus(input));
+                }
+            });
+        });
+}
+
+/// The open comments of the conversation's plan as one message: each with
+/// its time and the shot under it as a reference. `None` when there are
+/// none.
+fn comments_message(ctx: &PageCtx<'_>, state: &mut State) -> Option<String> {
+    let chat = state.chat.as_mut()?;
+    let name = chat.plan.clone();
+    let plan = chat.current()?;
+    let timing = ctx
+        .project
+        .as_ref()
+        .and_then(|p| p.music.as_ref())
+        .map(|m| plan.timing(m))
+        .unwrap_or_default();
+    let mut open: Vec<&crate::plan::Comment> =
+        plan.comments.iter().filter(|c| !c.resolved).collect();
+    if open.is_empty() {
+        return None;
+    }
+    open.sort_by(|a, b| a.time.total_cmp(&b.time));
+    let lines: Vec<String> = open
+        .iter()
+        .map(|c| {
+            let shot = timing
+                .iter()
+                .position(|&(at, dur)| c.time >= at && c.time < at + dur)
+                .map(|k| format!(" @shot:{name}#{}", k + 1))
+                .unwrap_or_default();
+            format!("- {}{shot}: {}", clock(c.time), c.note.trim())
+        })
+        .collect();
+    Some(format!(
+        "Address these review comments on {name} as one proposal I can apply:\n{}",
+        lines.join("\n")
+    ))
+}
+
+/// `m:ss`.
+fn clock(seconds: f32) -> String {
+    let s = seconds.max(0.0).round() as u64;
+    format!("{}:{:02}", s / 60, s % 60)
+}
+
+/// The list in Comments mode: the plan's review comments in time order;
+/// clicking one plays the plan from there.
+fn comments(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
+    let theme = ctx.theme;
+    let Some(chat) = state.chat.as_mut() else {
+        return;
+    };
+    let Some(plan) = chat.current() else {
+        return;
+    };
+    let mut order: Vec<&crate::plan::Comment> = plan.comments.iter().collect();
+    order.sort_by(|a, b| a.time.total_cmp(&b.time));
+    if order.is_empty() {
+        widgets::empty_state(
+            ui,
+            theme,
+            icons::MESSAGE_SQUARE_TEXT,
+            "No comments",
+            "Press F on the timeline to leave one at the playhead.",
+            |_| {},
+        );
+        return;
+    }
+    let mut seek: Option<f32> = None;
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.add_space(SPACE_SM);
+            for (k, c) in order.iter().enumerate() {
+                let fade = if c.resolved { 0.5 } else { 1.0 };
+                let row = egui::Frame::new()
+                    .inner_margin(theme::margin_xy(SPACE_SM, SPACE_SM - 2.0))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = SPACE_SM;
+                            ui.label(
+                                RichText::new(clock(c.time))
+                                    .font(theme::tabular(ui.ctx(), theme::SMALL_SIZE))
+                                    .color(theme::rgb(theme.text_muted).gamma_multiply(fade)),
+                            );
+                            ui.label(
+                                RichText::new(&c.author)
+                                    .font(theme::medium(ui.ctx(), theme::BODY_SIZE))
+                                    .color(theme::rgb(theme.text_muted).gamma_multiply(fade)),
+                            );
+                            if c.resolved {
+                                icons::icon(
+                                    ui,
+                                    icons::CIRCLE_CHECK,
+                                    12.0,
+                                    theme::rgb(theme.text_muted),
+                                );
+                            }
+                        });
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(if c.note.trim().is_empty() {
+                                    "(no text)"
+                                } else {
+                                    c.note.trim()
+                                })
+                                .size(theme::LARGE_SIZE)
+                                .color(look::tone_200(theme).gamma_multiply(fade)),
+                            )
+                            .wrap(),
+                        );
+                    });
+                let rect = row.response.rect;
+                let response =
+                    ui.interact(rect, ui.scope_id().with(("comment", k)), Sense::click());
+                response.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::Role::Button, true, c.note.as_str())
+                });
+                if response.hovered() {
+                    ui.painter().rect_filled(
+                        rect,
+                        CornerRadius::same(theme::RADIUS),
+                        theme::ink(theme, theme::INK_05),
+                    );
+                }
+                if response.on_hover_text("Play the plan from here").clicked() {
+                    seek = Some(c.time);
+                }
+            }
+        });
+    if let Some(t) = seek
+        && load_sequence(ctx, &plan)
+    {
+        ctx.player.seek(f64::from(t));
     }
 }
 
 /// The `+` menu: add the selection, the plan, a shot, a person, some bars.
 fn add_menu(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
+    let theme = ctx.theme;
     let src = sources(ctx, state);
     let selection = ctx.selection.clone();
     let mut add: Vec<Reference> = Vec::new();
-    ui.menu_button("+", |ui| {
-        if ui
-            .add_enabled(
-                !selection.is_empty(),
-                egui::Button::new(format!("Selection ({})", selection.len())),
-            )
-            .clicked()
-        {
-            add.extend(selection.iter().cloned());
-            ui.close();
-        }
-        if let Some(chat) = &state.chat
-            && ui.button(format!("This plan ({})", chat.plan)).clicked()
-        {
-            add.push(Reference::new(Target::Plan {
-                name: chat.plan.clone(),
-            }));
-            ui.close();
-        }
-        ui.menu_button("Shot", |ui| {
-            egui::ScrollArea::vertical()
-                .max_height(320.0)
-                .show(ui, |ui| {
-                    for (plan, slot, desc) in &src.shots {
-                        if ui.button(format!("#{slot}  {desc}")).clicked() {
-                            add.push(Reference::new(Target::Shot {
-                                plan: plan.clone(),
-                                index: *slot,
-                            }));
-                            ui.close();
-                        }
-                    }
-                });
-        });
-        ui.menu_button("Person", |ui| {
-            egui::ScrollArea::vertical()
-                .max_height(320.0)
-                .show(ui, |ui| {
-                    for name in &src.people {
-                        if ui.button(name).clicked() {
-                            add.push(Reference::new(Target::Person { name: name.clone() }));
-                            ui.close();
-                        }
-                    }
-                });
-        });
-        ui.menu_button("Bars", |ui| {
-            for (from, to, label) in &src.bars {
-                if ui.button(format!("{label}  (bars {from}–{to})")).clicked() {
-                    add.push(Reference::new(Target::Bars {
-                        from: *from,
-                        to: *to,
-                    }));
-                    ui.close();
-                }
+    let id = ui.make_persistent_id("assistant-add");
+    let open = egui::Popup::is_id_open(ui.ctx(), id);
+    let button = widgets::icon_toggle_sized(
+        ui,
+        theme,
+        icons::PLUS,
+        "Add a reference: the selection, a shot, a person, bars or a plan (or type @)",
+        "",
+        open,
+        32.0,
+    );
+    let _ = egui::Popup::menu(&button)
+        .id(id)
+        .width(240.0)
+        .gap(SPACE_XS)
+        .show(|ui| {
+            let r = ui
+                .add_enabled_ui(!selection.is_empty(), |ui| {
+                    widgets::menu_item(
+                        ui,
+                        theme,
+                        Some(icons::POINTER),
+                        &format!("Selection ({})", selection.len()),
+                        "",
+                        false,
+                    )
+                })
+                .inner;
+            if r.clicked() {
+                add.extend(selection.iter().cloned());
+                ui.close();
             }
-        });
-        ui.menu_button("Plan", |ui| {
-            for name in &src.plans {
-                if ui.button(name).clicked() {
-                    add.push(Reference::new(Target::Plan { name: name.clone() }));
-                    ui.close();
-                }
+            if let Some(chat) = &state.chat
+                && widgets::menu_item(
+                    ui,
+                    theme,
+                    Some(icons::LAYERS),
+                    &format!("This plan ({})", chat.plan),
+                    "",
+                    false,
+                )
+                .clicked()
+            {
+                add.push(Reference::new(Target::Plan {
+                    name: chat.plan.clone(),
+                }));
+                ui.close();
             }
+            widgets::menu_separator(ui, theme);
+            ui.menu_button(icons::with_label(icons::FILM, "Shot"), |ui| {
+                egui::ScrollArea::vertical()
+                    .max_height(320.0)
+                    .show(ui, |ui| {
+                        for (plan, slot, desc) in &src.shots {
+                            if ui.button(format!("#{slot}  {desc}")).clicked() {
+                                add.push(Reference::new(Target::Shot {
+                                    plan: plan.clone(),
+                                    index: *slot,
+                                }));
+                                ui.close();
+                            }
+                        }
+                    });
+            });
+            ui.menu_button(icons::with_label(icons::USER, "Person"), |ui| {
+                egui::ScrollArea::vertical()
+                    .max_height(320.0)
+                    .show(ui, |ui| {
+                        for name in &src.people {
+                            if ui.button(name).clicked() {
+                                add.push(Reference::new(Target::Person { name: name.clone() }));
+                                ui.close();
+                            }
+                        }
+                    });
+            });
+            ui.menu_button(icons::with_label(icons::MUSIC, "Bars"), |ui| {
+                for (from, to, label) in &src.bars {
+                    if ui.button(format!("{label}  (bars {from}–{to})")).clicked() {
+                        add.push(Reference::new(Target::Bars {
+                            from: *from,
+                            to: *to,
+                        }));
+                        ui.close();
+                    }
+                }
+            });
+            ui.menu_button(icons::with_label(icons::LAYERS, "Plan"), |ui| {
+                for name in &src.plans {
+                    if ui.button(name).clicked() {
+                        add.push(Reference::new(Target::Plan { name: name.clone() }));
+                        ui.close();
+                    }
+                }
+            });
         });
-    })
-    .response
-    .on_hover_text("Add a reference: the selection, a shot, a person, bars or a plan");
     for r in add {
         ctx.actions.push(Action::AddRef(r));
     }
@@ -1853,7 +2439,9 @@ fn claude_config(exe: PathBuf, work: &Path, plan: &str) -> Result<claude_code::C
     })
 }
 
-// The conversation.
+/// The conversation, as Selects' message list: 16 px above and below,
+/// 12 px in from the left, 12 px between messages; tool and thinking
+/// activity as quiet rows between them.
 fn conversation(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
     let theme = ctx.theme;
     let Some(chat) = state.chat.as_ref() else {
@@ -1900,150 +2488,246 @@ fn conversation(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
     let chat_dir = chat.work.join("chat");
     let log = chat.log.clone();
     let mut open: Option<Reference> = None;
-    let open_ask = chat.ask.as_ref().map(|a| a.id.clone());
     let mut send: Option<String> = None;
+    let open_ask = chat
+        .ask
+        .as_ref()
+        .filter(|_| state.turn.is_none())
+        .map(|a| a.id.clone());
 
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .stick_to_bottom(true)
         .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            if log.is_empty() && state.turn.is_none() {
-                empty_state(ctx, ui, &mut send);
-            }
-            for (i, line) in log.iter().enumerate() {
-                match line {
-                    LogLine::Msg { msg } => match msg.role {
-                        Role::User => user_bubble(ctx, ui, msg),
-                        Role::Assistant => {
-                            for (k, b) in msg.blocks.iter().enumerate() {
-                                match b {
-                                    Block::Thinking { thinking, .. }
-                                        if !thinking.trim().is_empty() =>
-                                    {
-                                        thought(ctx, ui, ("thought", i, k), thinking, false);
-                                    }
-                                    Block::Text { text } => {
-                                        if let Some(r) = message(ctx, ui, ("msg", i, k), text) {
-                                            open = Some(r);
-                                        }
-                                    }
-                                    Block::ToolUse { id, name, input } => {
-                                        if name == tools::EDIT
-                                            && let Some(p) = proposals.get(id)
-                                        {
-                                            proposal_card(ctx, state, ui, p, &log);
-                                        } else if name == tools::ASK {
-                                            let q = input["question"].as_str().unwrap_or_default();
-                                            ui.add_space(SPACE_XS);
-                                            ui.label(
-                                                RichText::new(q)
-                                                    .strong()
-                                                    .color(theme::rgb(theme.text)),
-                                            );
-                                            if open_ask.as_deref() == Some(id.as_str()) {
-                                                widgets::muted(
+            egui::Frame::new()
+                .inner_margin(Margin {
+                    left: theme::as_margin(SPACE_XS),
+                    right: theme::as_margin(SPACE_XS),
+                    top: theme::as_margin(SPACE_SM),
+                    bottom: theme::as_margin(SPACE_SM),
+                })
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    if log.is_empty() && state.turn.is_none() {
+                        empty_state(ctx, state, ui, &mut send);
+                    }
+                    for (i, line) in log.iter().enumerate() {
+                        match line {
+                            LogLine::Msg { msg } => match msg.role {
+                                Role::User => user_bubble(ctx, ui, msg),
+                                Role::Assistant => {
+                                    for (k, b) in msg.blocks.iter().enumerate() {
+                                        match b {
+                                            Block::Thinking { thinking, .. }
+                                                if !thinking.trim().is_empty() =>
+                                            {
+                                                look::activity(
                                                     ui,
                                                     theme,
-                                                    "Pick an answer below, or type your own.",
+                                                    ("thought", i, k),
+                                                    &look::Activity {
+                                                        label: "Thought",
+                                                        live: false,
+                                                        failed: false,
+                                                        right: None,
+                                                        body: Some((thinking, look::Body::Thinking)),
+                                                    },
                                                 );
                                             }
-                                        } else {
-                                            tool_line(
-                                                ctx,
-                                                ui,
-                                                ("tool", i, k),
-                                                name,
-                                                input,
-                                                results.get(id),
-                                            );
-                                            for file in images.get(id).into_iter().flatten() {
-                                                sheet(state, ui, &chat_dir, file);
+                                            Block::Text { text } => {
+                                                if let Some(r) =
+                                                    message(ctx, ui, ("msg", i, k), text, msg.ts)
+                                                {
+                                                    open = Some(r);
+                                                }
                                             }
+                                            Block::ToolUse { id, name, input } => {
+                                                if name == tools::EDIT
+                                                    && let Some(p) = proposals.get(id)
+                                                {
+                                                    proposal_card(ctx, state, ui, p, &log);
+                                                } else if name == tools::ASK {
+                                                    // An open question is the options
+                                                    // card above the composer, not a line here.
+                                                    if open_ask.as_deref() == Some(id.as_str()) {
+                                                        continue;
+                                                    }
+                                                    let q = input["question"]
+                                                        .as_str()
+                                                        .unwrap_or_default();
+                                                    ui.add_space(SPACE_MD);
+                                                    ui.horizontal(|ui| {
+                                                        ui.add_space(SPACE_XS);
+                                                        ui.add(
+                                                            egui::Label::new(
+                                                                RichText::new(q)
+                                                                    .size(theme::LARGE_SIZE)
+                                                                    .color(look::tone_200(theme)),
+                                                            )
+                                                            .wrap(),
+                                                        );
+                                                    });
+                                                } else {
+                                                    let failed =
+                                                        results.get(id).is_some_and(|(_, e)| *e);
+                                                    let label =
+                                                        tools::describe(name, input, false);
+                                                    look::activity(
+                                                        ui,
+                                                        theme,
+                                                        ("tool", i, k),
+                                                        &look::Activity {
+                                                            label: &label,
+                                                            live: false,
+                                                            failed,
+                                                            right: None,
+                                                            body: Some((
+                                                                results
+                                                                    .get(id)
+                                                                    .map_or("(no result)", |(c, _)| {
+                                                                        c.as_str()
+                                                                    }),
+                                                                look::Body::Output,
+                                                            )),
+                                                        },
+                                                    );
+                                                    for file in images.get(id).into_iter().flatten()
+                                                    {
+                                                        sheet(state, ui, &chat_dir, file);
+                                                    }
+                                                }
+                                            }
+                                            Block::Thinking { .. }
+                                            | Block::Context { .. }
+                                            | Block::ToolResult { .. }
+                                            | Block::Opaque { .. } => {}
                                         }
                                     }
-                                    Block::Thinking { .. }
-                                    | Block::Context { .. }
-                                    | Block::ToolResult { .. }
-                                    | Block::Opaque { .. } => {}
                                 }
+                            },
+                            LogLine::Turn {
+                                secs,
+                                model,
+                                input_tokens,
+                                output_tokens,
+                                cached_tokens,
+                                cost_usd,
+                            } => {
+                                let cost = cost_usd
+                                    .filter(|c| *c > 0.0)
+                                    .map(|c| format!(" · ${c:.3}"))
+                                    .unwrap_or_default();
+                                let cached = if *input_tokens > 0 {
+                                    format!(
+                                        " ({:.0}% cached)",
+                                        *cached_tokens as f32 * 100.0 / *input_tokens as f32
+                                    )
+                                } else {
+                                    String::new()
+                                };
+                                ui.horizontal(|ui| {
+                                    ui.add_space(SPACE_XS);
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(format!(
+                                                "turn took {} · {model} · {} in{cached} · {} out{cost}",
+                                                duration(*secs),
+                                                kilo(*input_tokens),
+                                                kilo(*output_tokens)
+                                            ))
+                                            .font(theme::tabular(ui.ctx(), theme::SMALL_SIZE))
+                                            .color(theme::rgb(theme.text_faint)),
+                                        )
+                                        .wrap(),
+                                    );
+                                });
                             }
+                            LogLine::Notice { text, error } => {
+                                ui.add_space(SPACE_XS);
+                                ui.horizontal(|ui| {
+                                    ui.add_space(SPACE_XS);
+                                    ui.spacing_mut().item_spacing.x = SPACE_SM;
+                                    let color = theme::rgb(if *error {
+                                        theme.danger
+                                    } else {
+                                        theme.text_muted
+                                    });
+                                    let glyph = if *error {
+                                        icons::CIRCLE_ALERT
+                                    } else {
+                                        icons::INFO
+                                    };
+                                    icons::icon(ui, glyph, 12.0, color);
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(text).size(theme::BODY_SIZE).color(color),
+                                        )
+                                        .wrap(),
+                                    );
+                                });
+                            }
+                            LogLine::Proposal { .. }
+                            | LogLine::Status { .. }
+                            | LogLine::Image { .. } => {}
                         }
-                    },
-                    LogLine::Turn {
-                        secs,
-                        model,
-                        input_tokens,
-                        output_tokens,
-                        cached_tokens,
-                        cost_usd,
-                    } => {
-                        let cost = cost_usd
-                            .filter(|c| *c > 0.0)
-                            .map(|c| format!(" · ${c:.3}"))
-                            .unwrap_or_default();
-                        let cached = if *input_tokens > 0 {
-                            format!(
-                                " ({:.0}% cached)",
-                                *cached_tokens as f32 * 100.0 / *input_tokens as f32
-                            )
-                        } else {
-                            String::new()
-                        };
-                        ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
-                            ui.label(
-                                RichText::new(format!(
-                                    "{secs:.1}s · {model} · {} in{cached} · {} out{cost}",
-                                    kilo(*input_tokens),
-                                    kilo(*output_tokens)
-                                ))
-                                .small()
-                                .color(theme::rgb(theme.text_faint)),
-                            );
-                        });
+                    }
+                    if let Some(turn) = &state.turn {
+                        let elapsed = Some(duration(turn.started.elapsed().as_secs_f32()));
                         ui.add_space(SPACE_SM);
+                        if !turn.thinking.is_empty() {
+                            look::activity(
+                                ui,
+                                theme,
+                                "live_thought",
+                                &look::Activity {
+                                    label: "Thinking",
+                                    live: true,
+                                    failed: false,
+                                    right: elapsed.clone(),
+                                    body: Some((&turn.thinking, look::Body::Thinking)),
+                                },
+                            );
+                        }
+                        for (k, t) in turn.tools.iter().enumerate() {
+                            look::activity(
+                                ui,
+                                theme,
+                                ("live_tool", k),
+                                &look::Activity {
+                                    label: t,
+                                    live: true,
+                                    failed: false,
+                                    right: None,
+                                    body: None,
+                                },
+                            );
+                        }
+                        if !turn.text.is_empty() {
+                            ui.add_space(SPACE_SM);
+                            markdown_label(ctx, ui, &link_labels(&turn.text));
+                        }
+                        if turn.thinking.is_empty() {
+                            let what = if turn.text.is_empty() && turn.tools.is_empty() {
+                                "Thinking"
+                            } else {
+                                "Working"
+                            };
+                            look::activity(
+                                ui,
+                                theme,
+                                "live_status",
+                                &look::Activity {
+                                    label: what,
+                                    live: true,
+                                    failed: false,
+                                    right: elapsed,
+                                    body: None,
+                                },
+                            );
+                        }
                     }
-                    LogLine::Notice { text, error } => {
-                        ui.label(RichText::new(text).small().color(theme::rgb(if *error {
-                            theme.danger
-                        } else {
-                            theme.text_muted
-                        })));
-                    }
-                    LogLine::Proposal { .. } | LogLine::Status { .. } | LogLine::Image { .. } => {}
-                }
-            }
-            if let Some(turn) = &state.turn {
-                if !turn.thinking.is_empty() {
-                    thought(ctx, ui, "live_thought", &turn.thinking, true);
-                }
-                for t in &turn.tools {
-                    ui.label(
-                        RichText::new(format!("▸ {t}…"))
-                            .small()
-                            .color(theme::rgb(theme.text_muted)),
-                    );
-                }
-                if !turn.text.is_empty() {
-                    markdown_label(ctx, ui, &link_labels(&turn.text));
-                }
-                ui.horizontal(|ui| {
-                    ui.add(egui::Spinner::new().size(12.0));
-                    let what = if turn.text.is_empty() && turn.thinking.is_empty() {
-                        "Thinking"
-                    } else {
-                        "Working"
-                    };
-                    ui.label(
-                        RichText::new(format!(
-                            "{what}… {:.0}s",
-                            turn.started.elapsed().as_secs_f32()
-                        ))
-                        .small()
-                        .color(theme::rgb(theme.text_muted)),
-                    );
                 });
-            }
         });
     if let Some(text) = send
         && state.turn.is_none()
@@ -2062,51 +2746,83 @@ fn conversation(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
     }
 }
 
-/// The model's text with `ave://` links: the prose (link labels inline),
-/// then a row of chips. Returns the link clicked.
+/// `12s`, `1m 12s`.
+fn duration(secs: f32) -> String {
+    let s = secs.max(0.0).round() as u64;
+    if s >= 60 {
+        format!("{}m {:02}s", s / 60, s % 60)
+    } else {
+        format!("{s}s")
+    }
+}
+
+/// The model's text with `ave://` links: the prose in 14 px `tone-200`
+/// (link labels inline), the links under it as lime text, and the hover
+/// meta row. Returns the link clicked.
 fn message(
     ctx: &PageCtx<'_>,
     ui: &mut Ui,
     id: impl egui::AsIdSalt,
     text: &str,
+    ts: u64,
 ) -> Option<Reference> {
+    let theme = ctx.theme;
     let pieces = links::split(text);
-    markdown_label(ctx, ui, &link_labels(text));
+    ui.add_space(SPACE_MD);
+    let prose = markdown_label(ctx, ui, &link_labels(text)).rect;
     let targets: Vec<(String, Reference)> = pieces
-        .into_iter()
+        .iter()
         .filter_map(|p| match p {
-            links::Piece::Link { label, target } => Some((label, target)),
+            links::Piece::Link { label, target } => Some((label.clone(), target.clone())),
             links::Piece::Text(_) => None,
         })
         .collect();
-    if targets.is_empty() {
-        return None;
-    }
+    let plain: String = pieces
+        .into_iter()
+        .map(|p| match p {
+            links::Piece::Text(t) => t,
+            links::Piece::Link { label, .. } => label,
+        })
+        .collect();
     let mut clicked = None;
-    ui.push_id(id, |ui| {
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = Vec2::splat(SPACE_XS);
-            for (k, (label, target)) in targets.iter().enumerate() {
-                let r = ui
-                    .push_id(k, |ui| {
-                        ui.add(
-                            egui::Button::new(
-                                RichText::new(format!("◆ {label}"))
-                                    .small()
-                                    .color(theme::rgb(ctx.theme.accent)),
+    let mut over = prose;
+    if !targets.is_empty() {
+        let row = ui.push_id(id, |ui| {
+            ui.add_space(SPACE_XS);
+            ui.horizontal_wrapped(|ui| {
+                ui.add_space(SPACE_XS);
+                ui.spacing_mut().item_spacing = Vec2::new(SPACE_MD, SPACE_XS);
+                for (k, (label, target)) in targets.iter().enumerate() {
+                    let r = ui
+                        .push_id(k, |ui| {
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(label)
+                                        .size(theme::BODY_SIZE)
+                                        .color(theme::rgb(theme.accent)),
+                                )
+                                .sense(Sense::click()),
                             )
-                            .small()
-                            .corner_radius(CornerRadius::same(theme::RADIUS)),
-                        )
-                    })
-                    .inner
-                    .on_hover_text(format!("{target} · select it and show it in the viewer"));
-                if r.clicked() {
-                    clicked = Some(target.clone());
+                        })
+                        .inner;
+                    let r =
+                        r.on_hover_text(format!("{target} · select it and show it in the viewer"));
+                    if r.hovered() {
+                        ui.painter().hline(
+                            r.rect.x_range(),
+                            r.rect.bottom(),
+                            Stroke::new(1.0, theme::rgb(theme.accent)),
+                        );
+                    }
+                    if r.clicked() {
+                        clicked = Some(target.clone());
+                    }
                 }
-            }
+            });
         });
-    });
+        over = over.union(row.response.rect);
+    }
+    look::meta_row(ui, theme, over, false, &model::stamp(ts), &plain);
     clicked
 }
 
@@ -2215,34 +2931,85 @@ fn kilo(n: u64) -> String {
     }
 }
 
-/// What an empty conversation shows: what the assistant can do.
-fn empty_state(ctx: &PageCtx<'_>, ui: &mut Ui, send: &mut Option<String>) {
+/// What an empty conversation shows, as Selects' chat: one centred 14 px
+/// muted line, then quick actions as outline pills that send a prompt.
+fn empty_state(ctx: &PageCtx<'_>, state: &State, ui: &mut Ui, send: &mut Option<String>) {
     let theme = ctx.theme;
-    ui.add_space(SPACE_SM);
-    ui.label(RichText::new("Edit this plan by talking about it.").strong());
-    widgets::muted(
-        ui,
-        theme,
-        "Every change comes back as a card you apply or discard; nothing is edited behind your back. \
-         Select shots and press R, or type @, to point at them.",
+    let plan = state.chat.as_ref().map_or("this plan", |c| c.plan.as_str());
+    let line = format!(
+        "Edit {plan} by talking about it. Every change comes back as a card you apply or discard."
     );
-    ui.add_space(SPACE_SM);
-    for s in [
-        "Fix everything the check flags, changing as little as possible.",
-        "Put the strongest fire shot on the drop.",
-        "The opening is weak: find a better first shot.",
-        "Which shots repeat a performer too soon?",
+    let area = ui.available_rect_before_wrap();
+    let id = ui.scope_id().with("assistant-empty");
+    // The content's height, measured last frame, centres it this frame.
+    let last: f32 = ui.data(|d| d.get_temp(id)).unwrap_or(160.0);
+    let top = area.top() + ((area.height() - last) / 2.0).max(SPACE_LG);
+    let width = (area.width() - SPACE_LG * 2.0).clamp(0.0, 300.0);
+    let column = Rect::from_min_size(
+        egui::pos2(area.center().x - width / 2.0, top),
+        Vec2::new(width, area.height()),
+    );
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(column)
+            .layout(Layout::top_down(Align::Center)),
+    );
+    child.spacing_mut().item_spacing.y = 6.0;
+    child
+        .add(
+            egui::Label::new(
+                RichText::new(line)
+                    .size(theme::LARGE_SIZE)
+                    .color(theme::ring(theme)),
+            )
+            .wrap()
+            .halign(Align::Center),
+        )
+        .on_hover_text("Select shots and press R, or type @, to point at them.");
+    child.add_space(SPACE_SM);
+    for (label, prompt) in [
+        (
+            "Fix what the check flags",
+            "Fix everything the check flags, changing as little as possible.",
+        ),
+        (
+            "Put the best fire shot on the drop",
+            "Put the strongest fire shot on the drop.",
+        ),
+        (
+            "Find a stronger opening shot",
+            "The opening is weak: find a better first shot.",
+        ),
+        (
+            "Which performers repeat too soon?",
+            "Which shots repeat a performer too soon?",
+        ),
     ] {
-        if ui
-            .add(egui::Button::new(RichText::new(s).small()).wrap())
-            .clicked()
+        if widgets::tip(
+            look::suggestion(&mut child, theme, label),
+            theme,
+            prompt,
+            "",
+        )
+        .clicked()
         {
-            *send = Some(s.to_owned());
+            *send = Some(prompt.to_owned());
         }
     }
+    let used = child.min_rect().height();
+    ui.data_mut(|d| d.insert_temp(id, used));
+    ui.advance_cursor_after_rect(Rect::from_min_size(
+        area.min,
+        Vec2::new(
+            area.width(),
+            (top - area.top() + used).max(area.height() - SPACE_LG),
+        ),
+    ));
 }
 
-/// A user message.
+/// A message the person sent, as Selects': right-aligned, at most 85 % of
+/// the list, an outlined 10 px bubble with no fill, 14 px white text with
+/// mentions in lime, and the hover meta row under it.
 fn user_bubble(ctx: &PageCtx<'_>, ui: &mut Ui, msg: &Msg) {
     let theme = ctx.theme;
     let text = msg.text();
@@ -2253,106 +3020,44 @@ fn user_bubble(ctx: &PageCtx<'_>, ui: &mut Ui, msg: &Msg) {
     if text.trim().is_empty() {
         return;
     }
-    ui.add_space(SPACE_SM);
-    ui.with_layout(Layout::top_down(Align::Max), |ui| {
-        egui::Frame::new()
-            .fill(theme::rgb(theme.accent_soft))
-            .corner_radius(CornerRadius::same(theme::RADIUS_LG))
-            .inner_margin(theme::margin_xy(SPACE_SM + 2.0, SPACE_XS + 2.0))
-            .show(ui, |ui| {
-                ui.set_max_width(ui.available_width() * 0.88);
-                ui.add(egui::Label::new(RichText::new(&text).color(theme::rgb(theme.text))).wrap());
-            });
-        let when = model::stamp(msg.ts);
-        let note = if answered {
-            format!("{when} · answer")
-        } else {
-            when
-        };
-        ui.label(
-            RichText::new(note)
-                .small()
-                .color(theme::rgb(theme.text_faint)),
-        );
-    });
-    ui.add_space(SPACE_XS);
-}
-
-/// A collapsible thinking summary.
-fn thought(ctx: &PageCtx<'_>, ui: &mut Ui, id: impl egui::AsIdSalt, text: &str, live: bool) {
-    let theme = ctx.theme;
-    let first: String = text
-        .lines()
-        .find(|l| !l.trim().is_empty())
-        .unwrap_or_default()
-        .chars()
-        .take(60)
-        .collect();
-    egui::CollapsingHeader::new(
-        RichText::new(format!(
-            "{} {first}…",
-            if live { "Thinking:" } else { "Thought:" }
-        ))
-        .small()
-        .color(theme::rgb(theme.text_muted)),
-    )
-    .id_salt(id)
-    .default_open(false)
-    .show(ui, |ui| {
-        ui.add(
-            egui::Label::new(
-                RichText::new(text)
-                    .small()
-                    .color(theme::rgb(theme.text_muted)),
-            )
-            .wrap(),
-        );
-    });
-}
-
-/// A collapsible tool call with its result.
-fn tool_line(
-    ctx: &PageCtx<'_>,
-    ui: &mut Ui,
-    id: impl egui::AsIdSalt,
-    name: &str,
-    input: &serde_json::Value,
-    result: Option<&(String, bool)>,
-) {
-    let theme = ctx.theme;
-    let failed = result.is_some_and(|(_, e)| *e);
-    let label = format!(
-        "{} {}",
-        if failed { "✖" } else { "▸" },
-        tools::describe(name, input, false)
+    ui.add_space(SPACE_MD);
+    let pad = Vec2::new(SPACE_MD, 6.0);
+    let max = (ui.available_width() * 0.85 - pad.x * 2.0).max(40.0);
+    let job = look::mention_job(
+        theme,
+        text.trim(),
+        theme::LARGE_SIZE,
+        theme::rgb(theme.text),
+        max,
     );
-    egui::CollapsingHeader::new(RichText::new(label).small().color(theme::rgb(if failed {
-        theme.warning
+    let galley = ui.painter().layout_job(job);
+    let size = galley.size() + pad * 2.0;
+    let (row, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), size.y), Sense::hover());
+    let bubble = Rect::from_min_size(egui::pos2(row.right() - size.x, row.top()), size);
+    ui.painter().rect_stroke(
+        bubble,
+        CornerRadius::same(theme::RADIUS_LG),
+        theme::input_line(theme),
+        egui::StrokeKind::Inside,
+    );
+    ui.painter()
+        .galley(bubble.min + pad, galley, theme::rgb(theme.text));
+    let when = model::stamp(msg.ts);
+    let note = if answered {
+        format!("{when} · answer")
     } else {
-        theme.text_muted
-    })))
-    .id_salt(id)
-    .default_open(false)
-    .show(ui, |ui| {
-        let body = result.map_or("(no result)", |(c, _)| c.as_str());
-        ui.add(
-            egui::Label::new(
-                RichText::new(body)
-                    .small()
-                    .monospace()
-                    .color(theme::rgb(theme.text_muted)),
-            )
-            .wrap(),
-        );
-    });
+        when
+    };
+    look::meta_row(ui, theme, bubble, true, &note, text.trim());
 }
 
-/// The model's text, with bold, code and bullets.
-fn markdown_label(ctx: &PageCtx<'_>, ui: &mut Ui, text: &str) {
+/// The model's text, with bold, code and bullets: 14 px in `tone-200`,
+/// bold and headings in the foreground.
+fn markdown_label(ctx: &PageCtx<'_>, ui: &mut Ui, text: &str) -> egui::Response {
     let theme = ctx.theme;
-    let body = widgets::blend(theme.text, theme.text_muted, 0.25);
+    let body = look::tone_200(theme);
     let strong = theme::rgb(theme.text);
-    let size = theme::BODY_SIZE - 1.0;
+    let size = theme::LARGE_SIZE;
     let mut job = egui::text::LayoutJob::default();
     let lines = markdown::parse(text.trim());
     for (n, line) in lines.iter().enumerate() {
@@ -2374,7 +3079,7 @@ fn markdown_label(ctx: &PageCtx<'_>, ui: &mut Ui, text: &str) {
         for s in &line.spans {
             let mut format = egui::TextFormat::simple(
                 if s.code {
-                    egui::FontId::monospace(size - 1.0)
+                    theme::mono(size - 1.0)
                 } else {
                     theme::font(size)
                 },
@@ -2393,9 +3098,13 @@ fn markdown_label(ctx: &PageCtx<'_>, ui: &mut Ui, text: &str) {
             job.append(&s.text, 0.0, format);
         }
     }
-    job.wrap.max_width = ui.available_width();
-    ui.add_space(SPACE_XS);
-    ui.add(egui::Label::new(job).wrap());
+    let width = ui.available_width() - SPACE_XS * 2.0;
+    job.wrap.max_width = width;
+    ui.horizontal(|ui| {
+        ui.add_space(SPACE_XS);
+        ui.add(egui::Label::new(job).wrap())
+    })
+    .inner
 }
 
 /// The card's state for proposal `id`, computed if needed.
@@ -2461,25 +3170,36 @@ fn proposal_card(
     let mut action: Option<CardAction> = None;
     let pending = matches!(status, Status::Pending);
     let stem = p.plan.clone();
-    ui.add_space(SPACE_XS);
+    ui.add_space(SPACE_SM);
+    // Selects' edit-agent card while it waits for you (a key-tinted
+    // hairline and wash, the title in lime); a plain hairline card after.
+    let (fill, stroke, title) = if pending {
+        (
+            theme::translucent(theme.accent, 13),
+            theme::translucent(theme.accent, 51),
+            theme::rgb(theme.accent),
+        )
+    } else {
+        (
+            egui::Color32::TRANSPARENT,
+            theme::ink(theme, theme::INK_LINE),
+            theme::rgb(theme.text_muted),
+        )
+    };
     egui::Frame::new()
-        .fill(theme::rgb(theme.raised))
-        .stroke(Stroke::new(
-            1.0,
-            theme::rgb(if pending { theme.accent } else { theme.border }),
-        ))
+        .fill(fill)
+        .stroke(Stroke::new(1.0, stroke))
         .corner_radius(CornerRadius::same(theme::RADIUS_LG))
-        .inner_margin(theme::margin(SPACE_SM))
+        .inner_margin(theme::margin_xy(SPACE_MD, 10.0))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = SPACE_XS + 2.0;
             ui.horizontal_wrapped(|ui| {
                 ui.label(
                     RichText::new("Proposal")
-                        .small()
-                        .strong()
-                        .color(theme::rgb(theme.accent)),
+                        .font(theme::medium(ui.ctx(), theme::BODY_SIZE))
+                        .color(title),
                 );
-                ui.label(RichText::new(&p.summary).color(theme::rgb(theme.text)));
                 if p.plan
                     != state
                         .chat
@@ -2489,11 +3209,19 @@ fn proposal_card(
                 {
                     ui.label(
                         RichText::new(format!("in {}", p.plan))
-                            .small()
+                            .size(theme::BODY_SIZE)
                             .color(theme::rgb(theme.text_muted)),
                     );
                 }
             });
+            ui.add(
+                egui::Label::new(
+                    RichText::new(&p.summary)
+                        .size(theme::LARGE_SIZE)
+                        .color(look::tone_200(theme)),
+                )
+                .wrap(),
+            );
             let Some(card) = card_for(ctx, state, &p.id) else {
                 return;
             };
@@ -2505,12 +3233,17 @@ fn proposal_card(
             let mut picked = card.picked.clone();
             let mut eff = effects.iter();
             for (k, op) in p.ops.iter().enumerate() {
-                ui.separator();
+                card_rule(ui, theme);
                 ui.horizontal(|ui| {
                     if pending {
-                        ui.checkbox(&mut picked[k], "");
+                        ui.checkbox(&mut picked[k], "")
+                            .on_hover_text("Include this change");
                     }
-                    ui.label(RichText::new(op.label()).small().strong());
+                    ui.label(
+                        RichText::new(op.label())
+                            .font(theme::medium(ui.ctx(), theme::BODY_SIZE))
+                            .color(theme::rgb(theme.text)),
+                    );
                 });
                 let effect = if picked[k] { eff.next() } else { None };
                 match effect {
@@ -2518,53 +3251,63 @@ fn proposal_card(
                     None => {
                         ui.label(
                             RichText::new("(not included)")
-                                .small()
+                                .size(theme::BODY_SIZE)
                                 .color(theme::rgb(theme.text_faint)),
                         );
                     }
                 }
                 if !op.reason().is_empty() && !matches!(op, EditOp::SetNote { .. }) {
-                    ui.label(
-                        RichText::new(op.reason())
-                            .small()
-                            .italics()
-                            .color(theme::rgb(theme.text_muted)),
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(op.reason())
+                                .size(theme::BODY_SIZE)
+                                .italics()
+                                .color(theme::rgb(theme.text_muted)),
+                        )
+                        .wrap(),
                     );
                 }
             }
-            ui.separator();
+            card_rule(ui, theme);
             let Some(card) = state.cards.get_mut(&p.id) else {
                 return;
             };
             card.picked = picked;
             match (&card.result, &card.before, &card.after) {
                 (Err(e), _, _) if !e.message.is_empty() => {
-                    ui.label(
-                        RichText::new(format!("Cannot apply: {e}"))
-                            .small()
-                            .color(theme::rgb(theme.danger)),
+                    card_line(
+                        ui,
+                        Some(icons::CIRCLE_X),
+                        &format!("Cannot apply: {e}"),
+                        theme::rgb(theme.danger),
                     );
                 }
                 (Ok(_), Some(before), Some(after)) => {
                     let (new, fixed) = ops::compare(before, after);
-                    let (text, color) = if after.is_empty() {
-                        ("✔ check passes".to_owned(), theme.success)
+                    let (glyph, text, color) = if after.is_empty() {
+                        (
+                            icons::CIRCLE_CHECK,
+                            "Check passes".to_owned(),
+                            theme.success,
+                        )
                     } else if new.is_empty() {
                         (
-                            format!("check: {} problems ({fixed} fixed, none new)", after.len()),
+                            icons::INFO,
+                            format!("Check: {} problems ({fixed} fixed, none new)", after.len()),
                             theme.text_muted,
                         )
                     } else {
                         (
+                            icons::CIRCLE_X,
                             format!(
-                                "✖ check: {} new problem{} ({fixed} fixed)",
+                                "Check: {} new problem{} ({fixed} fixed)",
                                 new.len(),
                                 if new.len() == 1 { "" } else { "s" }
                             ),
                             theme.danger,
                         )
                     };
-                    let r = ui.label(RichText::new(text).small().color(theme::rgb(color)));
+                    let r = card_line(ui, Some(glyph), &text, theme::rgb(color));
                     if !new.is_empty() {
                         r.on_hover_text(
                             new.iter()
@@ -2573,90 +3316,106 @@ fn proposal_card(
                                 .join("\n"),
                         );
                         for q in new.iter().take(3) {
-                            ui.label(
-                                RichText::new(format!("  shot {}: {}", q.shot, q.message))
-                                    .small()
-                                    .color(theme::rgb(theme.danger)),
+                            card_line(
+                                ui,
+                                None,
+                                &format!("shot {}: {}", q.shot, q.message),
+                                theme::rgb(theme.danger),
                             );
                         }
                     }
                 }
                 (Ok(_) | Err(_), _, _) => {
-                    ui.label(
-                        RichText::new("check unavailable (needs the index and music map)")
-                            .small()
-                            .color(theme::rgb(theme.text_faint)),
+                    card_line(
+                        ui,
+                        None,
+                        "Check unavailable (needs the index and music map)",
+                        theme::rgb(theme.text_faint),
                     );
                 }
             }
             let n = card.picked.iter().filter(|x| **x).count();
             let ok = card.result.is_ok() && n > 0;
-            ui.horizontal_wrapped(|ui| match &status {
-                Status::Pending => {
-                    if stale {
-                        ui.label(
-                            RichText::new("The plan changed since this was proposed; ask again.")
-                                .small()
-                                .color(theme::rgb(theme.warning)),
-                        );
-                        if ui.small_button("Discard").clicked() {
+            ui.add_space(2.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = Vec2::new(SPACE_XS, SPACE_XS);
+                match &status {
+                    Status::Pending => {
+                        if stale {
+                            card_line(
+                                ui,
+                                Some(icons::TRIANGLE_ALERT),
+                                "The plan changed since this was proposed; ask again.",
+                                theme::rgb(theme.warning),
+                            );
+                            if widgets::ghost_button(ui, theme, "Discard").clicked() {
+                                action = Some(CardAction::Discard);
+                            }
+                            return;
+                        }
+                        let all = n == p.ops.len();
+                        let label = if all {
+                            "Apply".to_owned()
+                        } else {
+                            format!("Apply {n} of {}", p.ops.len())
+                        };
+                        if ui
+                            .add_enabled_ui(ok, |ui| widgets::primary_button(ui, theme, &label))
+                            .inner
+                            .clicked()
+                        {
+                            action = Some(CardAction::Apply);
+                        }
+                        let preview = ui
+                            .add_enabled_ui(ok, |ui| {
+                                widgets::button_with(
+                                    ui,
+                                    theme,
+                                    widgets::ButtonKind::Ghost,
+                                    Some(icons::PLAY),
+                                    "Preview",
+                                )
+                            })
+                            .inner;
+                        if widgets::tip(preview, theme, "Play the edited plan in the viewer", "")
+                            .clicked()
+                        {
+                            action = Some(CardAction::Preview);
+                        }
+                        if widgets::ghost_button(ui, theme, "Discard").clicked() {
                             action = Some(CardAction::Discard);
                         }
-                        return;
                     }
-                    let all = n == p.ops.len();
-                    let label = if all {
-                        "Apply".to_owned()
-                    } else {
-                        format!("Apply {n} of {}", p.ops.len())
-                    };
-                    if ui
-                        .add_enabled_ui(ok, |ui| {
-                            widgets::button(ui, theme, &label, widgets::Emphasis::Primary)
-                        })
-                        .inner
+                    Status::Applied { version, ts, .. } => {
+                        card_line(
+                            ui,
+                            Some(icons::CIRCLE_CHECK),
+                            &format!("Applied as v{version} · {}", model::stamp(*ts)),
+                            theme::rgb(theme.success),
+                        );
+                        let revert = widgets::ghost_button(ui, theme, "Revert");
+                        if widgets::tip(
+                            revert,
+                            theme,
+                            "Restore the plan as it was before this (as a new version)",
+                            "",
+                        )
                         .clicked()
-                    {
-                        action = Some(CardAction::Apply);
+                        {
+                            action = Some(CardAction::Revert);
+                        }
                     }
-                    if ui
-                        .add_enabled(ok, egui::Button::new("▶ Preview"))
-                        .on_hover_text("Play the edited plan in the viewer")
-                        .clicked()
-                    {
-                        action = Some(CardAction::Preview);
+                    Status::Discarded => {
+                        card_line(ui, None, "Discarded", theme::rgb(theme.text_faint));
                     }
-                    if ui.button("Discard").clicked() {
-                        action = Some(CardAction::Discard);
+                    Status::Reverted { version, .. } => {
+                        card_line(
+                            ui,
+                            Some(icons::ROTATE_CCW),
+                            &format!("Reverted (v{version})"),
+                            theme::rgb(theme.text_faint),
+                        );
                     }
-                }
-                Status::Applied { version, ts, .. } => {
-                    ui.label(
-                        RichText::new(format!("✔ Applied as v{version} · {}", model::stamp(*ts)))
-                            .small()
-                            .color(theme::rgb(theme.success)),
-                    );
-                    if ui
-                        .small_button("Revert")
-                        .on_hover_text("Restore the plan as it was before this (as a new version)")
-                        .clicked()
-                    {
-                        action = Some(CardAction::Revert);
-                    }
-                }
-                Status::Discarded => {
-                    ui.label(
-                        RichText::new("Discarded")
-                            .small()
-                            .color(theme::rgb(theme.text_faint)),
-                    );
-                }
-                Status::Reverted { version, .. } => {
-                    ui.label(
-                        RichText::new(format!("Reverted (v{version})"))
-                            .small()
-                            .color(theme::rgb(theme.text_faint)),
-                    );
                 }
             });
         });
@@ -2667,6 +3426,25 @@ fn proposal_card(
         Some(CardAction::Revert) => revert(ctx, state, p),
         None => {}
     }
+}
+
+/// A hairline across a card, between its sections.
+fn card_rule(ui: &mut Ui, theme: &crate::theme::Palette) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 1.0), Sense::hover());
+    ui.painter()
+        .hline(rect.x_range(), rect.center().y, theme::ink_line(theme));
+}
+
+/// A 12 px line in a card, led by an optional 12 px icon in its colour.
+fn card_line(ui: &mut Ui, glyph: Option<char>, text: &str, color: egui::Color32) -> egui::Response {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = SPACE_XS + 2.0;
+        if let Some(glyph) = glyph {
+            icons::icon(ui, glyph, 12.0, color);
+        }
+        ui.add(egui::Label::new(RichText::new(text).size(theme::BODY_SIZE).color(color)).wrap())
+    })
+    .inner
 }
 
 /// A card button.
@@ -2689,6 +3467,8 @@ fn effect_row(ctx: &mut PageCtx<'_>, ui: &mut Ui, e: &Effect, plan: &str) {
         let side = |ui: &mut Ui, s: Option<&(usize, Shot)>, ctx: &mut PageCtx<'_>| {
             let size = Vec2::new(56.0, 32.0);
             let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+            let name = s.map_or_else(|| "no shot".to_owned(), |(slot, _)| format!("Shot {slot}"));
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
             match s {
                 Some((slot, shot)) => {
                     let path = ctx
@@ -2736,7 +3516,7 @@ fn effect_row(ctx: &mut PageCtx<'_>, ui: &mut Ui, e: &Effect, plan: &str) {
             }
         };
         side(ui, e.before.as_ref(), ctx);
-        ui.label(RichText::new("→").color(theme::rgb(theme.text_muted)));
+        icons::icon(ui, icons::CHEVRON_RIGHT, 12.0, theme::rgb(theme.text_muted));
         side(ui, e.after.as_ref(), ctx);
         ui.vertical(|ui| {
             let line = |s: Option<&(usize, Shot)>| {
@@ -2745,14 +3525,15 @@ fn effect_row(ctx: &mut PageCtx<'_>, ui: &mut Ui, e: &Effect, plan: &str) {
                     |(slot, sh)| format!("#{slot} {}@{:.1} {}b", sh.clip, sh.t_in, sh.beats),
                 )
             };
+            let font = theme::tabular(ui.ctx(), theme::SMALL_SIZE);
             ui.label(
                 RichText::new(line(e.before.as_ref()))
-                    .small()
+                    .font(font.clone())
                     .color(theme::rgb(theme.text_muted)),
             );
             ui.label(
                 RichText::new(line(e.after.as_ref()))
-                    .small()
+                    .font(font)
                     .color(theme::rgb(theme.text)),
             );
         });
@@ -2922,83 +3703,128 @@ fn history(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            ui.add_space(SPACE_XS);
-            widgets::title(ui, theme, "Applied proposals");
-            let mut any = false;
-            for line in chat.log.iter().rev() {
-                if let LogLine::Status { id, status } = line {
-                    let summary = proposal_in(&chat.log, id)
-                        .map(|p| p.summary)
-                        .unwrap_or_default();
-                    let text = match status {
-                        Status::Applied { version, ops, ts } => format!(
-                            "{} · v{version} · {} op{} · {summary}",
-                            model::stamp(*ts),
-                            ops.len(),
-                            if ops.len() == 1 { "" } else { "s" }
-                        ),
-                        Status::Reverted { version, ts } => {
-                            format!("{} · v{version} · reverted: {summary}", model::stamp(*ts))
+            egui::Frame::new()
+                .inner_margin(Margin {
+                    left: theme::as_margin(SPACE_XS),
+                    right: theme::as_margin(SPACE_XS),
+                    top: theme::as_margin(SPACE_MD),
+                    bottom: theme::as_margin(SPACE_SM),
+                })
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.spacing_mut().item_spacing.y = SPACE_XS + 2.0;
+                    widgets::menu_heading(ui, theme, "Applied proposals");
+                    let mut any = false;
+                    for line in chat.log.iter().rev() {
+                        if let LogLine::Status { id, status } = line {
+                            let summary = proposal_in(&chat.log, id)
+                                .map(|p| p.summary)
+                                .unwrap_or_default();
+                            let (when, what) = match status {
+                                Status::Applied { version, ops, ts } => (
+                                    model::stamp(*ts),
+                                    format!(
+                                        "v{version} · {} op{} · {summary}",
+                                        ops.len(),
+                                        if ops.len() == 1 { "" } else { "s" }
+                                    ),
+                                ),
+                                Status::Reverted { version, ts } => {
+                                    (model::stamp(*ts), format!("v{version} · reverted: {summary}"))
+                                }
+                                Status::Pending | Status::Discarded => continue,
+                            };
+                            any = true;
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(what)
+                                        .size(theme::BODY_SIZE)
+                                        .color(look::tone_200(theme)),
+                                )
+                                .wrap(),
+                            );
+                            ui.label(
+                                RichText::new(when)
+                                    .font(theme::tabular(ui.ctx(), theme::TINY_SIZE))
+                                    .color(theme::rgb(theme.text_faint)),
+                            );
                         }
-                        Status::Pending | Status::Discarded => continue,
-                    };
-                    any = true;
-                    ui.add(egui::Label::new(RichText::new(text).small()).wrap());
-                }
-            }
-            if !any {
-                widgets::muted(ui, theme, "Nothing applied yet.");
-            }
-            ui.add_space(SPACE_SM);
-            widgets::title(ui, theme, &format!("Versions of {}", chat.plan));
-            let versions = store::versions(&chat.work, &chat.plan);
-            if versions.is_empty() {
-                widgets::muted(
-                    ui,
-                    theme,
-                    "No saved versions yet. Applying a proposal keeps the plan as it was as v1.",
-                );
-            }
-            let last = versions.last().map(|v| v.n);
-            for v in versions.iter().rev() {
-                ui.horizontal_wrapped(|ui| {
-                    let current = Some(v.n) == last;
-                    ui.label(
-                        RichText::new(format!("v{}", v.n))
-                            .strong()
-                            .color(theme::rgb(if current { theme.accent } else { theme.text })),
-                    );
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(
-                                v.header
-                                    .split(" · ")
-                                    .skip(1)
-                                    .collect::<Vec<_>>()
-                                    .join(" · "),
-                            )
-                            .small()
-                            .color(theme::rgb(theme.text_muted)),
-                        )
-                        .wrap(),
-                    );
-                    if ui
-                        .small_button("▶")
-                        .on_hover_text("Play this version")
-                        .clicked()
-                    {
-                        play_version = Some(v.path.clone());
                     }
-                    if !current
-                        && ui
-                            .small_button("Restore")
-                            .on_hover_text("Make this the current plan (saved as a new version)")
-                            .clicked()
-                    {
-                        restore = Some((v.n, v.path.clone()));
+                    if !any {
+                        ui.label(
+                            RichText::new("Nothing applied yet.")
+                                .size(theme::BODY_SIZE)
+                                .color(theme::rgb(theme.text_muted)),
+                        );
+                    }
+                    ui.add_space(SPACE_MD);
+                    widgets::menu_heading(ui, theme, &format!("Versions of {}", chat.plan));
+                    let versions = store::versions(&chat.work, &chat.plan);
+                    if versions.is_empty() {
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(
+                                    "No saved versions yet. Applying a proposal keeps the plan as it was as v1.",
+                                )
+                                .size(theme::BODY_SIZE)
+                                .color(theme::rgb(theme.text_muted)),
+                            )
+                            .wrap(),
+                        );
+                    }
+                    let last = versions.last().map(|v| v.n);
+                    for v in versions.iter().rev() {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = SPACE_SM;
+                            let current = Some(v.n) == last;
+                            ui.label(
+                                RichText::new(format!("v{}", v.n))
+                                    .font(theme::medium(ui.ctx(), theme::BODY_SIZE))
+                                    .color(theme::rgb(theme.text)),
+                            );
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                ui.spacing_mut().item_spacing.x = 2.0;
+                                if !current {
+                                    let r = widgets::ghost_button(ui, theme, "Restore");
+                                    if widgets::tip(
+                                        r,
+                                        theme,
+                                        "Make this the current plan (saved as a new version)",
+                                        "",
+                                    )
+                                    .clicked()
+                                    {
+                                        restore = Some((v.n, v.path.clone()));
+                                    }
+                                }
+                                if widgets::icon_btn(ui, theme, icons::PLAY, "Play this version", "")
+                                    .clicked()
+                                {
+                                    play_version = Some(v.path.clone());
+                                }
+                                if current {
+                                    widgets::pill(ui, theme, "current", widgets::Tone::Neutral);
+                                }
+                                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                                    let mut job = egui::text::LayoutJob::simple_singleline(
+                                        v.header
+                                            .split(" · ")
+                                            .skip(1)
+                                            .collect::<Vec<_>>()
+                                            .join(" · "),
+                                        theme::font(theme::BODY_SIZE),
+                                        theme::rgb(theme.text_muted),
+                                    );
+                                    job.wrap.max_width = ui.available_width();
+                                    job.wrap.max_rows = 1;
+                                    job.wrap.break_anywhere = true;
+                                    ui.add(egui::Label::new(job))
+                                        .on_hover_text(v.header.clone());
+                                });
+                            });
+                        });
                     }
                 });
-            }
         });
     if let Some(path) = play_version {
         match Plan::load(&path) {
@@ -3021,5 +3847,169 @@ fn history(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
             }
             Err(e) => state.error = Some(format!("could not restore v{n}: {e:#}")),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use egui_kittest::kittest::{NodeT as _, Queryable};
+
+    use super::model::{Block, LogLine, Msg, Role};
+
+    /// A night with one plan (`reel-a`, two shots), and with `log` a
+    /// conversation in which the person mentioned its first shot. No index,
+    /// no music.
+    fn night(log: bool) -> anyhow::Result<(tempfile::TempDir, std::path::PathBuf)> {
+        use crate::plan::{Aspect, Plan, Rules, Shot};
+        let dir = tempfile::tempdir()?;
+        let work = dir.path().join("2026-11-12").join("_ave");
+        std::fs::create_dir_all(work.join("plans"))?;
+        let shot = |clip: &str, t_in: f32| Shot {
+            clip: clip.into(),
+            t_in,
+            beats: 4,
+            cx: 0.5,
+            who: String::new(),
+            seg: String::new(),
+            note: String::new(),
+        };
+        Plan {
+            name: "reel-a".into(),
+            aspect: Aspect::Vertical,
+            music: "m.wav".into(),
+            start_bar: 0,
+            drop_bar: 1,
+            card_bar: 2,
+            end_bar: 3,
+            end_card: String::new(),
+            rules: Rules::default(),
+            finish: Default::default(),
+            shots: vec![shot("A", 1.0), shot("B", 2.0)],
+            comments: Vec::new(),
+        }
+        .save(&work.join("plans").join("reel-a.toml"))?;
+        if log {
+            let said = Msg::new(
+                Role::User,
+                vec![Block::Text {
+                    text: "tighten @shot:reel-a#1 please".into(),
+                }],
+            );
+            super::store::append(
+                &super::store::chat_path(&work, "reel-a"),
+                &LogLine::Msg { msg: said },
+            )?;
+        }
+        Ok((dir, work))
+    }
+
+    /// The app on the review workspace of `work`, chat open, headless.
+    fn harness(
+        work: std::path::PathBuf,
+    ) -> egui_kittest::Harness<'static, Option<crate::gui::app::App>> {
+        use crate::gui::app::{Action, App, Page};
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1680.0, 1000.0))
+            .build_ui_state(
+                move |ui, app: &mut Option<App>| {
+                    let app = app.get_or_insert_with(|| {
+                        let mut app = App::new(
+                            ui.ctx(),
+                            crate::config::Config::default(),
+                            Some(work.clone()),
+                        );
+                        app.apply(ui.ctx(), Action::Go(Page::Review));
+                        app
+                    });
+                    app.show(ui);
+                },
+                None,
+            );
+        harness.run_steps(6);
+        harness
+    }
+
+    #[test]
+    fn empty_chat_offers_quick_actions_and_an_icon_header() -> anyhow::Result<()> {
+        let (_dir, work) = night(false)?;
+        let mut h = harness(work);
+        for label in [
+            "Fix what the check flags",
+            "Chats: the plan this conversation is about",
+            "History: applied proposals and plan versions",
+            "Assistant settings: model key, local server, autonomy",
+            "Chat",
+            "Comments",
+            "Model",
+        ] {
+            assert!(
+                h.query_all_by_label(label).next().is_some(),
+                "the chat panel shows {label:?}"
+            );
+        }
+        let send = h
+            .query_by_label("Send")
+            .ok_or_else(|| anyhow::anyhow!("no Send button"))?;
+        assert!(
+            send.accesskit_node().is_disabled(),
+            "nothing typed, nothing to send"
+        );
+        assert!(
+            h.query_by_label("New").is_none(),
+            "no text button in the header: New chat lives in the Chats menu"
+        );
+
+        let history = "History: applied proposals and plan versions";
+        h.query_by_label(history)
+            .ok_or_else(|| anyhow::anyhow!("no History button"))?
+            .click();
+        h.run_steps(3);
+        assert!(
+            h.query_by_label("Versions of reel-a").is_some(),
+            "History lists the plan's versions"
+        );
+        h.query_by_label(history)
+            .ok_or_else(|| anyhow::anyhow!("no History button"))?
+            .click();
+        h.run_steps(3);
+        // The timeline has a Comments toggle too; the chat's is leftmost.
+        h.query_all_by_label("Comments")
+            .min_by(|a, b| a.rect().left().total_cmp(&b.rect().left()))
+            .ok_or_else(|| anyhow::anyhow!("no Comments switch"))?
+            .click();
+        h.run_steps(3);
+        assert!(
+            h.query_by_label("No comments").is_some(),
+            "Comments mode shows the plan's (empty) comments"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_sent_message_is_a_bubble_and_typing_enables_send() -> anyhow::Result<()> {
+        let (_dir, work) = night(true)?;
+        let mut h = harness(work);
+        assert!(
+            h.query_by_label("Copy message").is_some(),
+            "the message has its meta row"
+        );
+        assert!(
+            h.query_by_label("Fix what the check flags").is_none(),
+            "no quick actions once the conversation has started"
+        );
+        let app = h
+            .state_mut()
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("no app"))?;
+        app.pages.assistant.input = "and @shot:reel-a#2 too".into();
+        h.run_steps(3);
+        let send = h
+            .query_by_label("Send")
+            .ok_or_else(|| anyhow::anyhow!("no Send button"))?;
+        assert!(
+            !send.accesskit_node().is_disabled(),
+            "typed text can be sent"
+        );
+        Ok(())
     }
 }
