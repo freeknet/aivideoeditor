@@ -13,6 +13,7 @@
 //! [`segments::segment`]. Everything a planner needs to reason about a clip
 //! without watching it ends up in the returned [`ClipIndex`].
 
+pub(crate) mod cheer;
 pub(crate) mod features;
 pub(crate) mod moments;
 pub(crate) mod motion;

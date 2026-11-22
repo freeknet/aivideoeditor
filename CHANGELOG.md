@@ -38,6 +38,16 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   soft findings, says "Ready to render" whenever nothing is hard, lists findings hard
   first, and clicking one selects its shot, or both shots around a seam finding's cut
   with the playhead on it.
+- Crowd cheers as a measured moment. `ave index` measures each clip's camera audio as a
+  10 Hz loudness envelope in three bands (full, below 250 Hz, above 2 kHz), cached under
+  `<work>/audio/` by the clip's stamp, so cached clips gain cheers without their video
+  being analysed again. A cheer is a sustained (0.4 s or longer) treble-heavy rise over
+  a rolling 5 s baseline that does not take the bass away, so steady music, drum hits,
+  a song getting louder and a breakdown are not cheers. Each segment carries its cheers
+  (onset, length, rise, strength 0..1; old indexes load without them), the shot log
+  prints `cheer 0.66 @6.71`, search finds them with `moment:cheer` and `cheer>0.5`, MCP
+  `segment_details` lists fire-burst and cheer moments, and `ave plan` also tries
+  windows whose out-point lands just after a cheer, scoring them up to a quarter higher.
 - Recording time, camera and sets. The probe now reads when each clip was recorded
   (`recorded_at`: UTC, the camera's local clock when known, and its source) and the
   camera make / model from the container tags. A `creation_time` written in `Z` from a

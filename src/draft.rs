@@ -33,7 +33,10 @@
 //! [`Memory`]), must not look like a placed shot, and must respect every
 //! rule in [`Rules`] against the shots already placed. If the footage runs
 //! out of distinct shots the pacing eases (fewer cuts per bar) and the draft
-//! is tried again. The draft is a starting point: `ave check` re-verifies it
+//! is tried again. A window whose out-point lands just after a crowd cheer
+//! (see [`crate::analyze::cheer`]) is also tried, and scores up to a
+//! quarter more: the shot shows the trick and cuts on the reaction.
+//! The draft is a starting point: `ave check` re-verifies it
 //! and a person or LLM can edit the TOML.
 
 use anyhow::{Result, bail};
@@ -187,7 +190,14 @@ pub(crate) struct Candidate {
     pub(crate) burst: f32,
     /// Whether the in-point is a burst onset (the flare lands on the cut).
     pub(crate) aligned: bool,
+    /// Strength of a crowd cheer whose onset falls just before the
+    /// out-point (the shot ends on the reaction), 0 when none.
+    pub(crate) cheer: f32,
 }
+
+/// Where a cheer onset should sit before a shot's out-point, seconds: the
+/// trick and the first of the reaction are in, the cut follows.
+const CHEER_LEAD: (f32, f32) = (0.15, 0.9);
 
 /// A bar pattern after the drop: how a bar (or two) is cut.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -534,6 +544,13 @@ fn candidates(
                     }
                 }
             }
+            // A window that ends just after each cheer onset.
+            for c in &g.seg.cheers {
+                let t = c.t + 0.5 * (CHEER_LEAD.0 + CHEER_LEAD.1) - dur;
+                if t >= lo && t <= hi {
+                    starts.push((t, false));
+                }
+            }
             for (t_in, aligned) in starts {
                 if memory.hit(index, &clip.id, t_in, t_in + dur).is_some() {
                     continue;
@@ -649,17 +666,25 @@ fn window<'c>(
     } else {
         window.iter().map(|s| s.burst).fold(0.0, f32::max)
     };
+    // A cheer just before the out-point: the shot ends on the reaction.
+    let cheer = spanned
+        .iter()
+        .flat_map(|&k| &segs[k].seg.cheers)
+        .filter(|c| c.t >= t_out - CHEER_LEAD.1 && c.t <= t_out - CHEER_LEAD.0)
+        .map(|c| c.strength)
+        .fold(0.0_f32, f32::max);
     Some(Candidate {
         clip: clip.id.clone(),
         seg_id: g.id.clone(),
         t_in,
         cx,
-        score: q * cam * moment * (1.0 - 0.08 * issues.min(4.0)),
+        score: q * cam * moment * (1.0 - 0.08 * issues.min(4.0)) * (1.0 + 0.25 * cheer),
         kind: what,
         framing: main.map(|c| c.framing.clone()).unwrap_or_default(),
         flame: window.iter().map(|s| s.flame).sum::<f32>() / window.len() as f32,
         burst,
         aligned,
+        cheer,
     })
 }
 
@@ -798,11 +823,14 @@ fn draft_paced(
             );
         };
         let mut shot = as_shot(c, slot.beats, people);
-        let accent = if c.aligned {
+        let mut accent = if c.aligned {
             format!(" · burst {:.1}% on the cut", c.burst * 100.0)
         } else {
             String::new()
         };
+        if c.cheer > 0.0 {
+            accent.push_str(&format!(" · ends on a cheer {:.2}", c.cheer));
+        }
         shot.note = format!(
             "{:?} · {} {} · score {score:.2}{accent}",
             slot.want, c.kind, c.framing
