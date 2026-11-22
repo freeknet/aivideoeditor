@@ -28,7 +28,8 @@
 //! Slots are filled most-important first (drop, finale, opening, then in
 //! order). A candidate is a window of a clip centred on its segment's best
 //! moment (`peak_t`): it must lie inside segments free of rejected flags and
-//! captions, must not reuse a moment another night's plan used (see
+//! captions, shifts clear of any bad span with a rejected flag inside them
+//! (see [`crate::analyze::spans`]; the slot fixes its length), must not reuse a moment another night's plan used (see
 //! [`Memory`]), must not look like a placed shot, and must respect every
 //! rule in [`Rules`] against the shots already placed. If the footage runs
 //! out of distinct shots the pacing eases (fewer cuts per bar) and the draft
@@ -513,10 +514,22 @@ fn candidates(
             } else {
                 0.5 * (g.seg.start + g.seg.end)
             };
-            let mut starts = vec![((peak - dur / 2.0).clamp(lo, hi), false)];
+            // Bad spans of a rejected flag in the run: the centred window
+            // shifts clear of them, a burst-aligned one is dropped (moving
+            // it would lose the burst on the cut).
+            let spans: Vec<&crate::analyze::spans::BadSpan> = segs[i..=j]
+                .iter()
+                .flat_map(|s| &s.seg.bad_spans)
+                .filter(|b| rules.reject_flags.contains(&b.flag))
+                .collect();
+            let centred = (peak - dur / 2.0).clamp(lo, hi);
+            let mut starts = Vec::new();
+            if let Some(t) = crate::analyze::spans::dodge(&spans, centred, dur, lo, hi) {
+                starts.push((t, false));
+            }
             if align {
                 for &m in &g.seg.moments {
-                    if m >= lo && m <= hi {
+                    if m >= lo && m <= hi && spans.iter().all(|b| !b.overlaps(m, m + dur)) {
                         starts.push((m, true));
                     }
                 }
