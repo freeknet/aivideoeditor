@@ -985,6 +985,8 @@ mod tests {
                     fps: [24, 1],
                     vcodec: String::new(),
                     has_audio: false,
+                    recorded_at: None,
+                    camera: None,
                 },
                 samples,
                 segments: segs,
