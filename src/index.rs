@@ -274,6 +274,11 @@ pub(crate) struct Index {
     /// Clips that could not be read, in name order; absent from `clips`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) skipped: Vec<Skipped>,
+    /// The night's acts: clips grouped by recording-time gaps and setting
+    /// changes, in recording order (see [`crate::analyze::sets`]).
+    /// Recomputed on every save.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) sets: Vec<crate::analyze::sets::Set>,
     /// The work folder this index was loaded from or written to (not
     /// stored): how the planner finds sibling nights' plans.
     #[serde(skip)]
@@ -305,8 +310,20 @@ impl Index {
     /// Saves `<work>/index.json` and regenerates `<work>/shotlog.md`.
     pub(crate) fn save(&self, work: &Path) -> Result<()> {
         std::fs::create_dir_all(work)?;
-        std::fs::write(work.join("index.json"), serde_json::to_string(self)?)?;
-        std::fs::write(work.join("shotlog.md"), shotlog(self))?;
+        let sets = crate::analyze::sets::group(self);
+        let fresh;
+        let index = if sets == self.sets {
+            self
+        } else {
+            // Captions or times moved since the sets were grouped.
+            fresh = Self {
+                sets,
+                ..self.clone()
+            };
+            &fresh
+        };
+        std::fs::write(work.join("index.json"), serde_json::to_string(index)?)?;
+        std::fs::write(work.join("shotlog.md"), shotlog(index))?;
         Ok(())
     }
 
@@ -371,7 +388,10 @@ fn clip_index(path: &Path, cache: &Path, force: bool, started: &dyn Fn()) -> Res
         && clip.stamp == st
         && clip.version >= analyze::ANALYSIS_VERSION
     {
-        return Ok(Analysed { clip, took: None });
+        return Ok(Analysed {
+            clip: with_recording(clip, path, &cached),
+            took: None,
+        });
     }
     started();
     let began = std::time::Instant::now();
@@ -387,6 +407,31 @@ fn clip_index(path: &Path, cache: &Path, force: bool, started: &dyn Fn()) -> Res
         clip,
         took: Some(began.elapsed().as_secs_f32()),
     })
+}
+
+/// A cached clip from before recording times were probed gets its
+/// `recorded_at` and `camera` from one ffprobe call (no re-analysis), and
+/// the cache file is rewritten; a failed probe leaves the clip as it was.
+fn with_recording(mut clip: ClipIndex, path: &Path, cached: &Path) -> ClipIndex {
+    if clip.probe.recorded_at.is_some() {
+        return clip;
+    }
+    match crate::media::probe(path) {
+        Ok(fresh) => {
+            clip.probe.recorded_at = fresh.recorded_at;
+            clip.probe.camera = fresh.camera;
+            match serde_json::to_string(&clip) {
+                Ok(text) => {
+                    if let Err(e) = std::fs::write(cached, text) {
+                        log::warn!("{}: could not update the cache: {e}", clip.id);
+                    }
+                }
+                Err(e) => log::warn!("{}: could not update the cache: {e}", clip.id),
+            }
+        }
+        Err(e) => log::warn!("{}: no recording time: {e:#}", clip.id),
+    }
+    clip
 }
 
 /// Whether a segment is dark under `t`, with the reason.
@@ -626,15 +671,17 @@ pub(crate) fn run(
             }
         }
     }
-    let index = Index {
+    let mut index = Index {
         source: source.display().to_string(),
         sharp_ref,
         clips,
         segments,
         thresholds,
         skipped,
+        sets: Vec::new(),
         work: Some(work.to_path_buf()),
     };
+    index.sets = crate::analyze::sets::group(&index);
     index.save(work)?;
     Ok(index)
 }
@@ -688,11 +735,69 @@ pub(crate) fn shotlog(index: &Index) -> String {
         pct(t.blown),
         pct(t.no_action)
     );
-    for clip in &index.clips {
-        let p = &clip.probe;
+    let mut cameras: Vec<(&str, usize)> = Vec::new();
+    for c in index.clips.iter().filter_map(|c| c.probe.camera.as_deref()) {
+        match cameras.iter_mut().find(|(k, _)| *k == c) {
+            Some(slot) => slot.1 += 1,
+            None => cameras.push((c, 1)),
+        }
+    }
+    if !cameras.is_empty() {
+        let list: Vec<String> = cameras.iter().map(|(c, n)| format!("{c} ({n})")).collect();
+        let _ = writeln!(s, "Cameras: {}.\n", list.join(", "));
+    }
+    if !index.sets.is_empty() {
         let _ = writeln!(
             s,
-            "## {} · {:.1}s · {}x{} {:.3}fps {}\n",
+            "Sets (the night's acts: clips in recording order, split by pauses over {} min and by lasting \
+             indoor/outdoor changes in the captions; times on the camera clock):\n",
+            crate::analyze::sets::GAP_SECS / 60
+        );
+        for set in &index.sets {
+            let _ = writeln!(s, "- {}", set.heading());
+        }
+        s.push('\n');
+    }
+    // Clips under their sets in recording order, or by name with no sets.
+    let mut order: Vec<(Option<&crate::analyze::sets::Set>, &ClipIndex)> = Vec::new();
+    for set in &index.sets {
+        order.extend(
+            set.clips
+                .iter()
+                .filter_map(|id| index.clip(id))
+                .map(|c| (Some(set), c)),
+        );
+    }
+    order.extend(
+        index
+            .clips
+            .iter()
+            .filter(|c| !order.iter().any(|(_, o)| o.id == c.id))
+            .map(|c| (None, c))
+            .collect::<Vec<_>>(),
+    );
+    let level = if index.sets.is_empty() { "##" } else { "###" };
+    let mut heading_of: Option<usize> = None;
+    for (set, clip) in order {
+        if let Some(set) = set
+            && heading_of != Some(set.n)
+        {
+            heading_of = Some(set.n);
+            let _ = writeln!(s, "## {}\n", set.heading());
+        }
+        let p = &clip.probe;
+        let mut when = String::new();
+        if let Some(r) = &p.recorded_at {
+            let _ = write!(when, " · {}", r.clock());
+        }
+        if cameras.len() > 1
+            && let Some(c) = &p.camera
+        {
+            let _ = write!(when, " · {c}");
+        }
+        let _ = writeln!(
+            s,
+            "{level} {}{when} · {:.1}s · {}x{} {:.3}fps {}\n",
             clip.id,
             p.duration,
             p.width,
@@ -846,6 +951,8 @@ min_lit = 0
                 fps: [24, 1],
                 vcodec: String::new(),
                 has_audio: false,
+                recorded_at: None,
+                camera: None,
             },
             samples: Vec::new(),
             segments: vec![seg],

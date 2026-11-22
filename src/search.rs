@@ -1105,6 +1105,7 @@ mod tests {
             clips: Vec::new(),
             thresholds: Default::default(),
             skipped: Vec::new(),
+            sets: Vec::new(),
             work: None,
             segments: vec![
                 scored(
