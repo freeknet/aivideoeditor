@@ -30,6 +30,16 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   re-measuring. The shot log prints them on a `bad:` line, `segment_details` shows them
   to the chat agent, `ave plan` shifts a shot's window clear of any span with a rejected
   flag, and `ave check` reports a shot that overlaps one.
+- Focal time: every search hit carries its segment's best moment (`peak_t`, the
+  strongest burst's onset or the peak of the action, kept inside the segment). Opening a
+  hit in the Shots browser, an `@` / `ave://` segment link in chat, or a segment from the
+  inspector seeks the viewer there instead of the segment's first frame, and MCP
+  `search_shots` lists it on each hit (`focal 12.5s`).
+- Search says how much of the night it could see: results carry `complete` and
+  `uncaptioned_in_scope` (segments that pass the measured filters but have no caption,
+  so free text and caption facets could not see them). The Shots browser shows it as a
+  quiet "312 shots · 41 not captioned", and MCP `search_shots` opens with "complete" or
+  "PARTIAL … uncaptioned_in_scope=N" so the chat agent knows when results are partial.
 - A Shot list tab in the inspector, Selects' Transcript for a cut: the open plan's shots
   in timeline order under their song sections, each with its number, time (MM:SS.s),
   bar, source segment, caption line, the plan's note and a quiet icon for its
@@ -281,6 +291,9 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Delete / Backspace in the inspector's Shot list only lifted the selected shot while
+  the timeline was open; it now lifts it whenever the list has a selection, through the
+  timeline's undoable lift, saved at once as a new plan version.
 - The timeline's A1 waveform no longer shows red "clipped" marks along a loud but
   mastered track. The music is now decoded at its own rate and channels (ffmpeg's
   stereo-to-mono downmix summed past full scale, and resampling rang over it), and a
