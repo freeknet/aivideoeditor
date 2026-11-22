@@ -582,6 +582,22 @@ pub(crate) struct Hit {
     pub(crate) score: f32,
     /// Why it matched, one line.
     pub(crate) reason: String,
+    /// The segment's focal time, seconds in the clip: where the viewer
+    /// lands when the hit is opened (see [`focal`]).
+    pub(crate) focal: f32,
+}
+
+/// A segment's focal time, seconds in the clip: its best moment (the
+/// strongest burst's onset, else `peak_t`, the peak of the action), kept
+/// inside the segment; the start when the index predates moments.
+pub(crate) fn focal(s: &Scored) -> f32 {
+    let (start, end) = (s.seg.start, s.seg.end.max(s.seg.start));
+    let t = s.seg.moments.first().copied().unwrap_or(s.seg.peak_t);
+    if t.is_finite() && (start..=end).contains(&t) {
+        t
+    } else {
+        start
+    }
 }
 
 /// What a search found, and how much of the night it could see.
@@ -711,6 +727,7 @@ pub(crate) fn search(query: &Query, night: &Night<'_>) -> Results {
             seg: i,
             score: score.clamp(0.0, 1.0),
             reason: reasons.join("; "),
+            focal: focal(s),
         });
     }
     hits.sort_by(|a, b| b.score.total_cmp(&a.score).then(a.seg.cmp(&b.seg)));
@@ -1440,6 +1457,33 @@ mod tests {
         assert!(!moment.complete, "caption fields are partial too");
         let negated = search(&Query::parse("-moment:performing"), &n);
         assert!(negated.complete, "a negated caption facet keeps them");
+        Ok(())
+    }
+
+    #[test]
+    fn hits_carry_the_focal_time() -> anyhow::Result<()> {
+        let mut index = night();
+        if let Some(s) = index.segments.first_mut() {
+            s.seg.start = 10.0;
+            s.seg.end = 14.0;
+            s.seg.peak_t = 12.5;
+        }
+        if let Some(s) = index.segments.get_mut(1) {
+            s.seg.start = 20.0;
+            s.seg.end = 23.0;
+            s.seg.peak_t = 0.0;
+        }
+        let people = People::default();
+        let marks = Marks::default();
+        let n = Night::new(&index, &people, &marks);
+        let hits = search(&Query::parse("spinner"), &n).hits;
+        let at = |seg: usize| hits.iter().find(|h| h.seg == seg).map(|h| h.focal);
+        assert_eq!(at(0), Some(12.5), "the peak, not the start: {hits:?}");
+        assert_eq!(
+            at(1),
+            Some(20.0),
+            "a peak outside the segment (an old index) falls back to its start: {hits:?}"
+        );
         Ok(())
     }
 }

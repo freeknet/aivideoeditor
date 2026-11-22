@@ -2104,6 +2104,9 @@ fn open_seg(ctx: &mut PageCtx<'_>, state: &State, seg: usize) {
             f64::from(seg.seg.end),
             seg.seg.cx,
         );
+        // Land on the shot's best moment, not its first frame.
+        ctx.player
+            .seek(f64::from(search::focal(seg) - seg.seg.start));
     }
 }
 
