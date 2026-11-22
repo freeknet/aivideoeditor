@@ -303,6 +303,32 @@ pub struct Resolved {
     pub facts: String,
 }
 
+/// When and on what clip `clip` was recorded, and the set (act) it is in:
+/// `MVI_7925 recorded 20:35:12 on Canon EOS R6 · set 3: Indoor stage`.
+/// `None` when the index knows none of the three.
+fn clip_facts(index: &crate::index::Index, clip: &str) -> Option<String> {
+    let probe = &index.clips.iter().find(|c| c.id == clip)?.probe;
+    let mut parts = Vec::new();
+    if let Some(r) = &probe.recorded_at {
+        parts.push(format!("recorded {}", r.clock()));
+    }
+    if let Some(c) = &probe.camera {
+        parts.push(format!("on {c}"));
+    }
+    let mut line = parts.join(" ");
+    if let Some(set) = index
+        .sets
+        .iter()
+        .find(|s| s.clips.iter().any(|c| c == clip))
+    {
+        if !line.is_empty() {
+            line.push_str(" · ");
+        }
+        line.push_str(&format!("set {}: {}", set.n, set.title));
+    }
+    (!line.is_empty()).then(|| format!("{clip} {line}"))
+}
+
 /// Resolves `reference` against `project`, or explains why it cannot.
 pub(crate) fn resolve(reference: &Reference, project: &Project) -> Result<Resolved, String> {
     let index = project.index.as_ref();
@@ -310,23 +336,27 @@ pub(crate) fn resolve(reference: &Reference, project: &Project) -> Result<Resolv
         let Some(index) = index else {
             return String::new();
         };
-        index
-            .segments
-            .iter()
-            .filter(|s| s.clip == clip && s.seg.end > t0 && s.seg.start < t1)
-            .map(|s| {
-                let caption = s
-                    .caption
-                    .as_ref()
-                    .map(|c| format!(" — {}", c.summary))
-                    .unwrap_or_default();
-                let flags = if s.flags.is_empty() {
-                    String::new()
-                } else {
-                    format!(" [{}]", s.flags.join(" "))
-                };
-                format!("{} {} q{:.2}{flags}{caption}", s.id, s.subject, s.q)
-            })
+        clip_facts(index, clip)
+            .into_iter()
+            .chain(
+                index
+                    .segments
+                    .iter()
+                    .filter(|s| s.clip == clip && s.seg.end > t0 && s.seg.start < t1)
+                    .map(|s| {
+                        let caption = s
+                            .caption
+                            .as_ref()
+                            .map(|c| format!(" — {}", c.summary))
+                            .unwrap_or_default();
+                        let flags = if s.flags.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" [{}]", s.flags.join(" "))
+                        };
+                        format!("{} {} q{:.2}{flags}{caption}", s.id, s.subject, s.q)
+                    }),
+            )
             .collect::<Vec<_>>()
             .join("; ")
     };
@@ -480,6 +510,61 @@ mod tests {
             "shots are 1-based"
         );
         assert!(Reference::parse("plain words").is_none(), "not a reference");
+    }
+
+    #[test]
+    fn clip_facts_say_when_on_what_and_which_act() -> anyhow::Result<()> {
+        use crate::analyze::ClipIndex;
+        use crate::analyze::sets::Set;
+        use crate::index::Index;
+        use crate::media::{Probe, RecordedAt};
+        let clip = |id: &str, recorded: bool, camera: Option<&str>| ClipIndex {
+            id: id.into(),
+            path: format!("{id}.mov"),
+            stamp: (0, 0),
+            probe: Probe {
+                duration: 10.0,
+                width: 1920,
+                height: 1080,
+                fps: [25, 1],
+                vcodec: "h264".into(),
+                has_audio: false,
+                recorded_at: recorded.then(|| RecordedAt {
+                    utc: "2026-11-12T04:35:12Z".into(),
+                    local: Some("2026-11-11T20:35:12-08:00".into()),
+                    source: "tag:creation_time".into(),
+                }),
+                camera: camera.map(str::to_owned),
+            },
+            samples: Vec::new(),
+            segments: Vec::new(),
+            hist: Vec::new(),
+            version: 0,
+        };
+        let index = Index {
+            clips: vec![
+                clip("MVI_1", true, Some("Canon EOS R6")),
+                clip("MVI_2", false, None),
+            ],
+            sets: vec![Set {
+                n: 3,
+                title: "Indoor stage · LED".into(),
+                clips: vec!["MVI_1".into()],
+                ..Set::default()
+            }],
+            ..Index::default()
+        };
+        assert_eq!(
+            super::clip_facts(&index, "MVI_1").as_deref(),
+            Some("MVI_1 recorded 20:35:12 on Canon EOS R6 · set 3: Indoor stage · LED"),
+            "the camera clock, the camera and the act"
+        );
+        assert_eq!(
+            super::clip_facts(&index, "MVI_2"),
+            None,
+            "nothing known, nothing said"
+        );
+        Ok(())
     }
 
     #[test]

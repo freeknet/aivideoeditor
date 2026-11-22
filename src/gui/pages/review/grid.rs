@@ -15,9 +15,13 @@
 //! of the thumbnail, in the key colour while the tab has the keyboard and
 //! grey otherwise; hover is an ink wash. The measures live in the hover
 //! card, not on the card.
+//!
+//! Grouped by act, a header row across the grid opens each act (see
+//! [`acts`]); rows break at an act's end.
 
 use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 
+use super::acts::{self, Row};
 use super::{Drawn, Item, Paint, Stack};
 use crate::gui::thumbs::Thumbs;
 use crate::gui::ui::icons;
@@ -70,42 +74,74 @@ pub(super) fn draw(
     let thumb_h = (w * 9.0 / 16.0).round();
     let row_h = thumb_h + INFO_H;
     let n = paint.items.len();
-    let rows = n.div_ceil(cols);
+    let layout = acts::layout(
+        paint.acts,
+        n,
+        cols,
+        acts::Metrics {
+            header: theme::CONTROL_HEIGHT,
+            header_gap: SPACE_SM,
+            header_lead: SPACE_XS,
+            tiles: row_h,
+            tiles_gap: GAP_Y,
+        },
+    );
     let mut area = egui::ScrollArea::vertical()
         .id_salt("review-grid")
         .auto_shrink([false, false]);
-    if let Some(r) = reveal {
-        let top = (r / cols) as f32 * (row_h + GAP_Y);
-        if let Some(off) = super::reveal_offset(top, top + row_h, scroll) {
+    if let Some(r) = reveal.and_then(|i| layout.row_of(i)) {
+        let (top, h) = layout.span(r);
+        if let Some(off) = super::reveal_offset(top, top + h, scroll) {
             area = area.vertical_scroll_offset(off);
         }
     }
     let mut responses = Vec::new();
     let mut toggles = Vec::new();
+    let mut folds = Vec::new();
+    let mut scope = None;
     let mut hover_scrub = None;
     ui.add_space(SPACE_SM);
-    ui.spacing_mut().item_spacing.y = GAP_Y;
-    let out = area.show_rows(ui, row_h, rows, |ui, range| {
-        for row in range {
-            let (rect, _) =
-                ui.allocate_exact_size(vec2(inner_w + OUTLINE_ROOM * 2.0, row_h), Sense::hover());
-            for c in 0..cols {
-                let i = row * cols + c;
-                let Some(item) = paint.items.get(i) else {
-                    break;
-                };
-                let r = Rect::from_min_size(
-                    rect.min + vec2(OUTLINE_ROOM + c as f32 * (w + GAP_X), 0.0),
-                    vec2(w, row_h),
-                );
-                let drawn = card(ui, paint, thumbs, item, r, thumb_h);
-                if let Some(t) = drawn.scrub {
-                    hover_scrub = Some((i, t));
+    let full_w = inner_w + OUTLINE_ROOM * 2.0;
+    let out = area.show_viewport(ui, |ui, viewport| {
+        let origin = ui.max_rect().min;
+        ui.set_min_size(vec2(full_w, layout.total));
+        for k in layout.visible(viewport.min.y, viewport.max.y) {
+            let (top, h) = layout.span(k);
+            let rect = Rect::from_min_size(origin + vec2(0.0, top), vec2(full_w, h));
+            match layout.rows.get(k) {
+                Some(Row::Header(a)) => {
+                    let Some(act) = paint.acts.get(*a) else {
+                        continue;
+                    };
+                    let head = acts::header(ui, paint, act, rect.shrink2(vec2(OUTLINE_ROOM, 0.0)));
+                    if head.fold {
+                        folds.push(act.n);
+                    }
+                    if head.scope {
+                        scope = Some(act.n);
+                    }
                 }
-                if drawn.toggled {
-                    toggles.push(i);
+                Some(Row::Tiles { start, end }) => {
+                    for i in *start..*end {
+                        let Some(item) = paint.items.get(i) else {
+                            break;
+                        };
+                        let c = i - start;
+                        let r = Rect::from_min_size(
+                            rect.min + vec2(OUTLINE_ROOM + c as f32 * (w + GAP_X), 0.0),
+                            vec2(w, row_h),
+                        );
+                        let drawn = card(ui, paint, thumbs, item, r, thumb_h);
+                        if let Some(t) = drawn.scrub {
+                            hover_scrub = Some((i, t));
+                        }
+                        if drawn.toggled {
+                            toggles.push(i);
+                        }
+                        responses.push((i, drawn.response));
+                    }
                 }
-                responses.push((i, drawn.response));
+                None => {}
             }
         }
     });
@@ -117,6 +153,8 @@ pub(super) fn draw(
         columns: cols,
         toggles,
         sort: None,
+        folds,
+        scope,
     }
 }
 

@@ -26,6 +26,7 @@
 //! | `move:pan`, `move:static`, `move:zoom-in`, `move:zoom-out`, `move:shaky`, `move:whip`, `static`, `pan` | by camera behaviour |
 //! | `person:<name>` | whose people-map name (or caption description) contains `<name>` |
 //! | `clip:MVI_79` | of clips whose id starts with that (or that exact segment id) |
+//! | `set:3` | of clips in that set, the night's third act (see [`crate::analyze::sets`]) |
 //! | `pick`, `reject`, `unreviewed`, `rated` | by review mark (see [`marks`]) |
 //! | `moment:performing`, `framing:close`, `setting:stage` | by caption field |
 //! | `captioned`, `uncaptioned` | by whether the vision model has seen it |
@@ -195,6 +196,8 @@ pub(crate) enum Term {
     Person(String),
     /// Clip id prefix or segment id.
     Clip(String),
+    /// In this set (act) of the night, numbered from 1.
+    Set(usize),
     /// Picked.
     Pick,
     /// Rejected.
@@ -253,6 +256,7 @@ impl Clause {
             Term::Camera(c) => format!("move {c}"),
             Term::Person(p) => format!("person {p}"),
             Term::Clip(c) => format!("clip {c}"),
+            Term::Set(n) => format!("set {n}"),
             Term::Pick => "picked".to_owned(),
             Term::Reject => "rejected".to_owned(),
             Term::Unreviewed => "unreviewed".to_owned(),
@@ -403,6 +407,10 @@ fn term(body: &str) -> Option<Term> {
             "move" | "camera" | "cam" => Term::Camera(camera_alias(&value)),
             "person" | "who" | "p" => Term::Person(value),
             "clip" | "seg" | "id" => Term::Clip(value),
+            "set" | "act" => match value.trim_start_matches('#').parse::<usize>() {
+                Ok(n) => Term::Set(n),
+                Err(_) => Term::Text(lower),
+            },
             "moment" => Term::Moment(value),
             "framing" | "frame" | "shot" => Term::Framing(value),
             "setting" | "where" => Term::Setting(value),
@@ -519,6 +527,8 @@ pub(crate) struct Night<'a> {
     /// Review marks.
     pub(crate) marks: &'a Marks,
     scales: Scales,
+    /// Each clip's set number (see [`crate::analyze::sets`]).
+    sets: std::collections::HashMap<&'a str, usize>,
 }
 
 impl<'a> Night<'a> {
@@ -529,7 +539,18 @@ impl<'a> Night<'a> {
             people,
             marks,
             scales: Scales::of(index),
+            sets: index
+                .sets
+                .iter()
+                .flat_map(|set| set.clips.iter().map(move |c| (c.as_str(), set.n)))
+                .collect(),
         }
+    }
+
+    /// The number of the set (act) clip `clip` is in, when the night has
+    /// sets.
+    pub(crate) fn set_of(&self, clip: &str) -> Option<usize> {
+        self.sets.get(clip).copied()
     }
 
     /// A metric of a segment, on the scale facets compare.
@@ -630,6 +651,7 @@ fn reads_captions(c: &Clause) -> bool {
             | Term::Clean
             | Term::Camera(_)
             | Term::Clip(_)
+            | Term::Set(_)
             | Term::Pick
             | Term::Reject
             | Term::Unreviewed
@@ -802,6 +824,7 @@ fn facet(night: &Night<'_>, s: &Scored, term: &Term) -> (bool, Option<String>) {
             };
             (ok, None)
         }
+        Term::Set(n) => (night.set_of(&s.clip) == Some(*n), Some(format!("set {n}"))),
         Term::Pick => (
             night.marks.get(&s.id).verdict == Some(Verdict::Pick),
             Some("picked".to_owned()),
@@ -1485,6 +1508,49 @@ mod tests {
             Some(20.0),
             "a peak outside the segment (an old index) falls back to its start: {hits:?}"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn set_facet_keeps_the_clips_of_that_act() -> anyhow::Result<()> {
+        use crate::analyze::sets::Set;
+        let mut index = night();
+        index.sets = vec![
+            Set {
+                n: 1,
+                clips: vec!["MVI_7901".into()],
+                ..Set::default()
+            },
+            Set {
+                n: 2,
+                clips: vec!["MVI_7925".into(), "MVI_7930".into()],
+                ..Set::default()
+            },
+        ];
+        let q = Query::parse("set:2 act:#1 set:x");
+        let terms: Vec<&Term> = q.clauses.iter().map(|c| &c.term).collect();
+        assert_eq!(
+            terms,
+            [&Term::Set(2), &Term::Set(1), &Term::Text("set:x".into())],
+            "set:N and act:#N parse, a non-number is free text"
+        );
+        let marks = Marks::default();
+        assert_eq!(
+            ids(&index, "set:2", &marks),
+            ["MVI_7925/1", "MVI_7930/1"],
+            "set:2 keeps the second act's clips"
+        );
+        assert_eq!(
+            ids(&index, "-set:2", &marks),
+            ["MVI_7901/1", "MVI_7901/2"],
+            "negated, it keeps the rest"
+        );
+        assert!(
+            ids(&index, "set:9", &marks).is_empty(),
+            "a set the night does not have matches nothing"
+        );
+        let label = q.clauses.first().map(super::Clause::label);
+        assert_eq!(label.as_deref(), Some("set 2"), "the chip says which act");
         Ok(())
     }
 }
