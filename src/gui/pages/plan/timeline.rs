@@ -1441,7 +1441,8 @@ fn audio(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut Ui, lay: &L
 }
 
 /// The ruler: clock ticks, then the marker lane with the song's bars, the
-/// drop and the end card, and the comment pins; seeks on click and drag.
+/// drop and the end card, and the marker pins; seeks on click and drag, a
+/// click on a pin selects that marker and a double-click edits it.
 fn ruler(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut Ui, lay: &Layout, m: Map) {
     let t = s.theme;
     let ruler = lay.ruler;
@@ -1467,11 +1468,17 @@ fn ruler(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut Ui, lay: &L
         .clicked()
         .then(|| resp.interact_pointer_pos().and_then(pin_at))
         .flatten();
-    if let Some(i) = pin_clicked
+    let pin_double = resp
+        .double_clicked()
+        .then(|| resp.interact_pointer_pos().and_then(pin_at))
+        .flatten();
+    if let Some(i) = pin_double {
+        super::comments::edit(state, s, io, i);
+    } else if let Some(i) = pin_clicked
         && let Some(c) = s.plan.comments.get(i)
     {
         io.seek(s, c.time.clamp(0.0, s.total));
-        state.comment_sel = Some(i);
+        super::comments::select(state, s, io, i);
         state.show_comments = true;
     } else if (resp.clicked() || resp.dragged())
         && let Some(p) = resp.interact_pointer_pos()

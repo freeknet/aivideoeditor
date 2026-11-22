@@ -159,12 +159,15 @@ pub(crate) fn api_tools() -> Value {
 pub(crate) fn tools() -> Value {
     let ops_schema = json!({
         "type": "array",
-        "description": "Edits, applied in order; slots are 1-based and each op sees the plan as earlier ops left it.",
+        "description": "Edits, applied in order; slots and marker numbers are 1-based and each op sees the plan as earlier ops left it. add_marker {time, note, color} pins a marker (a review comment) at time seconds on the cut; remove_marker / resolve_marker {marker} take the number plan_get lists (m3 is marker 3).",
         "items": {"type": "object", "required": ["op"], "properties": {
-            "op": {"type": "string", "enum": ["replace_shot", "set_in", "set_beats", "move_shot", "remove_shot", "set_cx", "set_note"]},
+            "op": {"type": "string", "enum": ["replace_shot", "set_in", "set_beats", "move_shot", "remove_shot", "set_cx", "set_note", "add_marker", "remove_marker", "resolve_marker"]},
             "index": {"type": "integer"}, "clip": {"type": "string"}, "in": {"type": "number"},
             "cx": {"type": "number"}, "beats": {"type": "integer"}, "from": {"type": "integer"},
-            "to": {"type": "integer"}, "note": {"type": "string"}, "reason": {"type": "string"}
+            "to": {"type": "integer"}, "note": {"type": "string"}, "reason": {"type": "string"},
+            "time": {"type": "number", "description": "add_marker: seconds from the plan's start."},
+            "color": {"type": "string", "enum": crate::plan::COMMENT_COLORS},
+            "marker": {"type": "integer", "description": "remove_marker / resolve_marker: the marker's number."}
         }}
     });
     json!([
@@ -180,7 +183,7 @@ pub(crate) fn tools() -> Value {
             "width": {"type": "integer", "default": 320}}}},
         {"name": "music_map", "description": "The track: bpm, bars with energy (low end, rms), sections, drop candidates (strongest first), song ranges.",
          "inputSchema": {"type": "object", "properties": {}}},
-        {"name": "plan_get", "description": "A plan: bars, aspect, every shot with its time on the cut, beats, clip, in-point, crop, who and note, plus the rule-check problems and its version (for base_version).",
+        {"name": "plan_get", "description": "A plan: bars, aspect, every shot with its time on the cut, beats, clip, in-point, crop, who and note, its numbered markers (review comments: time, colour, author, note, resolved), plus the rule-check problems and its version (for base_version).",
          "inputSchema": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}}}},
         {"name": "plan_edit", "description": "Apply edit ops to a plan's working copy. Returns the diff, the rule check (new problems, problems fixed) and the base_version. Without commit the edit is staged: the person sees it as a card and applies it. commit:true saves a new version, only when the person allowed the assistant to apply edits and only if base_version still matches the plan file.",
          "inputSchema": {"type": "object", "required": ["name", "ops", "reason"], "properties": {
@@ -244,7 +247,11 @@ pub(crate) fn call(work: &Path, name: &str, args: &Value, caller: Caller) -> Res
                 .into_iter()
                 .find(|v| v.n == n)
                 .with_context(|| format!("{name} has no v{n}"))?;
-            let plan = Plan::load(&v.path)?;
+            let mut plan = Plan::load(&v.path)?;
+            // The live plan's markers (review comments) survive a revert.
+            if let Ok(live) = Plan::load(&plan_path(&project, name)) {
+                plan.comments = live.comments;
+            }
             let saved =
                 store::save_version(&project.work, name, &plan, &format!("revert to v{n}"))?;
             plan.save(&plan_path(&project, name))?;
@@ -434,6 +441,31 @@ fn music(p: &Project) -> Result<Vec<Value>> {
     Ok(text(s))
 }
 
+/// A plan's markers (review comments), numbered as `remove_marker` and
+/// `resolve_marker` take them; empty when it has none.
+pub(crate) fn markers_text(plan: &Plan) -> String {
+    if plan.comments.is_empty() {
+        return String::new();
+    }
+    let mut s = format!("markers ({}):\n", plan.comments.len());
+    for (i, c) in plan.comments.iter().enumerate() {
+        s.push_str(&format!(
+            "m{} {:.2}s {} · {}{} · {}\n",
+            i + 1,
+            c.time,
+            c.color,
+            c.author,
+            if c.resolved { " · resolved" } else { "" },
+            if c.note.is_empty() {
+                "(no note)"
+            } else {
+                c.note.trim()
+            }
+        ));
+    }
+    s
+}
+
 /// A plan as text, with its check.
 fn describe_plan(p: &Project, plan: &Plan) -> String {
     let mut s = format!(
@@ -462,6 +494,7 @@ fn describe_plan(p: &Project, plan: &Plan) -> String {
             shot.note
         ));
     }
+    s.push_str(&markers_text(plan));
     match ops::check(plan, p.index.as_ref(), p.music.as_ref(), &p.people) {
         Some(problems) if problems.is_empty() => s.push_str("check: ok\n"),
         Some(problems) => {
@@ -936,6 +969,76 @@ pub(crate) mod tests {
         let base = super::plan_version(&work.join("plans/t.toml"))?;
         let v = super::commit_edit(work, "t", &ops_typed, "from a card", &base)?;
         assert_eq!(v, 3, "the card's Apply takes the same path");
+        Ok(())
+    }
+
+    #[test]
+    fn markers_are_read_by_plan_get_and_edited_by_plan_edit() -> anyhow::Result<()> {
+        use super::{Caller, call};
+        let dir = night(2)?;
+        let work = dir.path();
+        std::fs::write(
+            work.join("ave.toml"),
+            "[pages.assistant]\nallow_commit = true\n",
+        )?;
+        let get = || -> anyhow::Result<String> {
+            Ok(first_text(&call(
+                work,
+                "plan_get",
+                &json!({"name": "t"}),
+                Caller::Agent,
+            )?))
+        };
+        let before = get()?;
+        assert!(!before.contains("markers"), "no markers yet: {before}");
+        let base = super::plan_version(&work.join("plans/t.toml"))?;
+        let add = json!({"name": "t", "reason": "review", "commit": true, "base_version": base, "ops": [
+            {"op": "add_marker", "time": 1.5, "note": "hold the hoop longer", "color": "yellow"},
+            {"op": "add_marker", "time": 3.0}
+        ]});
+        let done = first_text(&call(work, "plan_edit", &add, Caller::Agent)?);
+        assert!(done.contains("committed"), "markers commit: {done}");
+        let got = get()?;
+        assert!(
+            got.contains("markers (2):")
+                && got.contains("m1 1.50s yellow · assistant · hold the hoop longer")
+                && got.contains("m2 3.00s green · assistant · (no note)"),
+            "plan_get lists numbered markers: {got}"
+        );
+        let saved = crate::plan::Plan::load(&work.join("plans/t.toml"))?;
+        assert_eq!(saved.comments.len(), 2, "saved in the plan file");
+
+        let base = super::plan_version(&work.join("plans/t.toml"))?;
+        let edit = json!({"name": "t", "reason": "done", "commit": true, "base_version": base, "ops": [
+            {"op": "resolve_marker", "marker": 1},
+            {"op": "remove_marker", "marker": 2}
+        ]});
+        call(work, "plan_edit", &edit, Caller::Agent)?;
+        let got = get()?;
+        assert!(
+            got.contains("markers (1):") && got.contains("m1 1.50s yellow · assistant · resolved"),
+            "resolved kept, the other removed: {got}"
+        );
+
+        let bad = json!({"name": "t", "reason": "x", "ops": [{"op": "add_marker", "time": 1.0, "color": "purple"}]});
+        let refused = call(work, "plan_edit", &bad, Caller::Agent);
+        assert!(
+            refused
+                .as_ref()
+                .is_err_and(|e| e.to_string().contains("purple")),
+            "an unknown colour is refused: {refused:?}"
+        );
+
+        // A revert brings back old shots but keeps today's markers.
+        let reverted = first_text(&call(
+            work,
+            "plan_revert",
+            &json!({"name": "t", "version": 1}),
+            Caller::Person,
+        )?);
+        assert!(reverted.contains("restored"), "reverted: {reverted}");
+        let after = crate::plan::Plan::load(&work.join("plans/t.toml"))?;
+        assert_eq!(after.comments.len(), 1, "markers survive the revert");
         Ok(())
     }
 

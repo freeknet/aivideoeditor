@@ -594,6 +594,28 @@ pub const COMMANDS: &[Command] = &[
         Scope::Timeline,
         key(Key::B),
     ),
+    // Premiere and Final Cut both drop a marker with M; Premiere goes to
+    // the next one with Shift+M and the previous one with Ctrl+Shift+M.
+    region(
+        "marker-add",
+        "Add a marker at the playhead",
+        Scope::Timeline,
+        key(Key::M),
+    ),
+    region(
+        "marker-next",
+        "Go to the next marker",
+        Scope::Timeline,
+        with(Modifiers::SHIFT, Key::M),
+    ),
+    region_in(
+        "marker-prev",
+        "Go to the previous marker",
+        Scope::Timeline,
+        with(Modifiers::ALT, Key::M),
+        Some(with(CMD_SHIFT, Key::M)),
+        None,
+    ),
     // ---- the browser -----------------------------------------------------
     region("pick", "Pick", Scope::Browser, key(Key::P)),
     region("reject", "Reject", Scope::Browser, key(Key::X)),

@@ -12,6 +12,15 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Markers on plans, end to end, as one concept with review comments (Selects' marker:
+  a moment, a colour, a note that is the comment). `M` adds one at the playhead (`F`
+  still works), `Shift+M` / `Alt+M` go to the next / previous one (`Ctrl+Shift+M` under
+  the Premiere preset), a click on a ruler pin selects it, a double-click opens its note
+  and colour swatches, and `Delete` removes the selected marker when no shot is
+  selected. Plans also read `[[marker]]` tables; version restores, reverts and "adopt B"
+  keep the live plan's markers. OTIO export writes them as timeline markers with their
+  colour and note. The chat agent sees numbered markers in `plan_get` and edits them
+  with the `add_marker`, `remove_marker` and `resolve_marker` ops of `plan_edit`.
 - A Shot list tab in the inspector, Selects' Transcript for a cut: the open plan's shots
   in timeline order under their song sections, each with its number, time (MM:SS.s),
   bar, source segment, caption line, the plan's note and a quiet icon for its

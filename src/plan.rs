@@ -348,14 +348,22 @@ pub(crate) struct Plan {
     /// The cuts, in order.
     #[serde(rename = "shot")]
     pub(crate) shots: Vec<Shot>,
-    /// Review comments pinned to moments of the cut (`[[comment]]`).
-    #[serde(default, rename = "comment", skip_serializing_if = "Vec::is_empty")]
+    /// Markers: review comments pinned to moments of the cut (`[[comment]]`,
+    /// also read as `[[marker]]`).
+    #[serde(
+        default,
+        rename = "comment",
+        alias = "marker",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub(crate) comments: Vec<Comment>,
 }
 
-/// A review comment: a note pinned to a moment of the cut, the way an
-/// editor leaves a feedback marker. It belongs to the plan, not to a shot,
-/// so it stays at its time when the shots under it change.
+/// A marker: a moment of the cut with a colour and, usually, a note. Like
+/// Selects, a marker with a note *is* a review comment, so markers and
+/// comments are one thing. It belongs to the plan, not to a shot, so it
+/// stays at its time when the shots under it change, and version restores
+/// keep the live plan's markers.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Comment {
     /// Seconds from the plan's start bar.

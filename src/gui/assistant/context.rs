@@ -164,6 +164,7 @@ pub(crate) fn plan_text(plan: &Plan, music: Option<&MusicMap>) -> String {
         );
         beat += shot.beats;
     }
+    s.push_str(&crate::mcp::markers_text(plan));
     s
 }
 
