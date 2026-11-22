@@ -3478,6 +3478,8 @@ fn open_link(ctx: &mut PageCtx<'_>, state: &mut State, r: &Reference) {
             }) {
                 let (t0, t1, cx) = (f64::from(s.seg.start), f64::from(s.seg.end), s.seg.cx);
                 ctx.player.open_clip(Path::new(&path), t0, t1, cx);
+                // Land on the segment's focal time, not its first frame.
+                ctx.player.seek(f64::from(crate::search::focal(s)) - t0);
             }
         }
         Target::Range { clip, t0, t1 } => {

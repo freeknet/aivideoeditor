@@ -918,13 +918,8 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
     }
 }
 
-/// Saves, reloads and follows jobs between frames.
-fn housekeeping(
-    state: &mut State,
-    project: &mut Project,
-    jobs: &crate::jobs::Jobs,
-    player: &mut Player,
-) {
+/// Starts the state afresh when the night changed under it.
+fn adopt(state: &mut State, project: &Project) {
     if state.work.as_deref() != Some(project.work.as_path()) {
         *state = State {
             work: Some(project.work.clone()),
@@ -934,6 +929,72 @@ fn housekeeping(
             ..State::default()
         };
     }
+}
+
+/// Lifts shots `shots` (0-based) of plan `name` for a region other than
+/// the timeline (the inspector's Shot list), through the timeline's own
+/// edit path: the same lift, on its undo stack, saved at once as a new
+/// version, so it works whether or not the timeline is drawn. Clears the
+/// selection and keeps the viewer on the edited cut when it held the old
+/// one. Returns whether anything was lifted.
+pub(crate) fn lift_shots(
+    state: &mut State,
+    project: &mut Project,
+    player: &mut Player,
+    selection: &mut Vec<Reference>,
+    name: &str,
+    shots: &[usize],
+) -> bool {
+    adopt(state, project);
+    if state.name.as_deref() != Some(name) {
+        state.open(project, name);
+    }
+    state.locked = lock_active(&lock_path(&project.work, name), SystemTime::now());
+    let Some(before) = state.plan.clone() else {
+        return false;
+    };
+    let mut sel: Vec<usize> = shots
+        .iter()
+        .copied()
+        .filter(|&k| k < before.shots.len())
+        .collect();
+    sel.sort_unstable();
+    sel.dedup();
+    if sel.is_empty() {
+        return false;
+    }
+    let list: Vec<String> = sel.iter().map(|k| (k + 1).to_string()).collect();
+    let lifted = state.apply(format!("lift {}", list.join(",")), |p| {
+        let mut any = false;
+        for &k in sel.iter().rev() {
+            any |= edit::lift(p, k);
+        }
+        any
+    });
+    if !lifted {
+        return false;
+    }
+    state.alts = None;
+    selection.retain(|r| !matches!(&r.target, Target::Shot { plan, .. } if plan == name));
+    state.save(project);
+    if let (Some(plan), Some(map)) = (state.plan.as_ref(), project.music.as_ref())
+        && sequence(&before, project, map).is_loaded(player)
+    {
+        let pos = player.position();
+        sequence(plan, project, map).open(player);
+        player.seek(pos);
+    }
+    true
+}
+
+/// Saves, reloads and follows jobs between frames.
+fn housekeeping(
+    state: &mut State,
+    project: &mut Project,
+    jobs: &crate::jobs::Jobs,
+    player: &mut Player,
+) {
+    adopt(state, project);
     // The plan list (a plan written elsewhere becomes a tab) and the lock.
     if state
         .last_tabs_check
