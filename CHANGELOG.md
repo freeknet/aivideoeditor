@@ -12,6 +12,11 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Focal time: every search hit carries its segment's best moment (`peak_t`, the
+  strongest burst's onset or the peak of the action, kept inside the segment). Opening a
+  hit in the Shots browser, an `@` / `ave://` segment link in chat, or a segment from the
+  inspector seeks the viewer there instead of the segment's first frame, and MCP
+  `search_shots` lists it on each hit (`focal 12.5s`).
 - Search says how much of the night it could see: results carry `complete` and
   `uncaptioned_in_scope` (segments that pass the measured filters but have no caption,
   so free text and caption facets could not see them). The Shots browser shows it as a

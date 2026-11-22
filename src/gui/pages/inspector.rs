@@ -157,6 +157,7 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
         match op {
             Op::Select(reference) => *ctx.selection = vec![reference],
             Op::Open(path, t0, t1, cx) => ctx.player.open_clip(&path, t0, t1, cx),
+            Op::Seek(t) => ctx.player.seek(t),
         }
     }
 }

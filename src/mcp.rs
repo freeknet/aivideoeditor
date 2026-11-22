@@ -170,7 +170,7 @@ pub(crate) fn tools() -> Value {
     json!([
         {"name": "night_overview", "description": "The open night: clips, segments and flags, captions, music grid and drops, people, plans with their rule-check status.",
          "inputSchema": {"type": "object", "properties": {}}},
-        {"name": "search_shots", "description": "Search the shot log. Free text matches captions/people/settings/clip ids; facets: fire>0.3 led>0.2 move>0.5 focus<0.8 q>0.7 dark soft flag:blown move:pan|zoom-in|zoom-out|static person:<name> clip:MVI_79 moment:performing framing:close pick reject like:<segment id>; '-' negates. Shares are relative to the night (1 = its strongest). The first line says whether the results are complete: PARTIAL means some segments in scope have no caption, so free text and caption facets could not see them.",
+        {"name": "search_shots", "description": "Search the shot log. Free text matches captions/people/settings/clip ids; facets: fire>0.3 led>0.2 move>0.5 focus<0.8 q>0.7 dark soft flag:blown move:pan|zoom-in|zoom-out|static person:<name> clip:MVI_79 moment:performing framing:close pick reject like:<segment id>; '-' negates. Shares are relative to the night (1 = its strongest). The first line says whether the results are complete: PARTIAL means some segments in scope have no caption, so free text and caption facets could not see them. Each hit's focal time is its best moment (seconds in the clip): the frame to look at or cut around.",
          "inputSchema": {"type": "object", "required": ["query"], "properties": {"query": {"type": "string"}, "limit": {"type": "integer", "default": 25}}}},
         {"name": "segment_details", "description": "Exact facts for segments (ids like MVI_7987/3): times, camera, exposure, focus, fire/LED/moving light, action centre, quality, flags with thresholds, burst moments, caption, who, plans using it.",
          "inputSchema": {"type": "object", "required": ["ids"], "properties": {"ids": {"type": "array", "items": {"type": "string"}}}}},
@@ -367,8 +367,8 @@ fn search(p: &Project, args: &Value) -> Result<Vec<Value>> {
                 .map(|c| format!(" — {}", c.summary))
                 .unwrap_or_default();
             Some(format!(
-                "{} {:.1}-{:.1}s score {:.2}: {}{cap}",
-                s.id, s.seg.start, s.seg.end, h.score, h.reason
+                "{} {:.1}-{:.1}s focal {:.1}s score {:.2}: {}{cap}",
+                s.id, s.seg.start, s.seg.end, h.focal, h.score, h.reason
             ))
         })
         .collect();
@@ -1046,6 +1046,10 @@ pub(crate) mod tests {
         assert!(
             partial.contains("PARTIAL") && partial.contains("uncaptioned_in_scope=2"),
             "a caption query names what it could not see: {partial}"
+        );
+        assert!(
+            partial.contains("A/1 0.0-3.0s focal 2.0s"),
+            "each hit carries its focal time: {partial}"
         );
         let whole = first_text(&call(
             work,
