@@ -14,8 +14,6 @@
 //! parts of a panel. Nothing here is a hint line: what a key does is in the
 //! control's tooltip and on the shortcut sheet.
 
-use std::collections::BTreeSet;
-
 use egui::{
     Align, Align2, Color32, CornerRadius, Layout, Rect, Sense, Stroke, Ui, UiBuilder, Vec2, pos2,
     vec2,
@@ -590,8 +588,10 @@ fn count_pill(
     widgets::tip(resp, t, tip, "")
 }
 
-/// The check bar: counts as pills, then "ready to render" or the first
-/// problem and the full list.
+/// The check bar: shots clean, soft and hard counts as pills (from each
+/// finding's severity), "Ready to render" unless a hard finding stops it,
+/// then the worst finding and the full list. Clicking a finding selects its
+/// shot, or both shots around a seam finding's cut with the playhead on it.
 pub(super) fn check_bar(
     state: &mut State,
     s: &Shown<'_>,
@@ -601,12 +601,15 @@ pub(super) fn check_bar(
 ) {
     let t = s.theme;
     top_line(ui, s, rect);
-    let errors = state.problems.iter().filter(|p| super::is_error(p)).count();
+    let errors = crate::plan::hard_count(&state.problems);
     let warnings = state.problems.len() - errors;
     let clean = (0..s.plan.shots.len())
         .filter(|k| !s.issues.contains_key(k))
         .count();
-    let mut jump = None;
+    // Hard first, each group in check order.
+    let mut order: Vec<&crate::plan::Finding> = state.problems.iter().collect();
+    order.sort_by_key(|f| f.severity);
+    let mut jump: Option<crate::plan::Finding> = None;
     row(ui, rect.shrink2(vec2(theme::SPACE_SM, 0.0)), |ui| {
         if s.project.index.is_none() {
             icons::icon(ui, icons::INFO, icons::SMALL, theme::rgb(t.text_muted));
@@ -631,7 +634,7 @@ pub(super) fn check_bar(
             icons::TRIANGLE_ALERT,
             warnings,
             theme::rgb(t.warning),
-            "content rules bent (repeats, flags, captions)",
+            "soft: taste rules bent (repeats, flags, jump cuts, exposure and colour jumps)",
         );
         count_pill(
             ui,
@@ -639,15 +642,17 @@ pub(super) fn check_bar(
             icons::CIRCLE_X,
             errors,
             theme::rgb(t.danger),
-            "structural errors (timing, ranges, crop, drop)",
+            "hard: the plan is invalid or would render wrong (timing, ranges, crop, drop)",
         );
         ui.add_space(theme::SPACE_XS);
-        if state.problems.is_empty() {
+        if errors == 0 {
             ui.label(
                 egui::RichText::new("Ready to render")
                     .font(theme::font(theme::BODY_SIZE))
                     .color(theme::rgb(t.text_muted)),
             );
+        }
+        if order.is_empty() {
             return;
         }
         let list = widgets::button_with(
@@ -655,9 +660,9 @@ pub(super) fn check_bar(
             t,
             widgets::ButtonKind::Ghost,
             Some(icons::LIST),
-            "Problems",
+            "Findings",
         );
-        let list = widgets::tip(list, t, "Every problem the check finds", "");
+        let list = widgets::tip(list, t, "Every finding the check makes, hard first", "");
         let _ = egui::Popup::menu(&list)
             .width(460.0)
             .gap(theme::SPACE_XS)
@@ -665,57 +670,64 @@ pub(super) fn check_bar(
                 egui::ScrollArea::vertical()
                     .max_height(280.0)
                     .show(ui, |ui| {
-                        for p in &state.problems {
-                            let glyph = if super::is_error(p) {
+                        for p in &order {
+                            let glyph = if p.is_hard() {
                                 icons::CIRCLE_X
                             } else {
                                 icons::TRIANGLE_ALERT
                             };
-                            let where_ = if p.shot == 0 {
-                                "plan".to_owned()
-                            } else {
-                                format!("shot {}", p.shot)
-                            };
-                            if widgets::menu_item(
+                            let item = widgets::menu_item(
                                 ui,
                                 t,
                                 Some(glyph),
-                                &format!("{where_}: {}", p.message),
+                                &format!("{} · {}", p.place(), p.message),
                                 "",
                                 false,
-                            )
-                            .clicked()
-                            {
-                                jump = Some(p.shot);
+                            );
+                            let item = widgets::tip(item, t, p.id, "");
+                            if item.clicked() {
+                                jump = Some((*p).clone());
                                 ui.close();
                             }
                         }
                     });
             });
-        if let Some(first) = state.problems.first() {
-            let where_ = if first.shot == 0 {
-                "plan".to_owned()
-            } else {
-                format!("shot {}", first.shot)
-            };
+        if let Some(first) = order.first() {
             let resp = ui.add(
                 egui::Label::new(
-                    egui::RichText::new(format!("{where_}: {}", first.message))
+                    egui::RichText::new(format!("{} · {}", first.place(), first.message))
                         .font(theme::font(theme::BODY_SIZE))
                         .color(theme::rgb(t.text_muted)),
                 )
                 .truncate()
                 .sense(Sense::click()),
             );
-            if widgets::tip(resp, t, "Select that shot", "").clicked() {
-                jump = Some(first.shot);
+            let what = if first.seam.is_some() {
+                "Select the shots around that cut"
+            } else {
+                "Select that shot"
+            };
+            if widgets::tip(resp, t, &format!("{what} ({})", first.id), "").clicked() {
+                jump = Some((*first).clone());
             }
         }
     });
-    if let Some(shot) = jump.filter(|&n| n > 0) {
-        let k = shot - 1;
-        io.select(&s.name, &BTreeSet::from([k]));
-        state.anchor = Some(k);
-        state.view.reveal = s.timing.get(k).map(|&(a, d)| (a, a + d));
+    let Some((shots, cut)) = jump
+        .as_ref()
+        .and_then(|f| super::finding_target(f, s.plan.shots.len()))
+    else {
+        return;
+    };
+    let (Some(&lo), Some(&hi)) = (shots.first(), shots.last()) else {
+        return;
+    };
+    io.select(&s.name, &shots);
+    state.anchor = Some(lo);
+    state.view.reveal = match (s.timing.get(lo), s.timing.get(hi)) {
+        (Some(&(a, _)), Some(&(b, d))) => Some((a, b + d)),
+        (Some(_) | None, _) => None,
+    };
+    if let Some(&(at, _)) = cut.and_then(|k| s.timing.get(k)) {
+        io.seek(s, at);
     }
 }
