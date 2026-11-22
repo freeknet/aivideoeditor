@@ -15,6 +15,7 @@
 
 use egui::{CornerRadius, Rect, Sense, StrokeKind, pos2, vec2};
 
+use super::acts::{self, Row};
 use super::{Drawn, Item, Paint, Sort, Stack};
 use crate::gui::thumbs::Thumbs;
 use crate::gui::ui::icons;
@@ -204,24 +205,57 @@ pub(super) fn draw(
         .hline(head.x_range(), head.bottom() - 0.5, theme::ink_line(theme));
 
     let n = paint.items.len();
+    let layout = acts::layout(
+        paint.acts,
+        n,
+        1,
+        acts::Metrics {
+            header: ROW_H,
+            header_gap: ROW_GAP,
+            header_lead: SPACE_SM,
+            tiles: ROW_H,
+            tiles_gap: ROW_GAP,
+        },
+    );
     let mut area = egui::ScrollArea::vertical()
         .id_salt("review-list")
         .auto_shrink([false, false]);
-    let pitch = ROW_H + ROW_GAP;
-    if let Some(r) = reveal {
-        let top = r as f32 * pitch;
-        if let Some(off) = super::reveal_offset(top, top + ROW_H, scroll) {
+    if let Some(r) = reveal.and_then(|i| layout.row_of(i)) {
+        let (top, h) = layout.span(r);
+        if let Some(off) = super::reveal_offset(top, top + h, scroll) {
             area = area.vertical_scroll_offset(off);
         }
     }
     let mut responses = Vec::new();
+    let mut folds = Vec::new();
+    let mut scope = None;
     ui.add_space(SPACE_XS);
-    ui.spacing_mut().item_spacing.y = ROW_GAP;
-    let out = area.show_rows(ui, ROW_H, n, |ui, range| {
-        for i in range {
-            let (rect, _) = ui.allocate_exact_size(vec2(inner_w, ROW_H), Sense::hover());
-            if let Some(item) = paint.items.get(i) {
-                responses.push((i, row(ui, paint, thumbs, item, rect, &cols, i)));
+    let out = area.show_viewport(ui, |ui, viewport| {
+        let origin = ui.max_rect().min;
+        ui.set_min_size(vec2(inner_w, layout.total));
+        for k in layout.visible(viewport.min.y, viewport.max.y) {
+            let (top, h) = layout.span(k);
+            let rect = Rect::from_min_size(origin + vec2(0.0, top), vec2(inner_w, h));
+            match layout.rows.get(k) {
+                Some(Row::Header(a)) => {
+                    let Some(act) = paint.acts.get(*a) else {
+                        continue;
+                    };
+                    let head = acts::header(ui, paint, act, rect);
+                    if head.fold {
+                        folds.push(act.n);
+                    }
+                    if head.scope {
+                        scope = Some(act.n);
+                    }
+                }
+                Some(Row::Tiles { start, .. }) => {
+                    let i = *start;
+                    if let Some(item) = paint.items.get(i) {
+                        responses.push((i, row(ui, paint, thumbs, item, rect, &cols, i)));
+                    }
+                }
+                None => {}
             }
         }
     });
@@ -233,6 +267,8 @@ pub(super) fn draw(
         columns: 1,
         toggles: Vec::new(),
         sort,
+        folds,
+        scope,
     }
 }
 
