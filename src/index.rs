@@ -360,8 +360,21 @@ struct Analysed {
 }
 
 /// Analyses (or loads from cache) one clip; `started` runs just before a
-/// real analysis begins (not for a cache hit).
+/// real analysis begins (not for a cache hit). Its cheers are measured
+/// from the audio (cached apart, under `<work>/audio/`, so a cached clip
+/// gains them without its video being analysed again).
 fn clip_index(path: &Path, cache: &Path, force: bool, started: &dyn Fn()) -> Result<Analysed> {
+    let mut a = clip_video(path, cache, force, started)?;
+    let audio = cache.parent().unwrap_or(cache).join("audio");
+    match analyze::cheer::cached(&audio, &a.clip.id, path, a.clip.probe.has_audio, force) {
+        Ok(env) => analyze::cheer::assign(&mut a.clip.segments, &analyze::cheer::detect(&env)),
+        Err(e) => log::warn!("{}: no cheers, the audio did not decode: {e:#}", a.clip.id),
+    }
+    Ok(a)
+}
+
+/// The video half of [`clip_index`].
+fn clip_video(path: &Path, cache: &Path, force: bool, started: &dyn Fn()) -> Result<Analysed> {
     let st = stamp(path)?;
     let id = clip_id(path);
     let cached = cache.join(format!("{id}.json"));
@@ -672,7 +685,8 @@ pub(crate) fn shotlog(index: &Index) -> String {
         s,
         "Each line: `id` time · camera · exposure (mean/p95 luma, then mean luma of the lit region and how much \
          of the frame it covers) · focus (1.0 = this shoot's median) · fire / LED share of frame · moving light · \
-         biggest burst (fire/LED onset) @ best-moment time · action centre x ± drift · quality 0-1 · flags \
+         biggest burst (fire/LED onset) @ best-moment time · crowd cheer from the camera audio \
+         (strength 0-1 @ onset) · action centre x ± drift · quality 0-1 · flags \
          (measured value vs threshold).\n\
          Captions (from the vision model) follow on the next line when present.\n"
     );
@@ -734,9 +748,23 @@ pub(crate) fn shotlog(index: &Index) -> String {
                     g.moments.len()
                 )
             };
+            let cheer = match g
+                .cheers
+                .iter()
+                .max_by(|a, b| a.strength.total_cmp(&b.strength))
+            {
+                Some(c) if g.cheers.len() > 1 => format!(
+                    " · cheer {:.2} @{:.2} ({} cheers)",
+                    c.strength,
+                    c.t,
+                    g.cheers.len()
+                ),
+                Some(c) => format!(" · cheer {:.2} @{:.2}", c.strength, c.t),
+                None => String::new(),
+            };
             let _ = writeln!(
                 s,
-                "- `{}` {:.1}-{:.1} · {} · exp {:.2}/{:.2} lit {:.2} over {} · focus {:.2} · {} · fire {} · led {} · move {}{} · cx {:.2}±{:.2} · q {:.2}{}",
+                "- `{}` {:.1}-{:.1} · {} · exp {:.2}/{:.2} lit {:.2} over {} · focus {:.2} · {} · fire {} · led {} · move {}{}{} · cx {:.2}±{:.2} · q {:.2}{}",
                 seg.id,
                 g.start,
                 g.end,
@@ -751,6 +779,7 @@ pub(crate) fn shotlog(index: &Index) -> String {
                 pct(g.led),
                 pct(g.moving),
                 peak,
+                cheer,
                 g.cx,
                 g.cx_spread / 2.0,
                 seg.q,
@@ -833,6 +862,7 @@ min_lit = 0
             burst: 0.0,
             peak_t: 2.0,
             moments: Vec::new(),
+            cheers: Vec::new(),
             sig: Default::default(),
         };
         ClipIndex {

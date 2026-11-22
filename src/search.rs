@@ -28,6 +28,7 @@
 //! | `clip:MVI_79` | of clips whose id starts with that (or that exact segment id) |
 //! | `pick`, `reject`, `unreviewed`, `rated` | by review mark (see [`marks`]) |
 //! | `moment:performing`, `framing:close`, `setting:stage` | by caption field |
+//! | `moment:cheer`, `cheer>0.5` | with a crowd cheer measured from the camera audio, by its strength 0..1 (see [`crate::analyze::cheer`]) |
 //! | `captioned`, `uncaptioned` | by whether the vision model has seen it |
 //! | `like:MVI_7925/3` | ranked by similarity to that segment (more like this) |
 //!
@@ -115,6 +116,8 @@ pub(crate) enum Metric {
     Cx,
     /// Review rating 0..5.
     Rating,
+    /// Strongest crowd cheer 0..1 (0: none).
+    Cheer,
 }
 
 impl Metric {
@@ -132,6 +135,7 @@ impl Metric {
             "dur" | "len" | "length" | "duration" => Self::Dur,
             "cx" | "x" => Self::Cx,
             "rating" | "stars" => Self::Rating,
+            "cheer" | "cheers" | "crowd-reaction" => Self::Cheer,
             _ => return None,
         })
     }
@@ -150,6 +154,7 @@ impl Metric {
             Self::Dur => "dur",
             Self::Cx => "cx",
             Self::Rating => "rating",
+            Self::Cheer => "cheer",
         }
     }
 
@@ -539,6 +544,7 @@ impl<'a> Night<'a> {
             Metric::Dur => s.seg.end - s.seg.start,
             Metric::Cx => s.seg.cx,
             Metric::Rating => f32::from(self.marks.get(&s.id).rating),
+            Metric::Cheer => s.seg.cheer(),
         }
     }
 
@@ -555,7 +561,8 @@ impl<'a> Night<'a> {
             | Metric::Luma
             | Metric::Dur
             | Metric::Cx
-            | Metric::Rating => 0.0,
+            | Metric::Rating
+            | Metric::Cheer => 0.0,
         }
     }
 
@@ -734,6 +741,18 @@ fn facet(night: &Night<'_>, s: &Scored, term: &Term) -> (bool, Option<String>) {
             let r = night.marks.get(&s.id).rating;
             (r > 0, Some(format!("{r}★")))
         }
+        // A measured moment: a crowd cheer from the camera audio.
+        Term::Moment(m) if m.starts_with("che") => {
+            match s
+                .seg
+                .cheers
+                .iter()
+                .max_by(|a, b| a.strength.total_cmp(&b.strength))
+            {
+                Some(c) => (true, Some(format!("cheer {:.2} @{:.1}s", c.strength, c.t))),
+                None => (false, None),
+            }
+        }
         Term::Moment(m) => match caption {
             Some(c) => (
                 c.effective_moment().to_lowercase().starts_with(m.as_str()),
@@ -771,7 +790,8 @@ fn fmt_metric(metric: Metric, x: f32) -> String {
         | Metric::Focus
         | Metric::Exp
         | Metric::Luma
-        | Metric::Cx => format!("{x:.2}"),
+        | Metric::Cx
+        | Metric::Cheer => format!("{x:.2}"),
     }
 }
 
@@ -1341,6 +1361,36 @@ mod tests {
             hoodie.len(),
             3,
             "caption descriptions match too: {hoodie:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn cheers_are_a_measured_moment_and_a_facet() -> anyhow::Result<()> {
+        let mut index = night();
+        let Some(s) = index.segments.get_mut(2) else {
+            anyhow::bail!("the fixture has a third segment");
+        };
+        s.seg.cheers.push(crate::analyze::cheer::Cheer {
+            t: 1.2,
+            dur: 1.0,
+            rise: 12.0,
+            strength: 0.7,
+        });
+        let marks = Marks::default();
+        assert_eq!(
+            ids(&index, "moment:cheer", &marks),
+            vec!["MVI_7925/1"],
+            "moment:cheer finds the crowd reaction"
+        );
+        assert_eq!(
+            ids(&index, "cheer>0.5", &marks),
+            vec!["MVI_7925/1"],
+            "cheer>0.5 compares the strength"
+        );
+        assert!(
+            ids(&index, "cheer>0.8", &marks).is_empty(),
+            "a 0.7 cheer is not above 0.8"
         );
         Ok(())
     }

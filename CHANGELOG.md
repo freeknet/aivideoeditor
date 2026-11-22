@@ -12,6 +12,16 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Crowd cheers as a measured moment. `ave index` measures each clip's camera audio as a
+  10 Hz loudness envelope in three bands (full, below 250 Hz, above 2 kHz), cached under
+  `<work>/audio/` by the clip's stamp, so cached clips gain cheers without their video
+  being analysed again. A cheer is a sustained (0.4 s or longer) treble-heavy rise over
+  a rolling 5 s baseline that does not take the bass away, so steady music, drum hits,
+  a song getting louder and a breakdown are not cheers. Each segment carries its cheers
+  (onset, length, rise, strength 0..1; old indexes load without them), the shot log
+  prints `cheer 0.66 @6.71`, search finds them with `moment:cheer` and `cheer>0.5`, MCP
+  `segment_details` lists fire-burst and cheer moments, and `ave plan` also tries
+  windows whose out-point lands just after a cheer, scoring them up to a quarter higher.
 - A Shot list tab in the inspector, Selects' Transcript for a cut: the open plan's shots
   in timeline order under their song sections, each with its number, time (MM:SS.s),
   bar, source segment, caption line, the plan's note and a quiet icon for its

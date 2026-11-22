@@ -762,6 +762,7 @@ beats = 4
             burst: 0.0,
             peak_t: 0.0,
             moments: Vec::new(),
+            cheers: Vec::new(),
             sig: Default::default(),
         };
         let probe = Probe {

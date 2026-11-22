@@ -115,9 +115,20 @@ pub(crate) struct Segment {
     /// Onset times of every burst moment, strongest first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) moments: Vec<f32>,
+    /// Crowd reactions measured from the clip's audio whose onset falls in
+    /// the segment, in time order (see [`super::cheer`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) cheers: Vec<super::cheer::Cheer>,
     /// Look-alike signature.
     #[serde(default)]
     pub(crate) sig: Signature,
+}
+
+impl Segment {
+    /// The strongest crowd reaction in the segment, 0..1 (0: none).
+    pub(crate) fn cheer(&self) -> f32 {
+        self.cheers.iter().map(|c| c.strength).fold(0.0, f32::max)
+    }
 }
 
 /// What a segment looks like, coarsely: enough to tell "same spot, same
@@ -426,6 +437,7 @@ fn summarise(
             .iter()
             .map(|m| (m.t * 1000.0).round() / 1000.0)
             .collect(),
+        cheers: Vec::new(),
         sig: Signature::default(),
     }
 }
