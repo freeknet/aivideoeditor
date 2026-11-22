@@ -189,6 +189,15 @@ pub enum Action {
     SetKeymap(ui::keymap::Preset),
     /// Put the keyboard in the top bar's search box.
     FocusSearch,
+    /// Lift shots (0-based) from a plan through the timeline's undoable,
+    /// versioned edit path, whether or not the timeline is open (the
+    /// inspector's Shot list sends it on Delete).
+    LiftShots {
+        /// The plan (file stem).
+        plan: String,
+        /// The shots, 0-based.
+        shots: Vec<usize>,
+    },
 }
 
 /// The application state.
@@ -396,6 +405,18 @@ impl App {
             Action::FocusSearch => {
                 self.focus_search = true;
                 self.search_open = true;
+            }
+            Action::LiftShots { plan, shots } => {
+                if let Some(project) = self.project.as_mut() {
+                    crate::gui::pages::plan::lift_shots(
+                        &mut self.pages.plan,
+                        project,
+                        &mut self.player,
+                        &mut self.selection,
+                        &plan,
+                        &shots,
+                    );
+                }
             }
             Action::OpenSettings => self.settings_open = true,
             Action::CloseSettings => self.settings_open = false,
