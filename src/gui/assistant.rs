@@ -82,7 +82,7 @@ use crate::gui::app::Action;
 use crate::gui::pages::PageCtx;
 use crate::gui::ui::theme::{self, SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XS};
 use crate::gui::ui::{icons, widgets};
-use crate::plan::{Plan, Problem, Shot};
+use crate::plan::{Finding, Plan, Shot};
 use crate::project::Project;
 use crate::refs::{Modifier, Reference, Target};
 
@@ -240,9 +240,9 @@ struct Card {
     /// The plan after the ticked ops, and what each did.
     result: Result<(Plan, Vec<Effect>), OpError>,
     /// The check before.
-    before: Option<Vec<Problem>>,
+    before: Option<Vec<Finding>>,
     /// The check after.
-    after: Option<Vec<Problem>>,
+    after: Option<Vec<Finding>>,
 }
 
 /// The panel's state: the conversation and any pending proposal.
@@ -4000,18 +4000,10 @@ fn proposal_card(
                     let r = card_line(ui, Some(glyph), &text, theme::rgb(color));
                     if !new.is_empty() {
                         r.on_hover_text(
-                            new.iter()
-                                .map(|q| format!("shot {}: {}", q.shot, q.message))
-                                .collect::<Vec<_>>()
-                                .join("\n"),
+                            new.iter().map(|q| q.text()).collect::<Vec<_>>().join("\n"),
                         );
                         for q in new.iter().take(3) {
-                            card_line(
-                                ui,
-                                None,
-                                &format!("shot {}: {}", q.shot, q.message),
-                                theme::rgb(theme.danger),
-                            );
+                            card_line(ui, None, &q.text(), theme::rgb(theme.danger));
                         }
                     }
                 }

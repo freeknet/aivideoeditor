@@ -299,7 +299,9 @@ impl State {
                 Some(m) => {
                     if let (Some(index), Some(music)) = (&p.index, &p.music)
                         && let Ok(plan) = crate::plan::Plan::load(&m.path)
-                        && !crate::plan::check(&plan, index, music, &p.people).is_empty()
+                        && crate::plan::hard_count(&crate::plan::check(
+                            &plan, index, music, &p.people,
+                        )) > 0
                     {
                         failing.push(d.id.clone());
                     }

@@ -22,7 +22,7 @@
 use std::fmt::Write as _;
 
 use crate::beats::MusicMap;
-use crate::plan::{Plan, Problem};
+use crate::plan::{Finding, Plan};
 
 /// The rules and conventions every provider is told.
 const BRIEF: &str = "ave is a desktop video editor for a weekly night of dark, dialogue-free \
@@ -211,18 +211,20 @@ pub(crate) fn music_text(plan: &Plan, music: &MusicMap) -> String {
 }
 
 /// The check as the model reads it.
-pub(crate) fn problems_text(problems: Option<&[Problem]>) -> String {
+pub(crate) fn problems_text(problems: Option<&[Finding]>) -> String {
     match problems {
         None => "check: cannot run yet (the night needs its index and music map)".to_owned(),
         Some([]) => "check: passes".to_owned(),
         Some(ps) => {
-            let mut s = format!("check: {} problems", ps.len());
+            let hard = crate::plan::hard_count(ps);
+            let soft = ps.len() - hard;
+            let mut s = if hard == 0 {
+                format!("check: passes with {soft} soft findings (taste, not fatal)")
+            } else {
+                format!("check: fails: {hard} hard, {soft} soft findings")
+            };
             for p in ps {
-                if p.shot == 0 {
-                    let _ = write!(s, "\n- plan: {}", p.message);
-                } else {
-                    let _ = write!(s, "\n- shot {}: {}", p.shot, p.message);
-                }
+                let _ = write!(s, "\n- {}", p.text());
             }
             s
         }

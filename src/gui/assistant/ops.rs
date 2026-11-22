@@ -27,7 +27,7 @@ use std::collections::BTreeSet;
 use crate::beats::MusicMap;
 use crate::index::Index;
 use crate::people::People;
-use crate::plan::{Plan, Problem, Shot};
+use crate::plan::{Finding, Plan, Shot};
 
 /// One change to a plan.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -395,20 +395,26 @@ pub(crate) fn check(
     index: Option<&Index>,
     music: Option<&MusicMap>,
     people: &People,
-) -> Option<Vec<Problem>> {
+) -> Option<Vec<Finding>> {
     Some(crate::plan::check(plan, index?, music?, people))
 }
 
-/// Problems in `after` that `before` did not have, and the number fixed.
-pub(crate) fn compare(before: &[Problem], after: &[Problem]) -> (Vec<Problem>, usize) {
-    let new: Vec<Problem> = after
+/// Findings in `after` that `before` did not have, and the number fixed.
+/// Two findings are the same when their id and message match (not their
+/// shot number, so moving a shot does not make its findings new).
+pub(crate) fn compare(before: &[Finding], after: &[Finding]) -> (Vec<Finding>, usize) {
+    let new: Vec<Finding> = after
         .iter()
-        .filter(|p| !before.iter().any(|q| q.message == p.message))
+        .filter(|p| {
+            !before
+                .iter()
+                .any(|q| q.id == p.id && q.message == p.message)
+        })
         .cloned()
         .collect();
     let fixed = before
         .iter()
-        .filter(|p| !after.iter().any(|q| q.message == p.message))
+        .filter(|p| !after.iter().any(|q| q.id == p.id && q.message == p.message))
         .count();
     (new, fixed)
 }
@@ -580,8 +586,11 @@ pub(crate) mod tests {
 
     #[test]
     fn comparing_check_results() -> anyhow::Result<()> {
-        let p = |m: &str| crate::plan::Problem {
-            shot: 1,
+        let p = |m: &str| crate::plan::Finding {
+            id: "flagged",
+            severity: crate::plan::Severity::Soft,
+            shot: Some(1),
+            seam: None,
             message: m.into(),
         };
         let (new, fixed) = super::compare(&[p("a"), p("b")], &[p("b"), p("c")]);
