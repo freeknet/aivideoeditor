@@ -25,9 +25,10 @@
 //! plan, the row under the playhead carries a lime marker.
 //!
 //! Keys, while the inspector is the focused panel: Up / Down walk the
-//! rows, Enter plays from the selected one. Delete and `R` need nothing
-//! here: the selection *is* the shot, so the timeline's own Delete lifts
-//! it through its undoable edit path, and the workspace's `R` mentions it.
+//! rows, Enter plays from the selected one. Delete / Backspace lift the
+//! selected shots through the timeline's undoable, versioned edit path
+//! (`Action::LiftShots`), whether or not the timeline is open; the
+//! workspace's `R` mentions them.
 
 use std::path::PathBuf;
 
@@ -327,6 +328,25 @@ pub(super) fn draw(ctx: &mut PageCtx<'_>, plans: &mut Plans, state: &mut State, 
                 }
         })
     };
+
+    // Delete / Backspace lift the selected shots whenever the list has a
+    // selection, open timeline or not: the app routes it through the
+    // timeline's undoable, versioned lift. (An open timeline reads the key
+    // first and clears the selection, so a shot is never lifted twice.)
+    let lift: Vec<usize> = (0..lines.len()).filter(|&k| is_selected(k)).collect();
+    if !lift.is_empty() && ctx.keys_free(ui) {
+        use egui::{Key, Modifiers};
+        let delete = ui.input_mut(|i| {
+            let del = i.consume_key(Modifiers::NONE, Key::Delete);
+            i.consume_key(Modifiers::NONE, Key::Backspace) || del
+        });
+        if delete {
+            ctx.actions.push(Action::LiftShots {
+                plan: name.clone(),
+                shots: lift,
+            });
+        }
+    }
 
     // Keys, while the inspector is the panel last pressed in.
     let mut ops = Vec::new();
@@ -876,6 +896,62 @@ mod tests {
             Some(8),
             "its beats went to the shot before, as the timeline's lift does"
         );
+        Ok(())
+    }
+
+    /// Regression: Delete in the Shot list did nothing while the timeline
+    /// was folded, because only the timeline read the key.
+    #[test]
+    fn delete_lifts_with_the_timeline_folded() -> anyhow::Result<()> {
+        use crate::gui::ui::layout::Region;
+        use egui_kittest::kittest::Queryable;
+        let (_dir, work) = night()?;
+        let mut h = harness(work.clone())?;
+        if let Some(a) = h.state_mut().as_mut() {
+            a.layout.set_open(Region::Timeline, false);
+        }
+        h.run_steps(3);
+        assert!(
+            !app(&h)?.layout.is_open(Region::Timeline),
+            "the timeline is folded"
+        );
+        let versions = || -> usize {
+            std::fs::read_dir(work.join("plans").join(".history").join("reel"))
+                .map_or(0, |d| d.filter_map(Result::ok).count())
+        };
+        let before = versions();
+        h.query_by_label("Shot 2")
+            .ok_or_else(|| anyhow::anyhow!("no row for shot 2"))?
+            .click();
+        h.run_steps(3);
+        assert_eq!(app(&h)?.selection, vec![shot_ref(2)], "shot 2 is selected");
+        h.key_press(egui::Key::Delete);
+        h.run_steps(3);
+        assert!(
+            app(&h)?.selection.is_empty(),
+            "the lift cleared the selection"
+        );
+        let live = crate::plan::Plan::load(&work.join("plans").join("reel.toml"))?;
+        let clips: Vec<&str> = live.shots.iter().map(|s| s.clip.as_str()).collect();
+        assert_eq!(clips, vec!["A", "C", "D"], "shot 2 is gone, saved at once");
+        assert_eq!(
+            live.shots.first().map(|s| s.beats),
+            Some(8),
+            "its beats went to the shot before, as the timeline's lift does"
+        );
+        assert!(
+            versions() > before,
+            "the edit was saved as a new version ({before} before)"
+        );
+        h.query_by_label("Shot 3")
+            .ok_or_else(|| anyhow::anyhow!("no row for shot 3"))?
+            .click();
+        h.run_steps(3);
+        h.key_press(egui::Key::Backspace);
+        h.run_steps(3);
+        let live = crate::plan::Plan::load(&work.join("plans").join("reel.toml"))?;
+        let clips: Vec<&str> = live.shots.iter().map(|s| s.clip.as_str()).collect();
+        assert_eq!(clips, vec!["A", "C"], "Backspace lifts too");
         Ok(())
     }
 }

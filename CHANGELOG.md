@@ -17,7 +17,8 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   each as `<plan> <where> [<severity> <id>] <message>` with a verdict line. **Only hard
   findings fail now** (exit 1; `ave render` refuses them without `--force`): the plan
   is invalid or would render wrong (`beat-count`, `bar-order`, `past-track`,
-  `off-drop`, `missing-clip`, `bad-span`, `crop-outside`, `empty-shot`). The taste
+  `off-drop`, `missing-clip`, `outside-clip`, `bad-span` (a bad span with a rejected
+  flag), `crop-outside`, `empty-shot`). The taste
   rules (`drop-subject`, `flagged`, `bad-moment`, `wide-action`, `same-stretch`,
   `repeat-performer`, `lookalike`, `reused`) are soft: reported, never fatal. New seam
   checks across each cut, all soft: `jump-cut` (one clip cut to itself skipping under
@@ -29,6 +30,43 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   soft findings, says "Ready to render" whenever nothing is hard, lists findings hard
   first, and clicking one selects its shot, or both shots around a seam finding's cut
   with the playhead on it.
+- Recording time, camera and sets. The probe now reads when each clip was recorded
+  (`recorded_at`: UTC, the camera's local clock when known, and its source) and the
+  camera make / model from the container tags. A `creation_time` written in `Z` from a
+  camera's local clock (Canon EOS, many DJI drones) is corrected by the file time; with no
+  tag the file time less the duration is used and marked `mtime`. Re-running `ave index`
+  fills both for cached clips with one ffprobe each, no re-analysis. Clips are grouped
+  into `sets`, the night's acts: runs split by pauses over 15 minutes and by lasting
+  indoor/outdoor changes in the captions, each titled from its captions and props
+  (`Outdoor parking lot · fire`). `index.json` stores them, `shotlog.md` lists them and
+  heads each set's clips in recording order, and `night_overview` shows them to the
+  chat agent.
+- Bad spans inside segments: a half-second focus hunt, whip, jolt, or dark or blown
+  moment inside an otherwise good segment is now recorded as `bad_spans` (start, end,
+  flag, worst value), found from the 6 Hz samples against the night's thresholds when
+  the index is scored, so an existing index gains them on the next `ave index` without
+  re-measuring. The shot log prints them on a `bad:` line, `segment_details` shows them
+  to the chat agent, `ave plan` shifts a shot's window clear of any span with a rejected
+  flag, and `ave check` reports a shot that overlaps one.
+- Focal time: every search hit carries its segment's best moment (`peak_t`, the
+  strongest burst's onset or the peak of the action, kept inside the segment). Opening a
+  hit in the Shots browser, an `@` / `ave://` segment link in chat, or a segment from the
+  inspector seeks the viewer there instead of the segment's first frame, and MCP
+  `search_shots` lists it on each hit (`focal 12.5s`).
+- Search says how much of the night it could see: results carry `complete` and
+  `uncaptioned_in_scope` (segments that pass the measured filters but have no caption,
+  so free text and caption facets could not see them). The Shots browser shows it as a
+  quiet "312 shots · 41 not captioned", and MCP `search_shots` opens with "complete" or
+  "PARTIAL … uncaptioned_in_scope=N" so the chat agent knows when results are partial.
+- Markers on plans, end to end, as one concept with review comments (Selects' marker:
+  a moment, a colour, a note that is the comment). `M` adds one at the playhead (`F`
+  still works), `Shift+M` / `Alt+M` go to the next / previous one (`Ctrl+Shift+M` under
+  the Premiere preset), a click on a ruler pin selects it, a double-click opens its note
+  and colour swatches, and `Delete` removes the selected marker when no shot is
+  selected. Plans also read `[[marker]]` tables; version restores, reverts and "adopt B"
+  keep the live plan's markers. OTIO export writes them as timeline markers with their
+  colour and note. The chat agent sees numbered markers in `plan_get` and edits them
+  with the `add_marker`, `remove_marker` and `resolve_marker` ops of `plan_edit`.
 - A Shot list tab in the inspector, Selects' Transcript for a cut: the open plan's shots
   in timeline order under their song sections, each with its number, time (MM:SS.s),
   bar, source segment, caption line, the plan's note and a quiet icon for its
@@ -280,6 +318,9 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Delete / Backspace in the inspector's Shot list only lifted the selected shot while
+  the timeline was open; it now lifts it whenever the list has a selection, through the
+  timeline's undoable lift, saved at once as a new plan version.
 - The timeline's A1 waveform no longer shows red "clipped" marks along a loud but
   mastered track. The music is now decoded at its own rate and channels (ffmpeg's
   stereo-to-mono downmix summed past full scale, and resampling rang over it), and a

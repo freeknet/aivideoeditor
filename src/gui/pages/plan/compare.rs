@@ -559,6 +559,8 @@ fn adopt(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>) {
     let mut b = c.plan;
     b.name = s.name.clone();
     if state.apply(format!("adopt {}", c.label), |p| {
+        // Markers are the review of this plan: they stay.
+        b.comments = std::mem::take(&mut p.comments);
         *p = b;
         true
     }) {
