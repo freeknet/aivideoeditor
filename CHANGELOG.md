@@ -273,6 +273,9 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Delete / Backspace in the inspector's Shot list only lifted the selected shot while
+  the timeline was open; it now lifts it whenever the list has a selection, through the
+  timeline's undoable lift, saved at once as a new plan version.
 - The timeline's A1 waveform no longer shows red "clipped" marks along a loud but
   mastered track. The music is now decoded at its own rate and channels (ffmpeg's
   stereo-to-mono downmix summed past full scale, and resampling rang over it), and a
