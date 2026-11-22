@@ -172,7 +172,7 @@ pub(crate) fn tools() -> Value {
          "inputSchema": {"type": "object", "properties": {}}},
         {"name": "search_shots", "description": "Search the shot log. Free text matches captions/people/settings/clip ids; facets: fire>0.3 led>0.2 move>0.5 focus<0.8 q>0.7 dark soft flag:blown move:pan|zoom-in|zoom-out|static person:<name> clip:MVI_79 moment:performing framing:close pick reject like:<segment id>; '-' negates. Shares are relative to the night (1 = its strongest).",
          "inputSchema": {"type": "object", "required": ["query"], "properties": {"query": {"type": "string"}, "limit": {"type": "integer", "default": 25}}}},
-        {"name": "segment_details", "description": "Exact facts for segments (ids like MVI_7987/3): times, camera, exposure, focus, fire/LED/moving light, action centre, quality, flags with thresholds, burst moments, caption, who, plans using it.",
+        {"name": "segment_details", "description": "Exact facts for segments (ids like MVI_7987/3): times, camera, exposure, focus, fire/LED/moving light, action centre, quality, flags with thresholds, bad spans (short bad stretches inside the segment: focus hunt, whip, jolt, dark or blown moment), burst moments, caption, who, plans using it.",
          "inputSchema": {"type": "object", "required": ["ids"], "properties": {"ids": {"type": "array", "items": {"type": "string"}}}}},
         {"name": "look", "description": "See frames: a contact sheet (JPEG) of up to 12 moments, left to right, top to bottom. Each item is a segment id (its mid time, or 'at') or a clip id with 'at' seconds. Use it when a choice depends on the picture.",
          "inputSchema": {"type": "object", "required": ["items"], "properties": {
@@ -401,8 +401,14 @@ fn details(p: &Project, args: &Value) -> Result<Vec<Value>> {
                 let people: Vec<String> = c.people.iter().map(|x| format!("{} [{}]", x.appearance, x.prop)).collect();
                 format!("\n  caption: {} | moment {} | framing {} | setting {} | people: {} | issues: {}", c.summary, c.effective_moment(), c.framing, c.setting, people.join("; "), c.issues.join(", "))
             });
+            let bad = if g.bad_spans.is_empty() {
+                String::new()
+            } else {
+                let spans: Vec<String> = g.bad_spans.iter().map(|b| b.text()).collect();
+                format!(" · bad spans (avoid these seconds): {}", spans.join(", "))
+            };
             format!(
-                "\n  camera {:?} · exposure {:.2}/{:.2} · focus {:.2} · fire {:.3} · led {:.3} · moving {:.3} · cx {:.2}±{:.2} · q {:.2} · flags {:?} · who {who}{caption}",
+                "\n  camera {:?} · exposure {:.2}/{:.2} · focus {:.2} · fire {:.3} · led {:.3} · moving {:.3} · cx {:.2}±{:.2} · q {:.2} · flags {:?}{bad} · who {who}{caption}",
                 g.camera, g.luma, g.p95, g.sharp, g.flame, g.led, g.moving, g.cx, g.cx_spread / 2.0, s.q, s.flags
             )
         });

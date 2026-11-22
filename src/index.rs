@@ -419,6 +419,7 @@ pub(crate) fn score(clips: &[ClipIndex], t: &Thresholds) -> (f32, Vec<Scored>) {
     let sharp_ref = median(&lit).max(0.05);
     let mut out = Vec::new();
     for clip in clips {
+        let marks = analyze::spans::marks(&clip.samples, sharp_ref, t);
         for (k, seg) in clip.segments.iter().enumerate() {
             let mut why: Vec<FlagWhy> = Vec::new();
             let mut raise = |flag: &str, measure: &str, value: f32, threshold: f32| {
@@ -475,10 +476,12 @@ pub(crate) fn score(clips: &[ClipIndex], t: &Thresholds) -> (f32, Vec<Scored>) {
             };
             let action = (seg.moving / 0.01).sqrt().clamp(0.0, 1.0);
             let q = expo * (0.45 + 0.55 * focus) * steady * (0.35 + 0.65 * action);
+            let mut seg = seg.clone();
+            seg.bad_spans = analyze::spans::within(&marks, &seg, &flags);
             out.push(Scored {
                 id: format!("{}/{}", clip.id, k + 1),
                 clip: clip.id.clone(),
-                seg: seg.clone(),
+                seg,
                 subject: subject.to_owned(),
                 q,
                 flags,
@@ -674,6 +677,8 @@ pub(crate) fn shotlog(index: &Index) -> String {
          of the frame it covers) · focus (1.0 = this shoot's median) · fire / LED share of frame · moving light · \
          biggest burst (fire/LED onset) @ best-moment time · action centre x ± drift · quality 0-1 · flags \
          (measured value vs threshold).\n\
+         A `bad:` line lists short bad stretches inside a segment (a focus hunt, a whip, a jolt) with their \
+         times and worst value.\n\
          Captions (from the vision model) follow on the next line when present.\n"
     );
     let t = &index.thresholds;
@@ -756,6 +761,10 @@ pub(crate) fn shotlog(index: &Index) -> String {
                 seg.q,
                 flags
             );
+            if !g.bad_spans.is_empty() {
+                let spans: Vec<String> = g.bad_spans.iter().map(|b| b.text()).collect();
+                let _ = writeln!(s, "  - bad: {}", spans.join(", "));
+            }
             if let Some(c) = &seg.caption {
                 let _ = writeln!(s, "  - {}", c.one_line());
             }
@@ -834,6 +843,7 @@ min_lit = 0
             peak_t: 2.0,
             moments: Vec::new(),
             sig: Default::default(),
+            bad_spans: Vec::new(),
         };
         ClipIndex {
             id: id.into(),

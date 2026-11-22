@@ -76,7 +76,9 @@ pub(crate) struct Rules {
     /// Whether a shot reusing a moment from another night's plan fails the
     /// check (see [`Memory`]). The drafter avoids them either way.
     pub(crate) reject_reused: bool,
-    /// Shots whose source range carries any of these flags fail the check.
+    /// Shots whose source range carries any of these flags fail the check,
+    /// as do shots overlapping a bad span (see [`crate::analyze::spans`])
+    /// with one of them.
     pub(crate) reject_flags: Vec<String>,
     /// The shot on the drop must have this subject (empty: no requirement).
     pub(crate) drop_subject: String,
@@ -558,6 +560,11 @@ pub(crate) fn check_with(
                     ),
                 );
             }
+            for b in
+                crate::analyze::spans::hits(&g.seg.bad_spans, shot.t_in, t_out, &r.reject_flags)
+            {
+                push(n, format!("overlaps a bad span in {}: {}", g.id, b.text()));
+            }
             if let Some(c) = &g.caption
                 && r.reject_moments.contains(&c.effective_moment().to_owned())
             {
@@ -763,6 +770,7 @@ beats = 4
             peak_t: 0.0,
             moments: Vec::new(),
             sig: Default::default(),
+            bad_spans: Vec::new(),
         };
         let probe = Probe {
             duration: 120.0,
