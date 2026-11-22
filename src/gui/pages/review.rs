@@ -39,8 +39,16 @@
 //! | Survey | G | the selection tiled; X drops one, `]` / `[` next / previous group ([`survey`]) |
 //!
 //! Marks are saved to `<work>/review.toml` (see [`crate::search::marks`]).
+//! ## Group: Acts
+//!
+//! The order menu's *Group by → Acts* puts the results in recording order
+//! under a header per act of the night (its sets, see [`acts`]); a header
+//! folds its act on click and scopes the search to it (`set:3`) from its
+//! filter button.
+//!
 //! View options persist in `ave.toml` under `[pages.review]`.
 
+mod acts;
 mod compare;
 mod grid;
 mod list;
@@ -75,17 +83,28 @@ pub(super) enum Sort {
     Fire,
     /// Most moving light first.
     Motion,
+    /// Recording time, under a header per act of the night.
+    Acts,
 }
 
 impl Sort {
     /// Every order, in menu order.
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::Best,
         Self::Quality,
         Self::Time,
         Self::Fire,
         Self::Motion,
+        Self::Acts,
     ];
+
+    /// Whether this groups the results rather than only ordering them.
+    fn groups(self) -> bool {
+        match self {
+            Self::Acts => true,
+            Self::Best | Self::Quality | Self::Time | Self::Fire | Self::Motion => false,
+        }
+    }
 
     /// The dropdown's label: one word.
     fn short(self) -> &'static str {
@@ -95,6 +114,7 @@ impl Sort {
             Self::Time => "Time",
             Self::Fire => "Fire",
             Self::Motion => "Motion",
+            Self::Acts => "Acts",
         }
     }
 
@@ -106,6 +126,7 @@ impl Sort {
             Self::Time => "Time",
             Self::Fire => "Fire",
             Self::Motion => "Motion",
+            Self::Acts => "Acts",
         }
     }
 
@@ -117,6 +138,7 @@ impl Sort {
             Self::Time => "time",
             Self::Fire => "fire",
             Self::Motion => "motion",
+            Self::Acts => "acts",
         }
     }
 }
@@ -316,6 +338,10 @@ pub(crate) struct State {
     ids: Vec<String>,
     expanded: BTreeSet<String>,
     expanded_rev: u64,
+    /// The acts the results are grouped under, when grouped by act.
+    acts: Vec<acts::Act>,
+    /// Acts folded away (set numbers); a change bumps `expanded_rev`.
+    folded: BTreeSet<usize>,
     /// Where a Shift-click range starts (segment id).
     anchor: Option<String>,
     /// The focused result (segment id): where arrows move from.
@@ -359,6 +385,11 @@ pub(super) enum Do {
     Rate(u8),
     /// Move the cursor by this many results; extend the selection.
     Move(isize, bool),
+    /// Move the cursor this many rows up (negative) or down; extend the
+    /// selection.
+    Vertical(isize, bool),
+    /// Fold or unfold act `n`.
+    ToggleAct(usize),
     /// More like the cursor.
     Like,
     /// Stage the selection for chat.
@@ -407,6 +438,8 @@ pub(super) struct Paint<'a> {
     pub(super) selected: &'a HashSet<String>,
     /// The focused segment id.
     pub(super) cursor: Option<&'a str>,
+    /// The acts the results are grouped under (empty when not grouped).
+    pub(super) acts: &'a [acts::Act],
     /// Hover scrubbing on.
     pub(super) scrub: bool,
     /// The segment id under the tape's playhead.
@@ -496,6 +529,7 @@ fn body(
             theme: ctx.theme,
             night: &night,
             items: &state.items,
+            acts: &state.acts,
             paths: &state.paths,
             selected: &selected,
             cursor: state.cursor.as_deref(),
@@ -541,6 +575,10 @@ fn body(
                 interact(&paint, item, &response, dos);
             }
             dos.extend(out.toggles.into_iter().map(Do::ToggleStack));
+            dos.extend(out.folds.into_iter().map(Do::ToggleAct));
+            if let Some(n) = out.scope {
+                dos.push(Do::Search(acts::scoped(ctx.search, n)));
+            }
             if let Some(sort) = out.sort {
                 state.opts.sort = sort;
                 opts_changed = true;
@@ -644,7 +682,7 @@ fn refresh(state: &mut State, night: &Night<'_>, search_text: &str) {
         .collect();
     sort_hits(&mut hits, index, state.opts.sort);
     state.groups = clip_groups(&hits, index);
-    state.items = if state.opts.group {
+    let items = if state.opts.group {
         stack(hits, index, &state.expanded)
     } else {
         hits.into_iter()
@@ -655,6 +693,11 @@ fn refresh(state: &mut State, night: &Night<'_>, search_text: &str) {
                 stack: Stack::Alone,
             })
             .collect()
+    };
+    (state.items, state.acts) = if state.opts.sort.groups() {
+        acts::split(items, index, &state.folded)
+    } else {
+        (items, Vec::new())
     };
     state.key = Some(key);
 }
@@ -675,6 +718,7 @@ fn sort_hits(hits: &mut [search::Hit], index: &Index, sort: Sort) {
         Sort::Fire => hits.sort_by(by(|s| s.seg.flame)),
         Sort::Motion => hits.sort_by(by(|s| s.seg.moving)),
         Sort::Time => hits.sort_by_key(|h| h.seg),
+        Sort::Acts => acts::order(hits, index),
     }
 }
 
@@ -1058,10 +1102,20 @@ fn sort_menu(ui: &mut egui::Ui, theme: &Palette, state: &mut State, label: &str)
             pad(ui, |ui| {
                 widgets::menu_heading(ui, theme, "Order by");
             });
-            for s in Sort::ALL {
+            for s in Sort::ALL.into_iter().filter(|s| !s.groups()) {
                 if widgets::menu_item(ui, theme, None, s.label(), "", state.opts.sort == s)
                     .clicked()
                 {
+                    state.opts.sort = s;
+                }
+            }
+            widgets::menu_separator(ui, theme);
+            pad(ui, |ui| {
+                widgets::menu_heading(ui, theme, "Group by");
+            });
+            for s in Sort::ALL.into_iter().filter(|s| s.groups()) {
+                let item = widgets::menu_item(ui, theme, None, s.label(), "", state.opts.sort == s);
+                if widgets::tip(item, theme, "Recording time, a header per act", "").clicked() {
                     state.opts.sort = s;
                 }
             }
@@ -1480,25 +1534,28 @@ fn keys(ui: &egui::Ui, state: &State, dos: &mut Vec<Do>) {
     if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, Key::A)) {
         dos.push(Do::All);
     }
-    let cols = match state.opts.view {
-        View::Grid => state.columns.max(1) as isize,
-        View::List => 1,
-    };
-    for (key, step) in [
-        (Key::ArrowLeft, -1),
-        (Key::ArrowRight, 1),
-        (Key::ArrowUp, -cols),
-        (Key::ArrowDown, cols),
+    for (key, step, rows) in [
+        (Key::ArrowLeft, -1, false),
+        (Key::ArrowRight, 1, false),
+        (Key::ArrowUp, -1, true),
+        (Key::ArrowDown, 1, true),
     ] {
         if state.opts.view == View::List && matches!(key, Key::ArrowLeft | Key::ArrowRight) {
             // In a list, left/right stay the viewer's frame steps.
             continue;
         }
-        if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, key)) {
-            dos.push(Do::Move(step, false));
+        let extend = if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, key)) {
+            false
         } else if ui.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, key)) {
-            dos.push(Do::Move(step, true));
-        }
+            true
+        } else {
+            continue;
+        };
+        dos.push(if rows {
+            Do::Vertical(step, extend)
+        } else {
+            Do::Move(step, extend)
+        });
     }
 }
 
@@ -1635,6 +1692,13 @@ fn apply(ctx: &mut PageCtx<'_>, state: &mut State, d: Do, egui_ctx: &egui::Conte
             marks_changed(ctx, state);
         }
         Do::Move(delta, extend) => step(ctx, state, delta, extend),
+        Do::Vertical(delta, extend) => vertical(ctx, state, delta, extend),
+        Do::ToggleAct(n) => {
+            if !state.folded.remove(&n) {
+                state.folded.insert(n);
+            }
+            state.expanded_rev += 1;
+        }
         Do::Like => {
             if let Some(id) = state
                 .cursor
@@ -2060,6 +2124,30 @@ fn step(ctx: &mut PageCtx<'_>, state: &mut State, delta: isize, extend: bool) {
     state.reveal = true;
 }
 
+/// Moves the cursor `delta` rows up or down: past act headers, keeping
+/// its column, when grouped by act; otherwise a row's worth of results.
+fn vertical(ctx: &mut PageCtx<'_>, state: &mut State, delta: isize, extend: bool) {
+    let cols = match state.opts.view {
+        View::Grid => state.columns.max(1),
+        View::List => 1,
+    };
+    let jump = delta.saturating_mul(cols as isize);
+    if state.acts.is_empty() {
+        step(ctx, state, jump, extend);
+        return;
+    }
+    let Some(pos) = cursor_pos(state) else {
+        step(ctx, state, delta, extend);
+        return;
+    };
+    let rows = acts::rows(&state.acts, state.items.len(), cols);
+    match acts::vertical(&rows, pos, delta) {
+        Some(next) => step(ctx, state, next as isize - pos as isize, extend),
+        // Past the first or last row: as far as the results go.
+        None => step(ctx, state, jump, extend),
+    }
+}
+
 /// Loads result `item` into the viewer; on the tape, moves the playhead
 /// to it instead.
 fn open(ctx: &mut PageCtx<'_>, state: &mut State, item: usize) {
@@ -2145,6 +2233,10 @@ pub(super) struct Drawn {
     pub(super) toggles: Vec<usize>,
     /// A column header asked for this order.
     pub(super) sort: Option<Sort>,
+    /// Act headers clicked (set numbers): fold or unfold them.
+    pub(super) folds: Vec<usize>,
+    /// An act header's filter button asked to scope the search to it.
+    pub(super) scope: Option<usize>,
 }
 
 /// The scroll offset that brings rows `top..bottom` (points) into a view of
@@ -2718,6 +2810,73 @@ mod tests {
 
             press_with(&mut h, Modifiers::SHIFT, Key::R);
             assert!(app(&h)?.ref_popup, "Shift+R still offers the intents");
+            Ok(())
+        }
+
+        #[test]
+        fn grouping_by_act_puts_a_header_before_each_act() -> anyhow::Result<()> {
+            use crate::analyze::sets::Set;
+            use egui_kittest::kittest::{NodeT as _, Queryable as _};
+            let dir = tempfile::tempdir()?;
+            let mut h = harness(dir.path())?;
+            {
+                let app = h
+                    .state_mut()
+                    .as_mut()
+                    .ok_or_else(|| anyhow::anyhow!("the app was never built"))?;
+                if let Some(index) = app.project.as_mut().and_then(|p| p.index.as_mut()) {
+                    // Recorded C first, then B and A after a long gap.
+                    index.sets = vec![
+                        Set {
+                            n: 1,
+                            title: "Outdoor parking lot · fire".into(),
+                            clips: vec!["C".into()],
+                            ..Set::default()
+                        },
+                        Set {
+                            n: 2,
+                            title: "Indoor stage · LED".into(),
+                            clips: vec!["B".into(), "A".into()],
+                            ..Set::default()
+                        },
+                    ];
+                }
+                app.pages.review.opts.sort = super::super::Sort::Acts;
+                app.pages.review.key = None;
+            }
+            h.run_steps(4);
+            let headers: Vec<String> = h
+                .query_all_by(|n| n.label().is_some_and(|l| l.starts_with("Set ")))
+                .filter_map(|n| n.accesskit_node().label())
+                .collect();
+            assert_eq!(
+                headers,
+                [
+                    "Set 1 · Outdoor parking lot · fire · 1 clip",
+                    "Set 2 · Indoor stage · LED · 2 clips"
+                ],
+                "a header row per act, in recording order"
+            );
+            assert_eq!(
+                result_ids(review(&h)?),
+                ["C/1", "B/1", "B/2", "A/1", "A/2", "A/3"],
+                "the shots in recording order, act by act"
+            );
+            h.query_by_label("Set 1 · Outdoor parking lot · fire · 1 clip")
+                .ok_or_else(|| anyhow::anyhow!("no header for set 1"))?
+                .click();
+            h.run_steps(4);
+            let r = review(&h)?;
+            assert_eq!(
+                result_ids(r),
+                ["B/1", "B/2", "A/1", "A/2", "A/3"],
+                "a click folds the act's shots away"
+            );
+            assert!(
+                r.acts.first().is_some_and(|a| a.folded && a.shots == 1),
+                "the folded act keeps its header and count: {:?}",
+                r.acts
+            );
             Ok(())
         }
     }

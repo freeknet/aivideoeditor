@@ -12,6 +12,14 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- The night's acts in the Shots browser. The order menu's new *Group by → Acts* puts
+  the shots in recording order under a full-width header per set (`Set 3 · Indoor neon ·
+  LED · 20:35–20:42 · 4 clips`, with its shot count) in both the grid and the list,
+  which stay virtualised; a click folds an act away and the header's filter button scopes
+  the search to it. A new `set:3` search token (also `act:3`) keeps the shots of that act,
+  for the search bar and the chat agent's `search_shots`. The inspector's Facts (and the
+  facts a reference gives the chat) now open with the clip's recording time on the camera
+  clock, its camera and its act.
 - Recording time, camera and sets. The probe now reads when each clip was recorded
   (`recorded_at`: UTC, the camera's local clock when known, and its source) and the
   camera make / model from the container tags. A `creation_time` written in `Z` from a

@@ -24,6 +24,14 @@
 //! every plan for the shot, the list open beside the tracks and the second
 //! marker selected, so its colour swatches show.
 //!
+//! And the Shots browser grouped by act (`review-acts.png`): `ave.toml`
+//! switched to *Group by → Acts* for the shot, the first act folded and
+//! the first shot selected, so the inspector's Facts show its recording
+//! time, camera and act.
+//!
+//! `AVE_SCREENSHOT_ONLY` (comma-separated shot names) limits the run to
+//! those shots.
+//!
 //! And the chat's cards: a staged edit (`chat-proposal.png`), a slow step
 //! waiting for approval (`chat-approval.png`) and the first-cut settings
 //! card (`chat-first-cut.png`). The first two need a conversation: for each
@@ -49,6 +57,9 @@ const COMPARE: &str = "plan-compare";
 const SHOT_LIST: &str = "plan-shot-list";
 /// The shot of the timeline's markers: pins on the ruler and the list.
 const MARKERS: &str = "plan-markers";
+
+/// The shot of the Shots browser grouped by act.
+const ACTS: &str = "review-acts";
 
 /// The shot of a staged edit's card.
 const PROPOSAL: &str = "chat-proposal";
@@ -111,6 +122,10 @@ fn fixtures(work: &Path, shot: &str) -> anyhow::Result<Fixtures> {
     };
     if shot == MARKERS {
         markers(work, &mut written)?;
+        return Ok(written);
+    }
+    if shot == ACTS {
+        page_setting(work, "review", "sort", "acts".into())?;
         return Ok(written);
     }
     std::fs::create_dir_all(chat.join("chats"))?;
@@ -246,6 +261,51 @@ fn markers(work: &Path, fixtures: &mut Fixtures) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Sets `[pages.<page>] <key> = value` in the night's `ave.toml` (the
+/// fixtures put the file back after the shot).
+fn page_setting(work: &Path, page: &str, key: &str, value: toml::Value) -> anyhow::Result<()> {
+    let settings = work.join("ave.toml");
+    let mut table: toml::Table = std::fs::read_to_string(&settings)
+        .ok()
+        .and_then(|t| toml::from_str(&t).ok())
+        .unwrap_or_default();
+    let pages = table
+        .entry("pages")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    if let toml::Value::Table(pages) = pages {
+        let table = pages
+            .entry(page)
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+        if let toml::Value::Table(table) = table {
+            table.insert(key.into(), value);
+        }
+    }
+    std::fs::write(&settings, toml::to_string_pretty(&table)?)?;
+    Ok(())
+}
+
+/// Folds the first act in the grouped Shots browser (the headers below it
+/// are off screen, so not in the tree, until it folds), then opens the
+/// inspector's Facts tab for the selected shot.
+fn fold_first_act(harness: &mut egui_kittest::Harness<'_, Option<App>>) -> anyhow::Result<()> {
+    harness
+        .query_all_by(|node| node.label().is_some_and(|l| l.starts_with("Set 1 · ")))
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("no header for set 1: the night has no sets"))?
+        .click();
+    harness.run_steps(4);
+    harness
+        .query_all_by(|node| node.label().is_some_and(|l| l == "Facts"))
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("no Facts tab in the inspector"))?
+        .click();
+    for _ in 0..6 {
+        harness.run_steps(15);
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+    Ok(())
+}
+
 /// Selects the second marker in the list (its timecode seeks and selects).
 fn select_marker(harness: &mut egui_kittest::Harness<'_, Option<App>>) -> anyhow::Result<()> {
     harness
@@ -311,6 +371,11 @@ fn main() -> anyhow::Result<()> {
             Vec::new(),
         ));
         shots.push((MARKERS.to_owned(), vec![Action::Go(Page::Plan)], Vec::new()));
+        shots.push((
+            ACTS.to_owned(),
+            vec![Action::Go(Page::Review)],
+            vec![(egui::Modifiers::NONE, egui::Key::ArrowRight)],
+        ));
         for name in [PROPOSAL, APPROVAL, FIRST_CUT, CHAT_LIST, CHAT_TABS] {
             shots.push((name.to_owned(), vec![Action::Go(Page::Review)], Vec::new()));
         }
@@ -333,6 +398,11 @@ fn main() -> anyhow::Result<()> {
     ] {
         shots.push((name.to_owned(), vec![Action::Go(Page::Review)], keys));
     }
+    // `AVE_SCREENSHOT_ONLY=review-acts,plan` shoots just those.
+    let only: Option<Vec<String>> = std::env::var("AVE_SCREENSHOT_ONLY")
+        .ok()
+        .map(|v| v.split(',').map(|s| s.trim().to_owned()).collect());
+    shots.retain(|(name, _, _)| only.as_ref().is_none_or(|o| o.contains(name)));
     for (name, actions, keys) in shots {
         let _fixtures = match &night {
             Some(work) => Some(fixtures(work, &name)?),
@@ -385,6 +455,9 @@ fn main() -> anyhow::Result<()> {
         }
         if name == MARKERS {
             select_marker(&mut harness)?;
+        }
+        if name == ACTS {
+            fold_first_act(&mut harness)?;
         }
         if name == FIRST_CUT {
             harness
