@@ -27,7 +27,7 @@ use std::collections::BTreeSet;
 use crate::beats::MusicMap;
 use crate::index::Index;
 use crate::people::People;
-use crate::plan::{Plan, Problem, Shot};
+use crate::plan::{COMMENT_COLORS, Comment, Plan, Problem, Shot};
 
 /// One change to a plan.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -90,6 +90,27 @@ pub(crate) enum EditOp {
         /// The note.
         note: String,
     },
+    /// Pin a marker (a review comment) to a moment of the cut.
+    AddMarker {
+        /// Seconds from the plan's start, as `plan_get` lists times.
+        time: f32,
+        /// What it says.
+        #[serde(default)]
+        note: String,
+        /// `green` (default), `blue`, `yellow` or `red`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        color: Option<String>,
+    },
+    /// Remove a marker.
+    RemoveMarker {
+        /// Marker number, 1-based, as `plan_get` lists them.
+        marker: usize,
+    },
+    /// Mark a marker's comment as dealt with (it stays, struck through).
+    ResolveMarker {
+        /// Marker number, 1-based, as `plan_get` lists them.
+        marker: usize,
+    },
 }
 
 impl EditOp {
@@ -103,6 +124,12 @@ impl EditOp {
             Self::RemoveShot { index } => format!("remove #{index}"),
             Self::SetCx { index, .. } => format!("reframe #{index}"),
             Self::SetNote { index, .. } => format!("note #{index}"),
+            Self::AddMarker { time, color, .. } => format!(
+                "{} marker at {time:.1}s",
+                color.as_deref().unwrap_or(COMMENT_COLORS[0])
+            ),
+            Self::RemoveMarker { marker } => format!("remove marker {marker}"),
+            Self::ResolveMarker { marker } => format!("resolve marker {marker}"),
         }
     }
 
@@ -110,8 +137,10 @@ impl EditOp {
     pub(crate) fn reason(&self) -> &str {
         match self {
             Self::ReplaceShot { reason, .. } => reason,
-            Self::SetNote { note, .. } => note,
-            Self::SetIn { .. }
+            Self::SetNote { note, .. } | Self::AddMarker { note, .. } => note,
+            Self::RemoveMarker { .. }
+            | Self::ResolveMarker { .. }
+            | Self::SetIn { .. }
             | Self::SetBeats { .. }
             | Self::MoveShot { .. }
             | Self::RemoveShot { .. }
@@ -373,6 +402,55 @@ pub(crate) fn apply(
                     reason,
                 });
             }
+            // Markers touch no shot, so they are outside the shot scope.
+            EditOp::AddMarker { time, note, color } => {
+                if !time.is_finite() || *time < 0.0 {
+                    return Err(err(format!(
+                        "a marker needs a time of 0 s or more, not {time}"
+                    )));
+                }
+                let color = color.as_deref().unwrap_or(COMMENT_COLORS[0]);
+                if !COMMENT_COLORS.contains(&color) {
+                    return Err(err(format!(
+                        "marker colour {color} is not one of {}",
+                        COMMENT_COLORS.join(", ")
+                    )));
+                }
+                plan.comments.push(Comment {
+                    time: *time,
+                    note: note.trim().to_owned(),
+                    color: color.to_owned(),
+                    author: "assistant".to_owned(),
+                    resolved: false,
+                });
+                effects.push(Effect {
+                    label,
+                    before: None,
+                    after: None,
+                    reason,
+                });
+            }
+            EditOp::RemoveMarker { marker } | EditOp::ResolveMarker { marker } => {
+                let m = plan.comments.len();
+                if *marker == 0 || *marker > m {
+                    return Err(err(format!(
+                        "there is no marker {marker} (the plan has {m})"
+                    )));
+                }
+                let k = marker - 1;
+                let reason = plan.comments[k].note.clone();
+                if matches!(op, EditOp::RemoveMarker { .. }) {
+                    plan.comments.remove(k);
+                } else {
+                    plan.comments[k].resolved = true;
+                }
+                effects.push(Effect {
+                    label,
+                    before: None,
+                    after: None,
+                    reason,
+                });
+            }
         }
     }
     let total = |p: &Plan| p.shots.iter().map(|s| s.beats).sum::<usize>();
@@ -575,6 +653,85 @@ pub(crate) mod tests {
         ]))?;
         assert_eq!(ops.len(), 3, "three ops");
         assert_eq!(ops[0].label(), "replace #5", "label");
+        Ok(())
+    }
+
+    #[test]
+    fn marker_ops_add_resolve_and_remove_outside_the_shot_scope() -> anyhow::Result<()> {
+        let people = People::default();
+        let ops: Vec<EditOp> = serde_json::from_value(serde_json::json!([
+            {"op": "add_marker", "time": 2.5, "note": " flash frame here ", "color": "red"},
+            {"op": "add_marker", "time": 0.5},
+            {"op": "resolve_marker", "marker": 1},
+            {"op": "add_marker", "time": 4.0, "note": "gone"},
+            {"op": "remove_marker", "marker": 3}
+        ]))?;
+        assert_eq!(
+            ops[0].label(),
+            "red marker at 2.5s",
+            "label names colour and time"
+        );
+        assert_eq!(ops[1].label(), "green marker at 0.5s", "green by default");
+        // A scope of shot 1 only: markers touch no shot, so they pass.
+        let scope = Scope::Shots(BTreeSet::from([1]));
+        let (after, effects) = super::apply(&plan(2), &ops, &scope, night(&people))
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        assert_eq!(effects.len(), 5, "one effect per op");
+        assert!(
+            effects
+                .iter()
+                .all(|e| e.before.is_none() && e.after.is_none()),
+            "no shot changes"
+        );
+        assert_eq!(after.shots, plan(2).shots, "shots untouched");
+        let got: Vec<(f32, &str, &str, bool, &str)> = after
+            .comments
+            .iter()
+            .map(|c| {
+                (
+                    c.time,
+                    c.note.as_str(),
+                    c.color.as_str(),
+                    c.resolved,
+                    c.author.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (2.5, "flash frame here", "red", true, "assistant"),
+                (0.5, "", "green", false, "assistant"),
+            ],
+            "trimmed note, default colour, resolved, the third removed"
+        );
+
+        for (bad, why) in [
+            (EditOp::RemoveMarker { marker: 1 }, "no marker 1"),
+            (
+                EditOp::AddMarker {
+                    time: -1.0,
+                    note: String::new(),
+                    color: None,
+                },
+                "0 s or more",
+            ),
+            (
+                EditOp::AddMarker {
+                    time: 1.0,
+                    note: String::new(),
+                    color: Some("mauve".into()),
+                },
+                "mauve",
+            ),
+        ] {
+            let e = super::apply(&plan(2), &[bad], &Scope::Whole, night(&people));
+            assert!(
+                e.as_ref()
+                    .is_err_and(|e| e.op == Some(0) && e.message.contains(why)),
+                "refused ({why}): {e:?}"
+            );
+        }
         Ok(())
     }
 
