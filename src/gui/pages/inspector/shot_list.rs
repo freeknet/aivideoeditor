@@ -42,7 +42,7 @@ use crate::gui::app::Action;
 use crate::gui::player::{EndCard, Player, SeqShot, Source};
 use crate::gui::ui::{icons, theme, widgets};
 use crate::index::Index;
-use crate::plan::{Plan, Problem};
+use crate::plan::{Finding, Plan};
 use crate::project::Project;
 use crate::refs::{Reference, Target};
 use crate::theme::Palette;
@@ -56,7 +56,7 @@ pub(super) struct State {
     /// The plan `problems` were checked for, by name and content.
     checked: Option<(String, Plan)>,
     /// `plan::check` on it.
-    problems: Vec<Problem>,
+    problems: Vec<Finding>,
     /// The row under the playhead last frame (0-based), to scroll to it
     /// once when it changes.
     active: Option<usize>,
@@ -124,7 +124,7 @@ pub(super) fn lines(
     plan: &Plan,
     index: Option<&Index>,
     map: Option<&MusicMap>,
-    problems: &[Problem],
+    problems: &[Finding],
 ) -> Vec<Line> {
     let starts: Vec<f32> = match map {
         Some(m) => plan.timing(m).into_iter().map(|(t, _)| t).collect(),
@@ -183,8 +183,8 @@ pub(super) fn lines(
                 note: shot.note.clone(),
                 problems: problems
                     .iter()
-                    .filter(|p| p.shot == k + 1)
-                    .map(|p| p.message.clone())
+                    .filter(|p| p.shot == Some(k + 1))
+                    .map(crate::plan::Finding::text)
                     .collect(),
                 section,
             }
@@ -617,7 +617,7 @@ fn row(ui: &mut Ui, p: &Palette, line: &Line, selected: bool, marked: bool) -> e
 mod tests {
     use super::{Line, clock, groups, lines};
     use crate::beats::{Bar, MusicMap, Section};
-    use crate::plan::{Aspect, Plan, Problem, Rules, Shot};
+    use crate::plan::{Aspect, Finding, Plan, Rules, Shot};
 
     fn shot(clip: &str, note: &str) -> Shot {
         Shot {
@@ -694,12 +694,18 @@ mod tests {
     #[test]
     fn lines_follow_the_plan_with_bars_sections_and_problems() -> anyhow::Result<()> {
         let problems = vec![
-            Problem {
-                shot: 3,
+            Finding {
+                id: "repeat-performer",
+                severity: crate::plan::Severity::Soft,
+                shot: Some(3),
+                seam: None,
                 message: "`C` again".into(),
             },
-            Problem {
-                shot: 0,
+            Finding {
+                id: "beat-count",
+                severity: crate::plan::Severity::Hard,
+                shot: None,
+                seam: None,
                 message: "whole plan".into(),
             },
         ];

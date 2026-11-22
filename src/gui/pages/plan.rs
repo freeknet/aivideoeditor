@@ -62,7 +62,7 @@ use crate::gui::app::Action;
 use crate::gui::player::{EndCard, Player, SeqShot, Source};
 use crate::gui::thumbs::Thumbs;
 use crate::gui::ui::{icons, theme, widgets};
-use crate::plan::{Aspect, Plan, Problem};
+use crate::plan::{Aspect, Finding, Plan};
 use crate::project::Project;
 use crate::refs::{Reference, Target};
 use crate::theme::Palette;
@@ -229,7 +229,7 @@ pub(crate) struct State {
     /// What `problems` was computed for: revision and viewed version.
     checked: Option<(u64, Option<u32>)>,
     /// `plan::check` on the shown plan.
-    problems: Vec<Problem>,
+    problems: Vec<Finding>,
     /// Zoom and scroll.
     view: View,
     /// The pointer tool.
@@ -436,18 +436,16 @@ fn lock_active(path: &Path, now: SystemTime) -> bool {
     mtime(path).is_some_and(|m| now.duration_since(m).map_or(true, |age| age < LOCK_STALE))
 }
 
-/// Whether a problem is structural (an error) rather than a content rule
-/// the plan bends (a warning). `ave check` fails on both.
-fn is_error(p: &Problem) -> bool {
-    p.shot == 0
-        || [
-            "not in the index",
-            "runs outside",
-            "crop centre",
-            "the drop lands",
-        ]
-        .iter()
-        .any(|k| p.message.contains(k))
+/// What clicking a check finding selects: the shot it names (0-based), or
+/// for a seam finding both shots around the cut and the shot the cut
+/// starts (0-based), to put the playhead on. `None` for whole-plan
+/// findings and for shots the plan no longer has.
+fn finding_target(f: &Finding, shots: usize) -> Option<(BTreeSet<usize>, Option<usize>)> {
+    match (f.seam, f.shot) {
+        (Some(n), _) if n >= 1 && n < shots => Some((BTreeSet::from([n - 1, n]), Some(n))),
+        (None, Some(n)) if n >= 1 && n <= shots => Some((BTreeSet::from([n - 1]), None)),
+        (Some(_) | None, _) => None,
+    }
 }
 
 /// A plan as the viewer plays it: the shots back to back over the music,
@@ -794,11 +792,10 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
         state.checked = Some(key);
     }
     let mut issues: BTreeMap<usize, Vec<String>> = BTreeMap::new();
-    for p in state.problems.iter().filter(|p| p.shot > 0) {
-        issues
-            .entry(p.shot - 1)
-            .or_default()
-            .push(p.message.clone());
+    for p in &state.problems {
+        if let Some(n) = p.shot.filter(|&n| n > 0) {
+            issues.entry(n - 1).or_default().push(p.text());
+        }
     }
     let cut = sequence(&shown_plan, project, map);
     let ours = cut.is_loaded(player);
@@ -1910,7 +1907,7 @@ fn keys(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &egui::Ui, hovere
 
 #[cfg(test)]
 mod tests {
-    use super::{LOCK_STALE, is_error, lock_active, lock_path, selected, valid_name};
+    use super::{LOCK_STALE, finding_target, lock_active, lock_path, selected, valid_name};
 
     #[test]
     fn the_assistant_lock_is_a_fresh_file() -> anyhow::Result<()> {
@@ -1932,7 +1929,7 @@ mod tests {
         );
         Ok(())
     }
-    use crate::plan::Problem;
+    use crate::plan::Finding;
     use crate::refs::{Reference, Target};
 
     #[test]
@@ -2272,19 +2269,35 @@ mod tests {
     }
 
     #[test]
-    fn structural_problems_are_errors() -> anyhow::Result<()> {
-        let p = |shot, m: &str| Problem {
+    fn clicking_a_finding_selects_its_shot_or_seam() -> anyhow::Result<()> {
+        use std::collections::BTreeSet;
+        let f = |shot: Option<usize>, seam: Option<usize>| Finding {
+            id: "x",
+            severity: crate::plan::Severity::Soft,
             shot,
-            message: m.into(),
+            seam,
+            message: String::new(),
         };
-        assert!(is_error(&p(0, "shots fill 30 beats")), "whole-plan");
-        assert!(
-            is_error(&p(3, "A 1.00-9.00 runs outside the clip (5.00s)")),
-            "range"
+        assert_eq!(finding_target(&f(None, None), 5), None, "whole plan");
+        assert_eq!(
+            finding_target(&f(Some(3), None), 5),
+            Some((BTreeSet::from([2]), None)),
+            "shot 3 is index 2"
         );
-        assert!(
-            !is_error(&p(3, "`x` again, 2 shots after shot 1 (need 9)")),
-            "repeat"
+        assert_eq!(
+            finding_target(&f(Some(4), Some(3)), 5),
+            Some((BTreeSet::from([2, 3]), Some(3))),
+            "cut 3|4 selects both and seeks to shot 4's start"
+        );
+        assert_eq!(
+            finding_target(&f(Some(9), None), 5),
+            None,
+            "a shot the plan no longer has"
+        );
+        assert_eq!(
+            finding_target(&f(Some(6), Some(5)), 5),
+            None,
+            "no cut after the last shot"
         );
         Ok(())
     }

@@ -41,7 +41,9 @@ struct Check {
     mtime: Option<SystemTime>,
     /// The plan's own name (render output is named after it).
     name: String,
-    /// Problems, one line each; empty when it passes.
+    /// Hard findings (the ones that fail the check), one line each; empty
+    /// when it passes. Soft findings do not stop a render, so they are not
+    /// listed here.
     problems: Vec<String>,
     /// Its length in seconds, when the music map is loaded.
     seconds: Option<f32>,
@@ -145,13 +147,8 @@ impl State {
                         (Some(index), Some(music)) => (
                             crate::plan::check(&plan, index, music, &p.people)
                                 .iter()
-                                .map(|pr| {
-                                    if pr.shot > 0 {
-                                        format!("shot {}: {}", pr.shot, pr.message)
-                                    } else {
-                                        pr.message.clone()
-                                    }
-                                })
+                                .filter(|pr| pr.is_hard())
+                                .map(crate::plan::Finding::text)
                                 .collect(),
                             Some(
                                 music.beat_time(plan.end_bar, 0)

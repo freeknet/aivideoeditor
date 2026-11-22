@@ -510,7 +510,17 @@ pub(crate) enum Cmd {
         #[arg(long, default_value_t = 2)]
         card_bars: usize,
     },
-    /// Check a plan against its rules; exits 1 if any fail.
+    /// Check a plan against its rules; exits 1 only on a hard finding.
+    ///
+    /// Every finding prints as `<plan> <where> [<severity> <id>] <message>`, where
+    /// <where> is `shot N`, `cut N|N+1` (a seam check) or `plan` (the whole
+    /// plan), then a verdict line. Hard findings (the plan is invalid or the
+    /// render would be wrong: beat-count, bar-order, past-track, off-drop,
+    /// missing-clip, outside-clip, bad-span, crop-outside, empty-shot) fail the check and
+    /// stop `ave render` without --force. Soft findings are taste rules
+    /// bent (drop-subject, flash-shot, flagged, bad-moment, wide-action,
+    /// same-stretch, repeat-performer, lookalike, reused, jump-cut,
+    /// exposure-jump, colour-jump): reported, never fatal.
     Check {
         /// Plan file.
         plan: PathBuf,
@@ -528,7 +538,7 @@ pub(crate) enum Cmd {
         /// Video encoder.
         #[arg(long, value_enum, default_value_t = crate::render::Encoder::X264)]
         encoder: crate::render::Encoder,
-        /// Render even if the check fails.
+        /// Render even if the check has hard findings.
         #[arg(long)]
         force: bool,
     },
@@ -693,7 +703,8 @@ fn run(command: Cmd, out: &mut impl Write, progress: &Progress) -> anyhow::Resul
         Cmd::Check { plan, work } => {
             let (plan, problems) = load_and_check(&plan, &work)?;
             write!(out, "{}", crate::plan::report(&plan, &problems))?;
-            anyhow::ensure!(problems.is_empty(), "{} problem(s)", problems.len());
+            let hard = crate::plan::hard_count(&problems);
+            anyhow::ensure!(hard == 0, "{hard} hard finding(s)");
         }
         Cmd::Render {
             plan,
@@ -705,7 +716,10 @@ fn run(command: Cmd, out: &mut impl Write, progress: &Progress) -> anyhow::Resul
             let (plan, problems) = load_and_check(&plan, &work)?;
             if !problems.is_empty() {
                 write!(out, "{}", crate::plan::report(&plan, &problems))?;
-                anyhow::ensure!(force, "the plan fails its check; fix it or pass --force");
+                anyhow::ensure!(
+                    force || crate::plan::hard_count(&problems) == 0,
+                    "the plan fails its check; fix it or pass --force"
+                );
             }
             let index = crate::index::Index::load(&work)?;
             let map = crate::beats::MusicMap::load(&work)?;
@@ -770,7 +784,7 @@ fn run(command: Cmd, out: &mut impl Write, progress: &Progress) -> anyhow::Resul
 fn load_and_check(
     plan: &std::path::Path,
     work: &std::path::Path,
-) -> anyhow::Result<(crate::plan::Plan, Vec<crate::plan::Problem>)> {
+) -> anyhow::Result<(crate::plan::Plan, Vec<crate::plan::Finding>)> {
     let plan = crate::plan::Plan::load(plan)?;
     let index = crate::index::Index::load(work)?;
     let map = crate::beats::MusicMap::load(work)?;
