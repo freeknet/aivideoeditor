@@ -484,14 +484,16 @@ mod tests {
         let people = crate::people::People::default();
         let over = crate::plan::check(&plan_at(59.0)?, &index, &map, &people);
         assert!(
-            over.iter().any(|p| p.shot == 1
+            over.iter().any(|p| p.shot == Some(1)
+                && p.id == "bad-span"
+                && p.is_hard()
                 && p.message.contains("bad span")
                 && p.message.contains("whip")),
             "59-61 s crosses the whip: {over:?}"
         );
         let clear = crate::plan::check(&plan_at(62.0)?, &index, &map, &people);
         assert!(
-            !clear.iter().any(|p| p.message.contains("bad span")),
+            !clear.iter().any(|p| p.id == "bad-span"),
             "62-64 s is clear: {clear:?}"
         );
         Ok(())

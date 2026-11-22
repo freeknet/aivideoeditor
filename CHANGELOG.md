@@ -20,6 +20,24 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   for the search bar and the chat agent's `search_shots`. The inspector's Facts (and the
   facts a reference gives the chat) now open with the clip's recording time on the camera
   clock, its camera and its act.
+- Plan check findings carry a stable id and a severity: `plan::check` returns
+  `Finding { id, severity: hard | soft, shot, seam, message }`, and `ave check` prints
+  each as `<plan> <where> [<severity> <id>] <message>` with a verdict line. **Only hard
+  findings fail now** (exit 1; `ave render` refuses them without `--force`): the plan
+  is invalid or would render wrong (`beat-count`, `bar-order`, `past-track`,
+  `off-drop`, `missing-clip`, `outside-clip`, `bad-span` (a bad span with a rejected
+  flag), `crop-outside`, `empty-shot`). The taste
+  rules (`drop-subject`, `flagged`, `bad-moment`, `wide-action`, `same-stretch`,
+  `repeat-performer`, `lookalike`, `reused`) are soft: reported, never fatal. New seam
+  checks across each cut, all soft: `jump-cut` (one clip cut to itself skipping under
+  10 s), `exposure-jump` (over 1.5 stops of frame brightness between the edge samples,
+  the cut onto the drop spared) and `colour-jump` (mid-tone chromaticity moving over
+  0.40); plus `flash-shot` (under 6 frames, soft) and `empty-shot` (no frames, hard).
+  The MCP's plan text and `plan_edit` predictions, the assistant's check line, the
+  Deliver page and the timeline's check bar read the severity: the bar counts hard and
+  soft findings, says "Ready to render" whenever nothing is hard, lists findings hard
+  first, and clicking one selects its shot, or both shots around a seam finding's cut
+  with the playhead on it.
 - Recording time, camera and sets. The probe now reads when each clip was recorded
   (`recorded_at`: UTC, the camera's local clock when known, and its source) and the
   camera make / model from the container tags. A `creation_time` written in `Z` from a

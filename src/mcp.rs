@@ -131,7 +131,9 @@ const INSTRUCTIONS: &str = "ave edits a night of event footage (fire spinning, L
 beat-synced promo cuts. Start with night_overview. Find footage with search_shots (free text plus facets such as \
 fire>0.3 -dark person:x move:zoom-in pick) and read exact facts with segment_details. Use look to see frames when a \
 decision depends on the picture. Plans are storyboards on the music's beat grid: plan_get shows one with its rule \
-check; plan_edit applies ops to a working copy and returns the diff and check without saving until commit:true; \
+check (each finding is `<where> [<hard|soft> <id>] <message>`: hard ones, such as bad-span or beat-count, make the \
+plan invalid and must be fixed; soft ones, such as jump-cut, exposure-jump or repeat-performer, are taste calls); \
+plan_edit applies ops to a working copy and returns the diff and check without saving until commit:true; \
 alternatives ranks replacements for a slot. Rules: no repeated shots or performers, best moments only, the drop on \
 the hero fire shot, no slow motion or digital zoom. You own the editorial decisions; say why for each shot in its \
 note. A commit needs the base_version plan_get returned and is refused unless the person allowed the assistant to \
@@ -340,11 +342,7 @@ fn overview(p: &Project) -> String {
                     "{} shots, {:?}, {}",
                     plan.shots.len(),
                     plan.aspect,
-                    if problems.is_empty() {
-                        "check ok".to_owned()
-                    } else {
-                        format!("{} problems", problems.len())
-                    }
+                    check_summary(&problems)
                 )
             }
             (Err(e), _, _) => format!("unreadable: {e:#}"),
@@ -481,6 +479,18 @@ fn music(p: &Project) -> Result<Vec<Value>> {
     Ok(text(s))
 }
 
+/// One line for a check result: `ok`, `ok, 3 soft` or `FAILS: 1 hard, 3 soft`.
+/// Only hard findings fail; soft ones are taste warnings.
+fn check_summary(findings: &[crate::plan::Finding]) -> String {
+    let hard = crate::plan::hard_count(findings);
+    let soft = findings.len() - hard;
+    match (hard, soft) {
+        (0, 0) => "ok".to_owned(),
+        (0, _) => format!("ok, {soft} soft"),
+        (_, _) => format!("FAILS: {hard} hard, {soft} soft"),
+    }
+}
+
 /// A plan's markers (review comments), numbered as `remove_marker` and
 /// `resolve_marker` take them; empty when it has none.
 pub(crate) fn markers_text(plan: &Plan) -> String {
@@ -536,11 +546,10 @@ fn describe_plan(p: &Project, plan: &Plan) -> String {
     }
     s.push_str(&markers_text(plan));
     match ops::check(plan, p.index.as_ref(), p.music.as_ref(), &p.people) {
-        Some(problems) if problems.is_empty() => s.push_str("check: ok\n"),
         Some(problems) => {
-            s.push_str(&format!("check: {} problems\n", problems.len()));
+            s.push_str(&format!("check: {}\n", check_summary(&problems)));
             for pr in problems {
-                s.push_str(&format!("  shot {}: {}\n", pr.shot, pr.message));
+                s.push_str(&format!("  {}\n", pr.text()));
             }
         }
         None => s.push_str("check: needs the index and the music map\n"),
@@ -668,12 +677,13 @@ fn edit(p: &Project, args: &Value, caller: Caller) -> Result<Edited> {
         ));
     }
     s.push_str(&format!(
-        "check: {} problems after ({} new, {fixed} fixed)\n",
+        "check: {} problems after ({} new, {fixed} fixed); {}\n",
         after.len(),
-        new.len()
+        new.len(),
+        check_summary(&after)
     ));
     for pr in &new {
-        s.push_str(&format!("  new: shot {}: {}\n", pr.shot, pr.message));
+        s.push_str(&format!("  new: {}\n", pr.text()));
     }
     let mut saved = None;
     if commit {

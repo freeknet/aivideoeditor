@@ -17,6 +17,11 @@
 //! The rules are the ones the JaJa runbook sets (see [`Rules`]); each is a
 //! number in the plan's `[rules]` table so another project can loosen or
 //! tighten them without code changes.
+//!
+//! The check returns [`Finding`]s, each with a stable id ([`IDS`]) and a
+//! [`Severity`]: hard when the plan is invalid or would render wrong, soft
+//! when a taste rule is bent. Shot findings name a shot; seam findings
+//! (jump cuts, exposure and colour jumps) name the cut between two.
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -73,16 +78,17 @@ pub(crate) struct Rules {
     /// people map does not name either). 0 turns the rule off. Calibrated
     /// on 2026-11-11: see [`LOOKALIKE`].
     pub(crate) lookalike: f32,
-    /// Whether a shot reusing a moment from another night's plan fails the
-    /// check (see [`Memory`]). The drafter avoids them either way.
+    /// Whether a shot reusing a moment from another night's plan is reported
+    /// (soft `reused`; see [`Memory`]). The drafter avoids them either way.
     pub(crate) reject_reused: bool,
-    /// Shots whose source range carries any of these flags fail the check,
-    /// as do shots overlapping a bad span (see [`crate::analyze::spans`])
-    /// with one of them.
+    /// Shots whose source range carries any of these flags are reported
+    /// (soft `flagged`); a shot overlapping a bad span (see
+    /// [`crate::analyze::spans`]) with one of them is hard `bad-span`.
     pub(crate) reject_flags: Vec<String>,
     /// The shot on the drop must have this subject (empty: no requirement).
     pub(crate) drop_subject: String,
-    /// Caption moments that fail the check (e.g. `transition`).
+    /// Caption moments that are reported (soft `bad-moment`, e.g.
+    /// `transition`).
     pub(crate) reject_moments: Vec<String>,
     /// Whether a caption saying the view is blocked fails the check.
     pub(crate) reject_blocked: bool,
@@ -447,17 +453,291 @@ impl Plan {
     }
 }
 
-/// One rule violation.
+/// How much a finding matters.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) enum Severity {
+    /// The plan is invalid or the render would come out wrong (timing off
+    /// the grid, a range outside its clip, a shot with no frames). `ave
+    /// check` fails and `ave render` refuses without `--force`.
+    Hard,
+    /// A taste rule bent (a repeat, a flagged range, a jump cut, a colour
+    /// jump). Reported, never fatal: whether it matters is the editor's
+    /// call.
+    Soft,
+}
+
+impl Severity {
+    /// `hard` or `soft`, as `ave check` prints it.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Hard => "hard",
+            Self::Soft => "soft",
+        }
+    }
+}
+
+/// One thing the check found.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Problem {
-    /// Shot number (1-based), 0 for whole-plan problems.
-    pub(crate) shot: usize,
-    /// What is wrong.
+pub(crate) struct Finding {
+    /// Stable kebab-case id of the rule (`bad-span`, `jump-cut`, ...): what
+    /// scripts, the assistant and the GUI match on. Every id is in [`IDS`].
+    pub(crate) id: &'static str,
+    /// Whether it fails the check.
+    pub(crate) severity: Severity,
+    /// The shot it is about (1-based), `None` for whole-plan findings. A
+    /// seam finding names the shot after the cut, so per-shot views see it.
+    pub(crate) shot: Option<usize>,
+    /// The cut it is about: `Some(n)` is the seam between shot `n` and shot
+    /// `n + 1` (1-based). `None` for shot and plan findings.
+    pub(crate) seam: Option<usize>,
+    /// What is wrong, in words.
     pub(crate) message: String,
 }
 
+impl Finding {
+    /// Whether this finding fails the check.
+    pub(crate) fn is_hard(&self) -> bool {
+        self.severity == Severity::Hard
+    }
+
+    /// Where it is: `plan`, `shot 3`, or `cut 3|4`.
+    pub(crate) fn place(&self) -> String {
+        match (self.seam, self.shot) {
+            (Some(n), _) => format!("cut {}|{}", n, n + 1),
+            (None, Some(n)) => format!("shot {n}"),
+            (None, None) => "plan".to_owned(),
+        }
+    }
+
+    /// `shot 3 [hard bad-span] A 1.00-9.00 runs outside the clip`: one line
+    /// for people, logs and the assistant.
+    pub(crate) fn text(&self) -> String {
+        format!(
+            "{} [{} {}] {}",
+            self.place(),
+            self.severity.as_str(),
+            self.id,
+            self.message
+        )
+    }
+}
+
+/// Every finding id with its severity and what it means, in check order.
+/// `ave check --help` and the MCP instructions point here.
+pub(crate) const IDS: [(&str, Severity, &str); 21] = [
+    (
+        "beat-count",
+        Severity::Hard,
+        "the shots do not fill the bars to the end card",
+    ),
+    (
+        "bar-order",
+        Severity::Hard,
+        "bars do not run start <= drop < card <= end",
+    ),
+    (
+        "past-track",
+        Severity::Hard,
+        "the end bar is past the track",
+    ),
+    (
+        "off-drop",
+        Severity::Hard,
+        "no shot starts exactly on the drop",
+    ),
+    (
+        "drop-subject",
+        Severity::Soft,
+        "the drop shot's subject is not the rule's",
+    ),
+    (
+        "missing-clip",
+        Severity::Hard,
+        "the shot's clip is not in the index",
+    ),
+    (
+        "outside-clip",
+        Severity::Hard,
+        "the shot runs outside its clip",
+    ),
+    (
+        "bad-span",
+        Severity::Hard,
+        "the shot overlaps a bad span (a short bad stretch) with a rejected flag",
+    ),
+    (
+        "crop-outside",
+        Severity::Hard,
+        "the crop centre puts the crop outside the frame",
+    ),
+    (
+        "empty-shot",
+        Severity::Hard,
+        "the shot gets no frames at the plan's frame rate",
+    ),
+    (
+        "flash-shot",
+        Severity::Soft,
+        "the shot is shorter than a flash (FLASH_FRAMES)",
+    ),
+    (
+        "flagged",
+        Severity::Soft,
+        "the range carries a rejected flag (dark, whip, soft)",
+    ),
+    (
+        "bad-moment",
+        Severity::Soft,
+        "the range is captioned as a rejected moment",
+    ),
+    (
+        "wide-action",
+        Severity::Soft,
+        "the action wanders wider than the crop",
+    ),
+    (
+        "same-stretch",
+        Severity::Soft,
+        "two shots start too close together in one clip",
+    ),
+    (
+        "repeat-performer",
+        Severity::Soft,
+        "the same performer within person_gap shots",
+    ),
+    (
+        "lookalike",
+        Severity::Soft,
+        "reads as the same shot as an earlier one",
+    ),
+    (
+        "reused",
+        Severity::Soft,
+        "reuses a moment from another night's plan",
+    ),
+    (
+        "jump-cut",
+        Severity::Soft,
+        "a cut within one clip that skips a few seconds",
+    ),
+    (
+        "exposure-jump",
+        Severity::Soft,
+        "brightness jumps across the cut",
+    ),
+    (
+        "colour-jump",
+        Severity::Soft,
+        "mid-tone colour jumps across the cut",
+    ),
+];
+
+/// The severity an id is registered with in [`IDS`] (hard for an id that
+/// is not there, so a typo cannot hide a failure).
+fn severity_of(id: &str) -> Severity {
+    IDS.iter()
+        .find(|(i, _, _)| *i == id)
+        .map_or(Severity::Hard, |(_, s, _)| *s)
+}
+
+/// A shot shorter than this many frames at the plan's frame rate reads as
+/// a flash, not a shot. Six frames is a quarter second at 24 fps: under it
+/// the eye registers that something changed but not what (the editors'
+/// "flash frame"). One beat at 180 BPM is still 8 frames, so a plan on the
+/// beat grid only trips this with a cut lead or a very fast track.
+pub(crate) const FLASH_FRAMES: i64 = 6;
+
+/// Two shots of one clip cut together with a source gap under this many
+/// seconds read as a jump cut: the camera and the spot are the same and the
+/// performer is mid-routine, so the picture visibly skips. Beyond ten
+/// seconds the routine has moved on enough that the cut reads as a new
+/// shot (the `same_clip_gap` rule judges those).
+pub(crate) const JUMP_CUT_GAP: f32 = 10.0;
+
+/// A cut whose frame brightness changes by more than this many stops
+/// (log2 of the mean-luma ratio, edge samples' medians) is an exposure
+/// jump. The render's exposure match moves a shot by at most 1.6x gain
+/// (about 0.7 stop), so 1.5 stops still leaves most of a stop at the cut.
+/// Calibrated on 2026-11-11: random pairs of samples sit at a median 0.63
+/// stop and a p90 of 1.55; the five plans' 181 cuts, single edge samples,
+/// at a median 0.40 with one above 1.5 (the 0.5 s medians the check takes
+/// flag none of them).
+pub(crate) const EXPOSURE_JUMP_STOPS: f32 = 1.5;
+
+/// Mean luma below this is treated as this when taking the ratio, so two
+/// near-black frames (where noise dominates) never count as a jump.
+const LUMA_FLOOR: f32 = 0.02;
+
+/// A cut whose mid-tone chromaticity (r and g of r+g+b) moves farther than
+/// this is a colour jump: beyond what the render's ±15 % mid-tone match can
+/// close. Calibrated on 2026-11-11: random pairs of samples sit at a median
+/// 0.12, p95 0.35, p99 0.45 (LED nights change colour a lot, and that is
+/// the look); 0.40 flags the near-complementary jumps only (seven of 181
+/// cuts in the five plans).
+pub(crate) const COLOUR_JUMP: f32 = 0.40;
+
+/// Seconds of a shot at each side of a cut whose samples are measured
+/// (their median), so one flicker of flame at the edge is not a jump.
+const EDGE_WINDOW: f32 = 0.5;
+
+/// Brightness and mid-tone chromaticity of `clip` between `t0` and `t1`:
+/// medians of the samples there, or the nearest sample when none fall in
+/// (samples are about six a second). The chromaticity is `None` when the
+/// mid-tones cover under 1 % of the frame (nothing to judge colour on).
+fn edge_look(index: &Index, clip: &str, t0: f32, t1: f32) -> Option<(f32, Option<[f32; 2]>)> {
+    use crate::analyze::segments::median;
+    let c = index.clip(clip)?;
+    let mut w: Vec<&crate::analyze::Sample> = c
+        .samples
+        .iter()
+        .filter(|s| s.t >= t0 && s.t <= t1)
+        .collect();
+    if w.is_empty() {
+        let mid = (t0 + t1) / 2.0;
+        let near = c.samples.iter().min_by(|a, b| {
+            (a.t - mid)
+                .abs()
+                .partial_cmp(&(b.t - mid).abs())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })?;
+        w.push(near);
+    }
+    let luma = median(&w.iter().map(|s| s.luma).collect::<Vec<_>>());
+    let mids: Vec<&&crate::analyze::Sample> = w.iter().filter(|s| s.mid_frac >= 0.01).collect();
+    let chroma = (!mids.is_empty()).then(|| {
+        let ch = |f: fn(&crate::analyze::Sample) -> f32| {
+            median(&mids.iter().map(|s| f(s)).collect::<Vec<_>>())
+        };
+        let (r, g, b) = (ch(|s| s.mid_r), ch(|s| s.mid_g), ch(|s| s.mid_b));
+        let sum = (r + g + b).max(1e-4);
+        [r / sum, g / sum]
+    });
+    Some((luma, chroma))
+}
+
+/// The plan's frame rate (the first shot's clip's, as the render uses) and
+/// each shot's length in output frames, cut lead included, exactly as
+/// [`crate::render`] trims them.
+fn frame_counts(plan: &Plan, index: &Index, timing: &[(f32, f32)], card: f32) -> (f64, Vec<i64>) {
+    let rate = plan
+        .shots
+        .first()
+        .and_then(|s| index.clip(&s.clip))
+        .map_or(24000.0 / 1001.0, |c| {
+            f64::from(c.probe.fps[0]) / f64::from(c.probe.fps[1].max(1))
+        });
+    let frames = |sec: f32| (f64::from(sec) * rate).round() as i64;
+    let lead = i64::from(plan.finish.cut_lead_frames);
+    let mut bounds: Vec<i64> = vec![0];
+    for (s, _) in timing.iter().skip(1) {
+        bounds.push(frames(*s) - lead);
+    }
+    bounds.push(frames(card) - if plan.end_card.is_empty() { 0 } else { lead });
+    (rate, bounds.windows(2).map(|w| w[1] - w[0]).collect())
+}
+
 /// Checks `plan` against its rules, the index and the music map.
-pub(crate) fn check(plan: &Plan, index: &Index, map: &MusicMap, people: &People) -> Vec<Problem> {
+pub(crate) fn check(plan: &Plan, index: &Index, map: &MusicMap, people: &People) -> Vec<Finding> {
     check_with(plan, index, map, people, &Memory::for_index(index))
 }
 
@@ -468,14 +748,23 @@ pub(crate) fn check_with(
     map: &MusicMap,
     people: &People,
     memory: &Memory,
-) -> Vec<Problem> {
+) -> Vec<Finding> {
     let mut problems = Vec::new();
-    let mut push = |shot: usize, message: String| problems.push(Problem { shot, message });
+    let mut push = |id: &'static str, shot: usize, message: String| {
+        problems.push(Finding {
+            id,
+            severity: severity_of(id),
+            shot: (shot > 0).then_some(shot),
+            seam: None,
+            message,
+        });
+    };
     let r = &plan.rules;
 
     let beats: usize = plan.shots.iter().map(|s| s.beats).sum();
     if beats != plan.footage_beats() {
         push(
+            "beat-count",
             0,
             format!(
                 "shots fill {beats} beats but bars {}..{} need {}",
@@ -489,10 +778,15 @@ pub(crate) fn check_with(
         && plan.drop_bar < plan.card_bar
         && plan.card_bar <= plan.end_bar)
     {
-        push(0, "bars must run start <= drop < card <= end".to_owned());
+        push(
+            "bar-order",
+            0,
+            "bars must run start <= drop < card <= end".to_owned(),
+        );
     }
     if plan.end_bar > map.bars.len() + 2 {
         push(
+            "past-track",
             0,
             format!(
                 "end bar {} is past the track's {} bars",
@@ -503,7 +797,8 @@ pub(crate) fn check_with(
     }
 
     let timing = plan.timing(map);
-    let drop_beat = (plan.drop_bar - plan.start_bar) * 4;
+    let drop_beat = plan.drop_bar.saturating_sub(plan.start_bar) * 4;
+    let (rate, frames) = frame_counts(plan, index, &timing, plan.card_span(map).0);
     let mut beat = 0;
     let mut hit_drop = false;
     let crop = plan.aspect.crop_frac();
@@ -519,6 +814,7 @@ pub(crate) fn check_with(
                 .unwrap_or_default();
             if !r.drop_subject.is_empty() && subject != r.drop_subject {
                 push(
+                    "drop-subject",
                     n,
                     format!(
                         "the drop lands on a `{subject}` shot, not `{}`",
@@ -528,13 +824,35 @@ pub(crate) fn check_with(
             }
         }
         beat += shot.beats;
+        if let Some(&f) = frames.get(k) {
+            if f <= 0 {
+                push(
+                    "empty-shot",
+                    n,
+                    format!("gets {f} frames at {rate:.3} fps: the render cannot cut it"),
+                );
+            } else if f < FLASH_FRAMES {
+                push(
+                    "flash-shot",
+                    n,
+                    format!(
+                        "only {f} frames at {rate:.3} fps (under {FLASH_FRAMES}): reads as a flash"
+                    ),
+                );
+            }
+        }
         let Some(clip) = index.clip(&shot.clip) else {
-            push(n, format!("clip {} is not in the index", shot.clip));
+            push(
+                "missing-clip",
+                n,
+                format!("clip {} is not in the index", shot.clip),
+            );
             continue;
         };
         let t_out = shot.t_in + dur;
         if shot.t_in < 0.0 || f64::from(t_out) > clip.probe.duration {
             push(
+                "outside-clip",
                 n,
                 format!(
                     "{} {:.2}-{:.2} runs outside the clip ({:.2}s)",
@@ -545,6 +863,7 @@ pub(crate) fn check_with(
         let half_crop = crop / 2.0;
         if crop < 1.0 && (shot.cx < half_crop - 1e-3 || shot.cx > 1.0 - half_crop + 1e-3) {
             push(
+                "crop-outside",
                 n,
                 format!("crop centre {:.2} puts the crop outside the frame", shot.cx),
             );
@@ -560,6 +879,7 @@ pub(crate) fn check_with(
                 .collect();
             if !bad.is_empty() {
                 push(
+                    "flagged",
                     n,
                     format!(
                         "overlaps {} which is flagged {}",
@@ -571,12 +891,17 @@ pub(crate) fn check_with(
             for b in
                 crate::analyze::spans::hits(&g.seg.bad_spans, shot.t_in, t_out, &r.reject_flags)
             {
-                push(n, format!("overlaps a bad span in {}: {}", g.id, b.text()));
+                push(
+                    "bad-span",
+                    n,
+                    format!("overlaps a bad span in {}: {}", g.id, b.text()),
+                );
             }
             if let Some(c) = &g.caption
                 && r.reject_moments.contains(&c.effective_moment().to_owned())
             {
                 push(
+                    "bad-moment",
                     n,
                     format!(
                         "overlaps {} captioned as `{}`: {}",
@@ -586,6 +911,7 @@ pub(crate) fn check_with(
             }
             if crop < 1.0 && g.seg.cx_spread > crop * 1.2 && g.subject != "none" {
                 push(
+                    "wide-action",
                     n,
                     format!(
                         "the action in {} wanders {:.2} of the frame, wider than the {:.2} crop",
@@ -598,6 +924,7 @@ pub(crate) fn check_with(
         for (j, prev) in plan.shots[..k].iter().enumerate() {
             if prev.clip == shot.clip && (prev.t_in - shot.t_in).abs() < r.same_clip_gap {
                 push(
+                    "same-stretch",
                     n,
                     format!(
                         "same stretch of {} as shot {} ({:.1}s apart, need {:.0})",
@@ -611,6 +938,7 @@ pub(crate) fn check_with(
             let (a, b) = (people.who(shot), people.who(prev));
             if !a.is_empty() && a == b && k - j <= r.person_gap {
                 push(
+                    "repeat-performer",
                     n,
                     format!(
                         "`{a}` again, {} shots after shot {} (need {})",
@@ -626,6 +954,7 @@ pub(crate) fn check_with(
                 && d < r.lookalike
             {
                 push(
+                    "lookalike",
                     n,
                     format!(
                         "looks like shot {} (signature distance {d:.3} < {:.3}, same spot, performer and action)",
@@ -639,6 +968,7 @@ pub(crate) fn check_with(
             && r.reject_reused
         {
             push(
+                "reused",
                 n,
                 format!(
                     "reuses {} {:.1}-{:.1} from {} `{}`",
@@ -649,11 +979,89 @@ pub(crate) fn check_with(
     }
     if !hit_drop {
         push(
+            "off-drop",
             0,
             format!("no shot starts exactly on the drop (bar {})", plan.drop_bar),
         );
     }
+    problems.extend(seams(plan, index, &timing, drop_beat));
     problems
+}
+
+/// The seam checks: what happens across each cut (shot `n` out, shot
+/// `n + 1` in). Jump cuts within one clip, then exposure and colour jumps
+/// between the edge samples. The cut onto the drop is spared the exposure
+/// check: a dark build snapping to a bright hero shot is the point.
+fn seams(plan: &Plan, index: &Index, timing: &[(f32, f32)], drop_beat: usize) -> Vec<Finding> {
+    let mut out = Vec::new();
+    let mut push = |id: &'static str, n: usize, message: String| {
+        out.push(Finding {
+            id,
+            severity: severity_of(id),
+            shot: Some(n + 1),
+            seam: Some(n),
+            message,
+        });
+    };
+    let mut beat = 0;
+    for (k, pair) in plan.shots.windows(2).enumerate() {
+        let (a, b) = (&pair[0], &pair[1]);
+        let n = k + 1;
+        beat += a.beats;
+        let Some(&(_, dur)) = timing.get(k) else {
+            continue;
+        };
+        let a_out = a.t_in + dur;
+        if a.clip == b.clip {
+            let gap = b.t_in - a_out;
+            // A gap within half a sample step is the same moment carried on.
+            if gap.abs() < JUMP_CUT_GAP && gap.abs() > 0.05 {
+                push(
+                    "jump-cut",
+                    n,
+                    format!(
+                        "{} cuts to itself {} {:.1}s: reads as a jump cut (under {JUMP_CUT_GAP:.0}s)",
+                        a.clip,
+                        if gap > 0.0 { "skipping" } else { "back" },
+                        gap.abs()
+                    ),
+                );
+            }
+        }
+        let b_dur = timing.get(k + 1).map_or(EDGE_WINDOW, |&(_, d)| d);
+        let (Some((la, ca)), Some((lb, cb))) = (
+            edge_look(index, &a.clip, (a_out - EDGE_WINDOW).max(a.t_in), a_out),
+            edge_look(index, &b.clip, b.t_in, b.t_in + EDGE_WINDOW.min(b_dur)),
+        ) else {
+            continue;
+        };
+        let stops = (la.max(LUMA_FLOOR) / lb.max(LUMA_FLOOR)).log2();
+        if stops.abs() > EXPOSURE_JUMP_STOPS && beat != drop_beat {
+            push(
+                "exposure-jump",
+                n,
+                format!(
+                    "brightness {} {:.1} stops across the cut (luma {la:.3} to {lb:.3}, over {EXPOSURE_JUMP_STOPS:.1})",
+                    if stops > 0.0 { "drops" } else { "jumps" },
+                    stops.abs()
+                ),
+            );
+        }
+        if let (Some(x), Some(y)) = (ca, cb) {
+            let d = (x[0] - y[0]).hypot(x[1] - y[1]);
+            if d > COLOUR_JUMP {
+                push(
+                    "colour-jump",
+                    n,
+                    format!(
+                        "mid-tone colour moves {d:.2} across the cut (rg {:.2},{:.2} to {:.2},{:.2}; over {COLOUR_JUMP:.2})",
+                        x[0], x[1], y[0], y[1]
+                    ),
+                );
+            }
+        }
+    }
+    out
 }
 
 /// Whether a people-map name says who someone is (unlisted footage is
@@ -689,19 +1097,27 @@ pub(crate) fn lookalike(
     Some(sa.distance(sb))
 }
 
-/// Renders problems as text.
-pub(crate) fn report(plan: &Plan, problems: &[Problem]) -> String {
+/// How many findings are hard.
+pub(crate) fn hard_count(findings: &[Finding]) -> usize {
+    findings.iter().filter(|f| f.is_hard()).count()
+}
+
+/// Renders findings as text: one line per finding, prefixed with where it
+/// is, its severity and its id, then a verdict line (`ok`, `ok with N
+/// soft`, or `fails: N hard, M soft`). Only hard findings fail.
+pub(crate) fn report(plan: &Plan, problems: &[Finding]) -> String {
     let mut s = String::new();
-    if problems.is_empty() {
-        let _ = writeln!(s, "{}: ok ({} shots)", plan.name, plan.shots.len());
-    }
     for p in problems {
-        if p.shot == 0 {
-            let _ = writeln!(s, "{}: {}", plan.name, p.message);
-        } else {
-            let _ = writeln!(s, "{} shot {}: {}", plan.name, p.shot, p.message);
-        }
+        let _ = writeln!(s, "{} {}", plan.name, p.text());
     }
+    let hard = hard_count(problems);
+    let soft = problems.len() - hard;
+    let shots = plan.shots.len();
+    let _ = match (hard, soft) {
+        (0, 0) => writeln!(s, "{}: ok ({shots} shots)", plan.name),
+        (0, _) => writeln!(s, "{}: ok ({shots} shots), {soft} soft", plan.name),
+        (_, _) => writeln!(s, "{}: fails: {hard} hard, {soft} soft", plan.name),
+    };
     s
 }
 
@@ -866,7 +1282,7 @@ beats = 4
         assert!(
             problems
                 .iter()
-                .any(|p| p.shot == 3 && p.message.contains("`A` again")),
+                .any(|p| p.shot == Some(3) && p.message.contains("`A` again")),
             "same person 2 shots apart: {problems:?}"
         );
         assert!(
@@ -878,7 +1294,7 @@ beats = 4
         assert!(
             problems
                 .iter()
-                .any(|p| p.shot == 3 && p.message.contains("same stretch")),
+                .any(|p| p.shot == Some(3) && p.message.contains("same stretch")),
             "10 s apart repeats: {problems:?}"
         );
         plan.shots[2].beats = 8;
@@ -886,7 +1302,7 @@ beats = 4
         assert!(
             problems
                 .iter()
-                .any(|p| p.shot == 0 && p.message.contains("beats")),
+                .any(|p| p.shot.is_none() && p.id == "beat-count"),
             "beat count off: {problems:?}"
         );
         Ok(())
@@ -942,7 +1358,7 @@ beats = 4
         assert!(
             problems
                 .iter()
-                .any(|p| p.shot == 2 && p.message.contains("looks like shot 1")),
+                .any(|p| p.shot == Some(2) && p.message.contains("looks like shot 1")),
             "identical signatures, nobody named: {problems:?}"
         );
         let mut named = crate::people::People::default();
@@ -1005,13 +1421,14 @@ beats = 4
         assert!(
             problems
                 .iter()
-                .any(|p| p.shot == 1 && p.message.contains("reuses A 10.0-12.0 from 2026-11-04")),
+                .any(|p| p.shot == Some(1)
+                    && p.message.contains("reuses A 10.0-12.0 from 2026-11-04")),
             "shot 1 reuses last week's moment: {problems:?}"
         );
         assert!(
             !problems
                 .iter()
-                .any(|p| p.shot == 2 && p.message.contains("reuses")),
+                .any(|p| p.shot == Some(2) && p.message.contains("reuses")),
             "B was never used: {problems:?}"
         );
         let mut later = two_shots();
@@ -1020,6 +1437,313 @@ beats = 4
         assert!(
             !problems.iter().any(|p| p.message.contains("reuses")),
             "another moment of the same clip is fine: {problems:?}"
+        );
+        Ok(())
+    }
+
+    /// The findings of `plan` on the tiny night, no memory, nobody named.
+    fn findings(plan: &Plan, index: &crate::index::Index) -> Vec<super::Finding> {
+        super::check_with(
+            plan,
+            index,
+            &tiny_map(),
+            &crate::people::People::default(),
+            &super::Memory::default(),
+        )
+    }
+
+    #[test]
+    fn every_id_is_registered_once_with_its_severity() -> anyhow::Result<()> {
+        use super::{IDS, Severity};
+        let mut seen = std::collections::BTreeSet::new();
+        for (id, _, what) in IDS {
+            assert!(seen.insert(id), "{id} registered twice");
+            assert!(
+                !id.is_empty() && id.chars().all(|c| c.is_ascii_lowercase() || c == '-'),
+                "{id} is kebab-case"
+            );
+            assert!(!what.is_empty(), "{id} says what it means");
+        }
+        let hard: Vec<&str> = IDS
+            .iter()
+            .filter(|(_, s, _)| *s == Severity::Hard)
+            .map(|(id, _, _)| *id)
+            .collect();
+        assert_eq!(
+            hard,
+            vec![
+                "beat-count",
+                "bar-order",
+                "past-track",
+                "off-drop",
+                "missing-clip",
+                "outside-clip",
+                "bad-span",
+                "crop-outside",
+                "empty-shot"
+            ],
+            "only what makes the plan invalid or the render wrong is hard"
+        );
+        assert_eq!(
+            super::severity_of("no-such-rule"),
+            Severity::Hard,
+            "an unregistered id never hides a failure"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn existing_rules_map_to_ids_and_severities() -> anyhow::Result<()> {
+        let mut plan = two_shots();
+        plan.shots[1].clip = "Z".into();
+        plan.shots[0].t_in = 119.0;
+        plan.shots.push(plan.shots[0].clone());
+        let got = findings(&plan, &tiny_index());
+        let has = |id: &str, shot: Option<usize>, hard: bool| {
+            got.iter()
+                .any(|f| f.id == id && f.shot == shot && f.is_hard() == hard)
+        };
+        assert!(has("beat-count", None, true), "12 beats in 8: {got:?}");
+        assert!(
+            has("missing-clip", Some(2), true),
+            "Z is not indexed: {got:?}"
+        );
+        assert!(
+            has("outside-clip", Some(1), true),
+            "119 + 2 s > 120: {got:?}"
+        );
+        assert!(
+            has("same-stretch", Some(3), false),
+            "A again at 119: {got:?}"
+        );
+        for f in &got {
+            assert!(
+                super::IDS
+                    .iter()
+                    .any(|(id, s, _)| *id == f.id && *s == f.severity),
+                "{} is registered with its severity",
+                f.id
+            );
+            assert!(f.seam.is_none(), "no seam findings here: {f:?}");
+        }
+        let text = super::report(&plan, &got);
+        assert!(
+            text.contains("t shot 2 [hard missing-clip] clip Z is not in the index")
+                && text.contains("t plan [hard beat-count] shots fill 12 beats"),
+            "lines carry place, severity and id: {text}"
+        );
+        assert!(
+            text.trim_end().ends_with("t: fails: 5 hard, 2 soft"),
+            "verdict last: {text}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn soft_findings_do_not_fail_the_report() -> anyhow::Result<()> {
+        let mut plan = two_shots();
+        plan.shots[1].clip = "A".into();
+        plan.shots[1].t_in = 14.0;
+        let got = findings(&plan, &tiny_index());
+        assert!(
+            !got.is_empty() && super::hard_count(&got) == 0,
+            "only soft findings: {got:?}"
+        );
+        let text = super::report(&plan, &got);
+        assert!(
+            text.trim_end()
+                .ends_with(&format!("t: ok (2 shots), {} soft", got.len())),
+            "passes with the soft count: {text}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_cut_within_one_clip_that_skips_a_little_is_a_jump_cut() -> anyhow::Result<()> {
+        let mut plan = two_shots();
+        plan.rules.same_clip_gap = 0.0;
+        plan.shots[1].clip = "A".into();
+        // Shot 1 plays A 10-12; shot 2 picks A up at 14: a 2 s skip.
+        plan.shots[1].t_in = 14.0;
+        let got = findings(&plan, &tiny_index());
+        let jump = got.iter().find(|f| f.id == "jump-cut");
+        assert!(
+            jump.is_some_and(|f| f.seam == Some(1)
+                && f.shot == Some(2)
+                && !f.is_hard()
+                && f.message.contains("skipping 2.0s")),
+            "soft jump cut at cut 1|2: {got:?}"
+        );
+        assert_eq!(
+            jump.map(super::Finding::place),
+            Some("cut 1|2".to_owned()),
+            "a seam's place"
+        );
+        // Picked up where it left off: one continuous take, no jump.
+        plan.shots[1].t_in = 12.0;
+        assert!(
+            !findings(&plan, &tiny_index())
+                .iter()
+                .any(|f| f.id == "jump-cut"),
+            "a continuous cut is not a jump"
+        );
+        // Far enough on, it reads as a new shot.
+        plan.shots[1].t_in = 12.0 + super::JUMP_CUT_GAP + 1.0;
+        assert!(
+            !findings(&plan, &tiny_index())
+                .iter()
+                .any(|f| f.id == "jump-cut"),
+            "beyond the gap"
+        );
+        // Going back a little is a jump too.
+        plan.shots[1].t_in = 9.0;
+        assert!(
+            findings(&plan, &tiny_index())
+                .iter()
+                .any(|f| f.id == "jump-cut" && f.message.contains("back 3.0s")),
+            "backwards"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn short_shots_are_flashes_and_frameless_ones_are_hard() -> anyhow::Result<()> {
+        let mut plan = two_shots();
+        // 120 BPM at 23.976 fps: a beat is 12 frames; an 8-frame cut lead
+        // leaves shot 1 with 12 - 8 = 4.
+        plan.shots[0].beats = 1;
+        plan.shots[1].beats = 7;
+        plan.finish.cut_lead_frames = 8;
+        let got = findings(&plan, &tiny_index());
+        assert!(
+            got.iter().any(|f| f.id == "flash-shot"
+                && f.shot == Some(1)
+                && !f.is_hard()
+                && f.message.contains("only 4 frames")),
+            "4 frames is a flash: {got:?}"
+        );
+        assert!(
+            !got.iter()
+                .any(|f| f.id == "flash-shot" && f.shot == Some(2)),
+            "shot 2 is long: {got:?}"
+        );
+        plan.finish.cut_lead_frames = 0;
+        assert!(
+            !findings(&plan, &tiny_index())
+                .iter()
+                .any(|f| f.id == "flash-shot"),
+            "12 frames is a shot"
+        );
+        plan.shots[0].beats = 0;
+        plan.shots[1].beats = 8;
+        let got = findings(&plan, &tiny_index());
+        assert!(
+            got.iter()
+                .any(|f| f.id == "empty-shot" && f.shot == Some(1) && f.is_hard()),
+            "no frames cannot render: {got:?}"
+        );
+        Ok(())
+    }
+
+    /// Gives clip `clip` of `index` a sample every 0.25 s with this
+    /// brightness and mid-tone colour.
+    fn paint(index: &mut crate::index::Index, clip: &str, luma: f32, mid: [f32; 3]) {
+        for c in index.clips.iter_mut().filter(|c| c.id == clip) {
+            c.samples = (0..480)
+                .map(|i| crate::analyze::Sample {
+                    t: i as f32 * 0.25,
+                    luma,
+                    mid_r: mid[0],
+                    mid_g: mid[1],
+                    mid_b: mid[2],
+                    mid_frac: 0.3,
+                    ..Default::default()
+                })
+                .collect();
+        }
+    }
+
+    #[test]
+    fn exposure_jumps_across_a_cut_are_found_except_onto_the_drop() -> anyhow::Result<()> {
+        let mut index = tiny_index();
+        let grey = [0.3, 0.3, 0.3];
+        paint(&mut index, "A", 0.30, grey);
+        paint(&mut index, "B", 0.05, grey);
+        let mut plan = two_shots();
+        let got = findings(&plan, &index);
+        assert!(
+            got.iter().any(|f| f.id == "exposure-jump"
+                && f.seam == Some(1)
+                && !f.is_hard()
+                && f.message.contains("drops 2.6 stops")),
+            "0.30 to 0.05 is 2.6 stops: {got:?}"
+        );
+        assert!(
+            !got.iter().any(|f| f.id == "colour-jump"),
+            "same grey: {got:?}"
+        );
+        paint(&mut index, "B", 0.15, grey);
+        assert!(
+            !findings(&plan, &index)
+                .iter()
+                .any(|f| f.id == "exposure-jump"),
+            "one stop is within the render's reach"
+        );
+        // Cutting to black: both under the floor, nothing to see.
+        paint(&mut index, "A", 0.01, grey);
+        paint(&mut index, "B", 0.005, grey);
+        assert!(
+            !findings(&plan, &index)
+                .iter()
+                .any(|f| f.id == "exposure-jump"),
+            "near-black noise is not a jump"
+        );
+        // The cut onto the drop may snap from dark to bright.
+        paint(&mut index, "A", 0.05, grey);
+        paint(&mut index, "B", 0.30, grey);
+        plan.drop_bar = 1;
+        assert!(
+            !findings(&plan, &index)
+                .iter()
+                .any(|f| f.id == "exposure-jump"),
+            "the drop is spared"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn colour_jumps_across_a_cut_are_found() -> anyhow::Result<()> {
+        let mut index = tiny_index();
+        paint(&mut index, "A", 0.2, [0.6, 0.2, 0.2]);
+        paint(&mut index, "B", 0.2, [0.1, 0.2, 0.7]);
+        let plan = two_shots();
+        let got = findings(&plan, &index);
+        assert!(
+            got.iter().any(|f| f.id == "colour-jump"
+                && f.seam == Some(1)
+                && f.shot == Some(2)
+                && !f.is_hard()
+                && f.message.contains("moves 0.50")),
+            "red to blue mid-tones: {got:?}"
+        );
+        paint(&mut index, "B", 0.2, [0.5, 0.25, 0.25]);
+        assert!(
+            !findings(&plan, &index)
+                .iter()
+                .any(|f| f.id == "colour-jump"),
+            "a warmer red is the same look"
+        );
+        // No mid-tones to judge (all black and emitters): no verdict.
+        for c in index.clips.iter_mut() {
+            for s in &mut c.samples {
+                s.mid_frac = 0.0;
+            }
+        }
+        assert!(
+            !findings(&plan, &index)
+                .iter()
+                .any(|f| f.id == "colour-jump"),
+            "nothing to judge colour on"
         );
         Ok(())
     }
