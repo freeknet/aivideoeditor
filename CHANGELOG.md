@@ -12,6 +12,11 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Search says how much of the night it could see: results carry `complete` and
+  `uncaptioned_in_scope` (segments that pass the measured filters but have no caption,
+  so free text and caption facets could not see them). The Shots browser shows it as a
+  quiet "312 shots · 41 not captioned", and MCP `search_shots` opens with "complete" or
+  "PARTIAL … uncaptioned_in_scope=N" so the chat agent knows when results are partial.
 - A Shot list tab in the inspector, Selects' Transcript for a cut: the open plan's shots
   in timeline order under their song sections, each with its number, time (MM:SS.s),
   bar, source segment, caption line, the plan's note and a quiet icon for its

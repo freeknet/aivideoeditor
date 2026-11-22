@@ -170,7 +170,7 @@ pub(crate) fn tools() -> Value {
     json!([
         {"name": "night_overview", "description": "The open night: clips, segments and flags, captions, music grid and drops, people, plans with their rule-check status.",
          "inputSchema": {"type": "object", "properties": {}}},
-        {"name": "search_shots", "description": "Search the shot log. Free text matches captions/people/settings/clip ids; facets: fire>0.3 led>0.2 move>0.5 focus<0.8 q>0.7 dark soft flag:blown move:pan|zoom-in|zoom-out|static person:<name> clip:MVI_79 moment:performing framing:close pick reject like:<segment id>; '-' negates. Shares are relative to the night (1 = its strongest).",
+        {"name": "search_shots", "description": "Search the shot log. Free text matches captions/people/settings/clip ids; facets: fire>0.3 led>0.2 move>0.5 focus<0.8 q>0.7 dark soft flag:blown move:pan|zoom-in|zoom-out|static person:<name> clip:MVI_79 moment:performing framing:close pick reject like:<segment id>; '-' negates. Shares are relative to the night (1 = its strongest). The first line says whether the results are complete: PARTIAL means some segments in scope have no caption, so free text and caption facets could not see them.",
          "inputSchema": {"type": "object", "required": ["query"], "properties": {"query": {"type": "string"}, "limit": {"type": "integer", "default": 25}}}},
         {"name": "segment_details", "description": "Exact facts for segments (ids like MVI_7987/3): times, camera, exposure, focus, fire/LED/moving light, action centre, quality, flags with thresholds, burst moments, caption, who, plans using it.",
          "inputSchema": {"type": "object", "required": ["ids"], "properties": {"ids": {"type": "array", "items": {"type": "string"}}}}},
@@ -354,7 +354,8 @@ fn search(p: &Project, args: &Value) -> Result<Vec<Value>> {
     let limit = args["limit"].as_u64().unwrap_or(25) as usize;
     let (marks, _) = crate::search::marks::Marks::load(&p.work);
     let night = crate::search::Night::new(index, &p.people, &marks);
-    let hits = crate::search::search(&query, &night);
+    let results = crate::search::search(&query, &night);
+    let hits = &results.hits;
     let lines: Vec<String> = hits
         .iter()
         .take(limit)
@@ -371,8 +372,17 @@ fn search(p: &Project, args: &Value) -> Result<Vec<Value>> {
             ))
         })
         .collect();
+    let coverage = if results.complete {
+        "complete: every segment in scope was searchable".to_owned()
+    } else {
+        format!(
+            "PARTIAL: {} segments in scope have no caption, so the caption terms could not see them \
+             (complete=false, uncaptioned_in_scope={}); caption the night or use measured facets",
+            results.uncaptioned_in_scope, results.uncaptioned_in_scope
+        )
+    };
     Ok(text(format!(
-        "{} matches{}\n{}",
+        "{} matches{} · {coverage}\n{}",
         hits.len(),
         if hits.len() > limit {
             format!(", first {limit}")
@@ -987,6 +997,66 @@ pub(crate) mod tests {
                 "refused up front: {bad}"
             );
         }
+        Ok(())
+    }
+
+    /// Writes an `index.json` of segments `(id, caption summary)` into `work`.
+    fn write_index(work: &std::path::Path, segs: &[(&str, Option<&str>)]) -> anyhow::Result<()> {
+        let mut segments = Vec::new();
+        for (k, (id, summary)) in segs.iter().enumerate() {
+            let mut s = crate::index::Scored {
+                id: (*id).to_owned(),
+                clip: id.split('/').next().unwrap_or(id).to_owned(),
+                q: 0.5,
+                caption: summary.map(|t| crate::caption::Caption {
+                    summary: t.to_owned(),
+                    ..crate::caption::Caption::default()
+                }),
+                ..crate::index::Scored::default()
+            };
+            s.seg.start = k as f32 * 4.0;
+            s.seg.end = s.seg.start + 3.0;
+            s.seg.peak_t = s.seg.start + 2.0;
+            segments.push(serde_json::to_value(s)?);
+        }
+        let index = json!({"source": "", "sharp_ref": 1.0, "clips": [], "segments": segments});
+        std::fs::write(work.join("index.json"), index.to_string())?;
+        Ok(())
+    }
+
+    #[test]
+    fn search_says_when_its_results_are_partial() -> anyhow::Result<()> {
+        use super::{Caller, call};
+        let dir = tempfile::tempdir()?;
+        let work = dir.path();
+        write_index(
+            work,
+            &[
+                ("A/1", Some("Fire spinner by the stage.")),
+                ("A/2", None),
+                ("B/1", None),
+            ],
+        )?;
+        let partial = first_text(&call(
+            work,
+            "search_shots",
+            &json!({"query": "spinner"}),
+            Caller::Agent,
+        )?);
+        assert!(
+            partial.contains("PARTIAL") && partial.contains("uncaptioned_in_scope=2"),
+            "a caption query names what it could not see: {partial}"
+        );
+        let whole = first_text(&call(
+            work,
+            "search_shots",
+            &json!({"query": "clip:B"}),
+            Caller::Agent,
+        )?);
+        assert!(
+            whole.contains("complete") && !whole.contains("PARTIAL"),
+            "a measured facet sees everything: {whole}"
+        );
         Ok(())
     }
 
