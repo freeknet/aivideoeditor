@@ -76,7 +76,9 @@ pub(crate) struct Rules {
     /// Whether a shot reusing a moment from another night's plan fails the
     /// check (see [`Memory`]). The drafter avoids them either way.
     pub(crate) reject_reused: bool,
-    /// Shots whose source range carries any of these flags fail the check.
+    /// Shots whose source range carries any of these flags fail the check,
+    /// as do shots overlapping a bad span (see [`crate::analyze::spans`])
+    /// with one of them.
     pub(crate) reject_flags: Vec<String>,
     /// The shot on the drop must have this subject (empty: no requirement).
     pub(crate) drop_subject: String,
@@ -348,14 +350,22 @@ pub(crate) struct Plan {
     /// The cuts, in order.
     #[serde(rename = "shot")]
     pub(crate) shots: Vec<Shot>,
-    /// Review comments pinned to moments of the cut (`[[comment]]`).
-    #[serde(default, rename = "comment", skip_serializing_if = "Vec::is_empty")]
+    /// Markers: review comments pinned to moments of the cut (`[[comment]]`,
+    /// also read as `[[marker]]`).
+    #[serde(
+        default,
+        rename = "comment",
+        alias = "marker",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub(crate) comments: Vec<Comment>,
 }
 
-/// A review comment: a note pinned to a moment of the cut, the way an
-/// editor leaves a feedback marker. It belongs to the plan, not to a shot,
-/// so it stays at its time when the shots under it change.
+/// A marker: a moment of the cut with a colour and, usually, a note. Like
+/// Selects, a marker with a note *is* a review comment, so markers and
+/// comments are one thing. It belongs to the plan, not to a shot, so it
+/// stays at its time when the shots under it change, and version restores
+/// keep the live plan's markers.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Comment {
     /// Seconds from the plan's start bar.
@@ -557,6 +567,11 @@ pub(crate) fn check_with(
                         bad.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" ")
                     ),
                 );
+            }
+            for b in
+                crate::analyze::spans::hits(&g.seg.bad_spans, shot.t_in, t_out, &r.reject_flags)
+            {
+                push(n, format!("overlaps a bad span in {}: {}", g.id, b.text()));
             }
             if let Some(c) = &g.caption
                 && r.reject_moments.contains(&c.effective_moment().to_owned())
@@ -764,6 +779,7 @@ beats = 4
             moments: Vec::new(),
             cheers: Vec::new(),
             sig: Default::default(),
+            bad_spans: Vec::new(),
         };
         let probe = Probe {
             duration: 120.0,
@@ -772,6 +788,8 @@ beats = 4
             fps: [24000, 1001],
             vcodec: "h264".into(),
             has_audio: false,
+            recorded_at: None,
+            camera: None,
         };
         let clip = |id: &str, hist: f32| ClipIndex {
             id: id.into(),

@@ -18,6 +18,8 @@ pub(crate) mod features;
 pub(crate) mod moments;
 pub(crate) mod motion;
 pub(crate) mod segments;
+pub(crate) mod sets;
+pub(crate) mod spans;
 
 use std::path::Path;
 

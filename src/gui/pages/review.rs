@@ -308,6 +308,9 @@ pub(crate) struct State {
     items: Vec<Item>,
     /// Hits before the cut-off.
     matched: usize,
+    /// Uncaptioned segments the query's caption terms could not see (0
+    /// when the results are complete).
+    unseen: usize,
     paths: HashMap<String, PathBuf>,
     /// Segment ids by index position, so results map to ids without the index.
     ids: Vec<String>,
@@ -510,7 +513,7 @@ fn body(
         if matches!(state.mode, Mode::Compare(_) | Mode::Survey(_)) {
             // The two-up and the tiles replace the results.
         } else if state.items.is_empty() {
-            empty(ui, ctx.theme, &query, state.matched, dos);
+            empty(ui, ctx.theme, &query, (state.matched, state.unseen), dos);
         } else {
             let reveal_row = state.reveal.then(|| cursor_pos(state)).flatten();
             let out = match state.opts.view {
@@ -627,7 +630,13 @@ fn refresh(state: &mut State, night: &Night<'_>, search_text: &str) {
         state.ids = index.segments.iter().map(|s| s.id.clone()).collect();
     }
     let query = Query::parse(search_text);
-    let hits = search::search(&query, night);
+    let results = search::search(&query, night);
+    state.unseen = if results.complete {
+        0
+    } else {
+        results.uncaptioned_in_scope
+    };
+    let hits = results.hits;
     state.matched = hits.len();
     let mut hits: Vec<search::Hit> = hits
         .into_iter()
@@ -925,7 +934,15 @@ fn count(
     if state.opts.group && stacks > 0 {
         detail.push(format!("{stacks} stacks"));
     }
-    let text = if room >= 72.0 {
+    if state.unseen > 0 {
+        detail.push(format!(
+            "{} not captioned, so the words could not see them",
+            state.unseen
+        ));
+    }
+    let text = if state.unseen > 0 && room >= 168.0 {
+        format!("{} shots · {} not captioned", state.matched, state.unseen)
+    } else if room >= 72.0 {
         format!("{} shots", state.matched)
     } else {
         state.matched.to_string()
@@ -1307,25 +1324,36 @@ fn chips(ui: &mut egui::Ui, theme: &Palette, query: &Query, dos: &mut Vec<Do>) {
 }
 
 /// No results: say why and offer a way out.
-fn empty(ui: &mut egui::Ui, theme: &Palette, query: &Query, matched: usize, dos: &mut Vec<Do>) {
+fn empty(
+    ui: &mut egui::Ui,
+    theme: &Palette,
+    query: &Query,
+    (matched, unseen): (usize, usize),
+    dos: &mut Vec<Do>,
+) {
     let (title, hint) = if matched > 0 {
         (
             format!("{matched} shots under the minimum score"),
-            "Lower it in the filter menu to see them.",
+            "Lower it in the filter menu to see them.".to_owned(),
         )
     } else if query.is_empty() {
         (
             "The shot log is empty".to_owned(),
-            "Index the night on the Home screen.",
+            "Index the night on the Home screen.".to_owned(),
+        )
+    } else if unseen > 0 {
+        (
+            "No captioned shots match".to_owned(),
+            format!("{unseen} shots are not captioned yet; caption the night to search them."),
         )
     } else {
         (
             "No shots match".to_owned(),
-            "Try fewer words, or a smart search.",
+            "Try fewer words, or a smart search.".to_owned(),
         )
     };
     let mut clear = false;
-    widgets::empty_state(ui, theme, icons::SEARCH, &title, hint, |ui| {
+    widgets::empty_state(ui, theme, icons::SEARCH, &title, &hint, |ui| {
         if !query.is_empty() && widgets::outline_button(ui, theme, "Clear search").clicked() {
             clear = true;
         }
@@ -2076,6 +2104,9 @@ fn open_seg(ctx: &mut PageCtx<'_>, state: &State, seg: usize) {
             f64::from(seg.seg.end),
             seg.seg.cx,
         );
+        // Land on the shot's best moment, not its first frame.
+        ctx.player
+            .seek(f64::from(search::focal(seg) - seg.seg.start));
     }
 }
 
@@ -2464,6 +2495,8 @@ mod tests {
                 fps: [24000, 1001],
                 vcodec: "h264".into(),
                 has_audio: false,
+                recorded_at: None,
+                camera: None,
             };
             let mut clips = Vec::new();
             let mut segments = Vec::new();
