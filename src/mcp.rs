@@ -168,7 +168,7 @@ pub(crate) fn tools() -> Value {
         }}
     });
     json!([
-        {"name": "night_overview", "description": "The open night: clips, segments and flags, captions, music grid and drops, people, plans with their rule-check status.",
+        {"name": "night_overview", "description": "The open night: clips, segments and flags, captions, the night's sets (acts by recording time and setting, with their clips), music grid and drops, people, plans with their rule-check status.",
          "inputSchema": {"type": "object", "properties": {}}},
         {"name": "search_shots", "description": "Search the shot log. Free text matches captions/people/settings/clip ids; facets: fire>0.3 led>0.2 move>0.5 focus<0.8 q>0.7 dark soft flag:blown move:pan|zoom-in|zoom-out|static person:<name> clip:MVI_79 moment:performing framing:close pick reject like:<segment id>; '-' negates. Shares are relative to the night (1 = its strongest).",
          "inputSchema": {"type": "object", "required": ["query"], "properties": {"query": {"type": "string"}, "limit": {"type": "integer", "default": 25}}}},
@@ -298,6 +298,7 @@ fn overview(p: &Project) -> String {
                 i.clips.len(),
                 i.segments.len()
             ));
+            s.push_str(&sets_section(i));
         }
         None => s.push_str("footage: not indexed yet\n"),
     }
@@ -343,6 +344,29 @@ fn overview(p: &Project) -> String {
             _ => "not checkable yet".to_owned(),
         };
         s.push_str(&format!("plan {stem}: {status}\n"));
+    }
+    s
+}
+
+/// The night's acts for `night_overview`: one line per set with its
+/// clips, so the agent can plan by act (open on the first, close on the
+/// last) before searching shots.
+fn sets_section(i: &crate::index::Index) -> String {
+    let sets = crate::analyze::sets::group(i);
+    if sets.is_empty() {
+        return "sets: no recording times yet (re-run index to read them)\n".to_owned();
+    }
+    let mut s = format!(
+        "sets ({}, the night's acts in recording order: split by pauses over {} min and lasting indoor/outdoor changes):\n",
+        sets.len(),
+        crate::analyze::sets::GAP_SECS / 60
+    );
+    for set in &sets {
+        s.push_str(&format!(
+            "  {} — clips {}\n",
+            set.heading(),
+            set.clips.join(" ")
+        ));
     }
     s
 }
@@ -987,6 +1011,29 @@ pub(crate) mod tests {
                 "refused up front: {bad}"
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn the_overview_lists_the_nights_sets() -> anyhow::Result<()> {
+        use crate::analyze::sets::tests::{clip, night};
+        let index = night(vec![
+            clip("A", 0, 10.0, "outdoor parking lot at night", "fire"),
+            clip("B", 3600, 10.0, "indoor venue", "led"),
+        ]);
+        let text = super::sets_section(&index);
+        assert!(
+            text.starts_with("sets (2,")
+                && text.contains("Set 1: Outdoor parking lot · fire · 19:00-19:00 · 1 clips")
+                && text.contains("Set 2: Indoor venue · LED")
+                && text.contains("(60 min gap) — clips B"),
+            "{text}"
+        );
+        let old = crate::index::Index::default();
+        assert!(
+            super::sets_section(&old).contains("no recording times"),
+            "an index without times says so"
+        );
         Ok(())
     }
 

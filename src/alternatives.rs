@@ -290,6 +290,8 @@ mod tests {
             fps: [24000, 1001],
             vcodec: "h264".into(),
             has_audio: false,
+            recorded_at: None,
+            camera: None,
         };
         let mut clips = Vec::new();
         let mut segments = Vec::new();
