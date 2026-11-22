@@ -23,6 +23,13 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   (`Outdoor parking lot · fire`). `index.json` stores them, `shotlog.md` lists them and
   heads each set's clips in recording order, and `night_overview` shows them to the
   chat agent.
+- Bad spans inside segments: a half-second focus hunt, whip, jolt, or dark or blown
+  moment inside an otherwise good segment is now recorded as `bad_spans` (start, end,
+  flag, worst value), found from the 6 Hz samples against the night's thresholds when
+  the index is scored, so an existing index gains them on the next `ave index` without
+  re-measuring. The shot log prints them on a `bad:` line, `segment_details` shows them
+  to the chat agent, `ave plan` shifts a shot's window clear of any span with a rejected
+  flag, and `ave check` reports a shot that overlaps one.
 - A Shot list tab in the inspector, Selects' Transcript for a cut: the open plan's shots
   in timeline order under their song sections, each with its number, time (MM:SS.s),
   bar, source segment, caption line, the plan's note and a quiet icon for its
