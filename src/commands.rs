@@ -516,7 +516,7 @@ pub(crate) enum Cmd {
     /// <where> is `shot N`, `cut N|N+1` (a seam check) or `plan` (the whole
     /// plan), then a verdict line. Hard findings (the plan is invalid or the
     /// render would be wrong: beat-count, bar-order, past-track, off-drop,
-    /// missing-clip, bad-span, crop-outside, empty-shot) fail the check and
+    /// missing-clip, outside-clip, bad-span, crop-outside, empty-shot) fail the check and
     /// stop `ave render` without --force. Soft findings are taste rules
     /// bent (drop-subject, flash-shot, flagged, bad-moment, wide-action,
     /// same-stretch, repeat-performer, lookalike, reused, jump-cut,

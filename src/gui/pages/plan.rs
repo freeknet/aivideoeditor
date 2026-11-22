@@ -24,9 +24,10 @@
 //! ([`crate::alternatives`]); `1`–`8` swaps one in.
 //!
 //! Plans sit in tabs above the tracks ([`tabs`]), one per plan file, so a
-//! plan the assistant writes shows up as a tab to compare against. Review
-//! comments (`F`) are pinned to moments of the cut and handed to the chat
-//! as one batch ([`comments`]). While the assistant commits an edit it
+//! plan the assistant writes shows up as a tab to compare against. Markers
+//! (`M` or `F`; `Shift+M` / `Alt+M` to step between them), whose notes are
+//! the review comments, are pinned to moments of the cut and handed to the
+//! chat as one batch ([`comments`]). While the assistant commits an edit it
 //! holds `plans/.lock-<name>` and the timeline goes read-only. A
 //! storyboard lane ([`storyboard`]) shows the plan as cards with their
 //! notes, grouped by song section. "Compare plans" in the tab strip
@@ -915,13 +916,8 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
     }
 }
 
-/// Saves, reloads and follows jobs between frames.
-fn housekeeping(
-    state: &mut State,
-    project: &mut Project,
-    jobs: &crate::jobs::Jobs,
-    player: &mut Player,
-) {
+/// Starts the state afresh when the night changed under it.
+fn adopt(state: &mut State, project: &Project) {
     if state.work.as_deref() != Some(project.work.as_path()) {
         *state = State {
             work: Some(project.work.clone()),
@@ -931,6 +927,72 @@ fn housekeeping(
             ..State::default()
         };
     }
+}
+
+/// Lifts shots `shots` (0-based) of plan `name` for a region other than
+/// the timeline (the inspector's Shot list), through the timeline's own
+/// edit path: the same lift, on its undo stack, saved at once as a new
+/// version, so it works whether or not the timeline is drawn. Clears the
+/// selection and keeps the viewer on the edited cut when it held the old
+/// one. Returns whether anything was lifted.
+pub(crate) fn lift_shots(
+    state: &mut State,
+    project: &mut Project,
+    player: &mut Player,
+    selection: &mut Vec<Reference>,
+    name: &str,
+    shots: &[usize],
+) -> bool {
+    adopt(state, project);
+    if state.name.as_deref() != Some(name) {
+        state.open(project, name);
+    }
+    state.locked = lock_active(&lock_path(&project.work, name), SystemTime::now());
+    let Some(before) = state.plan.clone() else {
+        return false;
+    };
+    let mut sel: Vec<usize> = shots
+        .iter()
+        .copied()
+        .filter(|&k| k < before.shots.len())
+        .collect();
+    sel.sort_unstable();
+    sel.dedup();
+    if sel.is_empty() {
+        return false;
+    }
+    let list: Vec<String> = sel.iter().map(|k| (k + 1).to_string()).collect();
+    let lifted = state.apply(format!("lift {}", list.join(",")), |p| {
+        let mut any = false;
+        for &k in sel.iter().rev() {
+            any |= edit::lift(p, k);
+        }
+        any
+    });
+    if !lifted {
+        return false;
+    }
+    state.alts = None;
+    selection.retain(|r| !matches!(&r.target, Target::Shot { plan, .. } if plan == name));
+    state.save(project);
+    if let (Some(plan), Some(map)) = (state.plan.as_ref(), project.music.as_ref())
+        && sequence(&before, project, map).is_loaded(player)
+    {
+        let pos = player.position();
+        sequence(plan, project, map).open(player);
+        player.seek(pos);
+    }
+    true
+}
+
+/// Saves, reloads and follows jobs between frames.
+fn housekeeping(
+    state: &mut State,
+    project: &mut Project,
+    jobs: &crate::jobs::Jobs,
+    player: &mut Player,
+) {
+    adopt(state, project);
     // The plan list (a plan written elsewhere becomes a tab) and the lock.
     if state
         .last_tabs_check
@@ -1759,12 +1821,28 @@ fn keys(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &egui::Ui, hovere
         state.redo();
     }
     let plain = |key: Key| ui.input(|i| i.key_pressed(key) && i.modifiers.is_none());
-    // F: a comment at the playhead (over the timeline or in Comment mode).
-    if (hovered || state.show_comments) && plain(Key::F) {
+    // M (or F): a marker at the playhead (over the timeline or in Comment
+    // mode); Shift+M / Alt+M go to the next / previous one.
+    let marker = |id: &str| ui.input(|i| crate::gui::ui::keymap::pressed(i, id, s.preset));
+    if (hovered || state.show_comments) && (plain(Key::F) || marker("marker-add")) {
         comments::add_at_playhead(state, s, io);
     }
+    if hovered || state.show_comments {
+        if marker("marker-next") {
+            comments::jump(state, s, io, true);
+        }
+        if marker("marker-prev") {
+            comments::jump(state, s, io, false);
+        }
+    }
+    // Delete lifts the selected shots, or else removes the selected marker.
     if plain(Key::Delete) || plain(Key::Backspace) {
-        lift_selected(state, s, io);
+        if s.sel.is_empty() && s.editable {
+            comments::delete_selected(state);
+        } else {
+            state.comment_sel = None;
+            lift_selected(state, s, io);
+        }
     }
     if plain(Key::A)
         && let Some(k) = s.single().or_else(|| s.sel.first().copied())
@@ -1790,6 +1868,7 @@ fn keys(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &egui::Ui, hovere
         if state.alts.is_some() {
             state.alts = None;
         } else {
+            state.comment_sel = None;
             io.select(&s.name, &BTreeSet::new());
         }
     }
@@ -2112,6 +2191,80 @@ mod tests {
             vec!["original", "adopt reel-b"],
             "saved through the version path, the original kept"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn m_adds_a_marker_at_the_playhead_and_shift_m_delete_remove_it() -> anyhow::Result<()> {
+        let (_dir, work) = night()?;
+        let mut h = harness(work);
+        {
+            let app = h
+                .state_mut()
+                .as_mut()
+                .ok_or_else(|| anyhow::anyhow!("no app"))?;
+            app.pages.plan.show_comments = true;
+            app.player.seek(1.5);
+        }
+        h.run_steps(3);
+        h.key_press(egui::Key::M);
+        h.run_steps(3);
+        let markers = |h: &egui_kittest::Harness<'static, Option<crate::gui::app::App>>| {
+            h.state()
+                .as_ref()
+                .and_then(|app| app.pages.plan.plan.as_ref())
+                .map(|p| p.comments.clone())
+                .unwrap_or_default()
+        };
+        let got = markers(&h);
+        assert_eq!(got.len(), 1, "M added one marker");
+        assert!(
+            got.first().is_some_and(|c| (c.time - 1.5).abs() < 1e-3),
+            "at the playhead: {got:?}"
+        );
+        {
+            let app = h
+                .state()
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("no app"))?;
+            assert!(
+                app.pages.plan.comment_edit.is_some(),
+                "its note opens for typing"
+            );
+        }
+        // Leave the note, go back to the start, then Shift+M finds it.
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        {
+            let app = h
+                .state_mut()
+                .as_mut()
+                .ok_or_else(|| anyhow::anyhow!("no app"))?;
+            app.pages.plan.comment_sel = None;
+            app.player.seek(0.0);
+        }
+        h.run_steps(3);
+        h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::M);
+        h.run_steps(3);
+        {
+            let app = h
+                .state()
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("no app"))?;
+            assert_eq!(
+                app.pages.plan.comment_sel,
+                Some(0),
+                "Shift+M selects the next marker"
+            );
+            assert!(
+                (app.player.position() - 1.5).abs() < 1e-3,
+                "and moves the playhead to it: {}",
+                app.player.position()
+            );
+        }
+        h.key_press(egui::Key::Delete);
+        h.run_steps(3);
+        assert!(markers(&h).is_empty(), "Delete removes the selected marker");
         Ok(())
     }
 

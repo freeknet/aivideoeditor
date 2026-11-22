@@ -118,6 +118,10 @@ pub(crate) struct Segment {
     /// Look-alike signature.
     #[serde(default)]
     pub(crate) sig: Signature,
+    /// Short bad stretches inside the segment (a focus hunt, a whip), set
+    /// when the index is scored; see [`super::spans`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) bad_spans: Vec<super::spans::BadSpan>,
 }
 
 /// What a segment looks like, coarsely: enough to tell "same spot, same
@@ -238,8 +242,9 @@ fn local_mean(samples: &[Sample], i: usize, r: usize, f: impl Fn(&Sample) -> f32
     samples[lo..hi].iter().map(&f).sum::<f32>() / n
 }
 
-/// Classifies every sample's camera behaviour.
-fn classify(samples: &[Sample]) -> (Vec<Camera>, Vec<f32>) {
+/// Classifies every sample's camera behaviour; also returns each sample's
+/// handheld jitter.
+pub(crate) fn classify(samples: &[Sample]) -> (Vec<Camera>, Vec<f32>) {
     let mut out = Vec::with_capacity(samples.len());
     let mut jitter = Vec::with_capacity(samples.len());
     for i in 0..samples.len() {
@@ -427,6 +432,7 @@ fn summarise(
             .map(|m| (m.t * 1000.0).round() / 1000.0)
             .collect(),
         sig: Signature::default(),
+        bad_spans: Vec::new(),
     }
 }
 

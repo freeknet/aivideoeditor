@@ -37,6 +37,8 @@ pub(super) enum Op {
     Select(Reference),
     /// Load this clip range in the viewer.
     Open(PathBuf, f64, f64, f32),
+    /// Seek the viewer this many seconds into the range just opened.
+    Seek(f64),
 }
 
 /// What every view reads from.
@@ -137,7 +139,12 @@ pub(super) fn segment(
     ops: &mut Vec<Op>,
 ) {
     let g = &seg.seg;
+    let before = ops.len();
     picture(v, ui, thumbs, &seg.clip, (g.start, g.end), g.cx, ops);
+    if ops.len() > before {
+        // Opened: land on the segment's focal time, not its first frame.
+        ops.push(Op::Seek(f64::from(crate::search::focal(seg) - g.start)));
+    }
     rows::title(
         ui,
         v.palette,
@@ -418,6 +425,7 @@ fn clip_strip(v: &View<'_>, ui: &mut Ui, clip: &str, current: Option<&str>, ops:
                 f64::from(s.seg.end),
                 s.seg.cx,
             ));
+            ops.push(Op::Seek(f64::from(crate::search::focal(s) - s.seg.start)));
         }
     }
 }

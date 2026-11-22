@@ -44,6 +44,12 @@ pub(crate) struct Probe {
     pub(crate) vcodec: String,
     /// Whether the file has an audio stream.
     pub(crate) has_audio: bool,
+    /// When recording started (container tags, else the file time).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) recorded_at: Option<RecordedAt>,
+    /// Camera make and model, from the container tags, when they say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) camera: Option<String>,
 }
 
 impl Probe {
@@ -79,6 +85,11 @@ pub(crate) fn probe(path: &Path) -> Result<Probe> {
         );
     }
     let json: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    let mtime = std::fs::metadata(path)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+        .and_then(|d| i64::try_from(d.as_secs()).ok());
     let streams = json["streams"].as_array().cloned().unwrap_or_default();
     let video = streams.iter().find(|s| s["codec_type"] == "video");
     let duration = json["format"]["duration"]
@@ -105,6 +116,8 @@ pub(crate) fn probe(path: &Path) -> Result<Probe> {
             .unwrap_or("")
             .to_owned(),
         has_audio: streams.iter().any(|s| s["codec_type"] == "audio"),
+        recorded_at: recorded_at(&json, mtime, duration),
+        camera: camera(&json),
     })
 }
 
@@ -112,6 +125,302 @@ pub(crate) fn probe(path: &Path) -> Result<Probe> {
 fn parse_ratio(text: &str) -> Option<[u32; 2]> {
     let (n, d) = text.split_once('/')?;
     Some([n.trim().parse().ok()?, d.trim().parse().ok()?])
+}
+
+/// When a clip was recorded, and how that was found out.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct RecordedAt {
+    /// Start of recording in UTC, RFC 3339 (`2026-11-12T03:51:11Z`).
+    pub(crate) utc: String,
+    /// The camera's wall clock with its UTC offset
+    /// (`2026-11-11T19:51:11-08:00`), when the offset is known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) local: Option<String>,
+    /// Where the time came from: `tag:<key>` (the container said so, with
+    /// an offset or confirmed as true UTC by the file time),
+    /// `tag:<key>+mtime` (a camera clock written as UTC, its offset read
+    /// off the file time) or `mtime` (no usable tag: the file's
+    /// modification time less the duration).
+    pub(crate) source: String,
+}
+
+impl RecordedAt {
+    /// Start of recording, Unix seconds.
+    pub(crate) fn unix(&self) -> Option<i64> {
+        parse_time(&self.utc).map(|(t, _)| t)
+    }
+
+    /// The camera clock's offset from UTC in minutes, when known.
+    pub(crate) fn offset(&self) -> Option<i32> {
+        self.local
+            .as_deref()
+            .and_then(parse_time)
+            .and_then(|(_, off)| off)
+    }
+
+    /// `19:51:11` on the camera's clock, or `03:51:11Z` when only UTC is
+    /// known.
+    pub(crate) fn clock(&self) -> String {
+        match &self.local {
+            Some(l) => l.get(11..19).unwrap_or(l).to_owned(),
+            None => format!("{}Z", self.utc.get(11..19).unwrap_or(&self.utc)),
+        }
+    }
+}
+
+/// How a time string named its zone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Zone {
+    /// An explicit offset from UTC, minutes.
+    Offset(i32),
+    /// `Z`: claimed UTC, which many cameras write for their local clock.
+    Zulu,
+    /// No zone at all.
+    Bare,
+}
+
+/// Days since 1970-01-01 of a proleptic Gregorian date (H. Hinnant's
+/// `days_from_civil`).
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// The date of a day count from 1970-01-01 (inverse of
+/// [`days_from_civil`]).
+fn civil_from_days(z: i64) -> (i64, i64, i64) {
+    let z = z + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400;
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+/// Parses `2026-11-11T19:51:11.000000Z`, `2026-11-11T19:51:11-0800`,
+/// `2026-11-11 19:51:11+01:00` or a bare `2026:11:11 19:51:11`: the wall
+/// clock as if it were UTC (Unix seconds) and how the zone was given.
+fn parse_wall(text: &str) -> Option<(i64, Zone)> {
+    let t = text.trim();
+    let num = |a: usize, b: usize| t.get(a..b)?.parse::<i64>().ok();
+    let (y, mo, d) = (num(0, 4)?, num(5, 7)?, num(8, 10)?);
+    let (h, mi, s) = (num(11, 13)?, num(14, 16)?, num(17, 19)?);
+    if !(1..=12).contains(&mo) || !(1..=31).contains(&d) || h > 23 || mi > 59 || s > 60 {
+        return None;
+    }
+    let wall = days_from_civil(y, mo, d) * 86_400 + h * 3600 + mi * 60 + s;
+    let rest = t
+        .get(19..)
+        .unwrap_or("")
+        .trim_start_matches(|c: char| c == '.' || c.is_ascii_digit());
+    let zone = if rest.is_empty() {
+        Zone::Bare
+    } else if rest.eq_ignore_ascii_case("z") {
+        Zone::Zulu
+    } else {
+        let sign = match rest.chars().next()? {
+            '+' => 1,
+            '-' => -1,
+            _ => return None,
+        };
+        let digits: String = rest.chars().skip(1).filter(char::is_ascii_digit).collect();
+        let oh = digits.get(0..2)?.parse::<i32>().ok()?;
+        let om = digits
+            .get(2..4)
+            .and_then(|m| m.parse::<i32>().ok())
+            .unwrap_or(0);
+        Zone::Offset(sign * (oh * 60 + om))
+    };
+    Some((wall, zone))
+}
+
+/// Parses an RFC 3339 time to Unix seconds, with its offset in minutes
+/// when it gave one (`Z` is 0).
+fn parse_time(text: &str) -> Option<(i64, Option<i32>)> {
+    let (wall, zone) = parse_wall(text)?;
+    Some(match zone {
+        Zone::Offset(off) => (wall - i64::from(off) * 60, Some(off)),
+        Zone::Zulu => (wall, Some(0)),
+        Zone::Bare => (wall, None),
+    })
+}
+
+/// Formats Unix seconds as RFC 3339: `Z` with no offset, else the wall
+/// clock at `offset` minutes.
+pub(crate) fn format_time(unix: i64, offset: Option<i32>) -> String {
+    let off = offset.unwrap_or(0);
+    let wall = unix + i64::from(off) * 60;
+    let (y, m, d) = civil_from_days(wall.div_euclid(86_400));
+    let secs = wall.rem_euclid(86_400);
+    let (h, mi, s) = (secs / 3600, secs / 60 % 60, secs % 60);
+    let zone = match offset {
+        None => "Z".to_owned(),
+        Some(o) => format!(
+            "{}{:02}:{:02}",
+            if o < 0 { '-' } else { '+' },
+            o.abs() / 60,
+            o.abs() % 60
+        ),
+    };
+    format!("{y:04}-{m:02}-{d:02}T{h:02}:{mi:02}:{s:02}{zone}")
+}
+
+/// The tags ffprobe found, format first, then each stream's: key
+/// (lower-cased) and value.
+fn tags(json: &serde_json::Value) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let streams = json["streams"].as_array().cloned().unwrap_or_default();
+    for source in std::iter::once(&json["format"]).chain(streams.iter()) {
+        if let Some(map) = source["tags"].as_object() {
+            for (k, v) in map {
+                if let Some(v) = v.as_str() {
+                    out.push((k.to_ascii_lowercase(), v.trim().to_owned()));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// When recording started, from the container tags checked against the
+/// file's modification time `mtime` (Unix seconds); the file time alone
+/// when no tag parses.
+///
+/// A tag with an offset (`com.apple.quicktime.creationdate`) is taken as
+/// it is. A `creation_time` in `Z` is often the camera's local clock
+/// mislabelled (Canon EOS, many DJI drones): when the file time sits a
+/// whole number of quarter hours (at most 14 h) from the tag plus the
+/// duration, that difference is the camera's offset. Otherwise the tag is
+/// taken as true UTC.
+pub(crate) fn recorded_at(
+    json: &serde_json::Value,
+    mtime: Option<i64>,
+    duration: f64,
+) -> Option<RecordedAt> {
+    // How far the file time may sit from the end of recording and still
+    // confirm a tag: cameras close the file a few seconds after the last
+    // frame, and FAT timestamps have 2 s resolution.
+    const SLACK: i64 = 120;
+    const KEYS: [&str; 3] = ["com.apple.quicktime.creationdate", "creation_time", "date"];
+    let tags = tags(json);
+    let dur = duration.max(0.0).round() as i64;
+    let found = KEYS.iter().find_map(|key| {
+        tags.iter()
+            .filter(|(k, _)| k == key)
+            .find_map(|(_, v)| parse_wall(v).map(|w| (*key, w)))
+    });
+    let Some((key, (wall, zone))) = found else {
+        let end = mtime?;
+        return Some(RecordedAt {
+            utc: format_time(end - dur, None),
+            local: None,
+            source: "mtime".into(),
+        });
+    };
+    let utc_only = |unix: i64, source: String| RecordedAt {
+        utc: format_time(unix, None),
+        local: None,
+        source,
+    };
+    match zone {
+        Zone::Offset(off) => {
+            let unix = wall - i64::from(off) * 60;
+            return Some(RecordedAt {
+                utc: format_time(unix, None),
+                local: Some(format_time(unix, Some(off))),
+                source: format!("tag:{key}"),
+            });
+        }
+        Zone::Zulu | Zone::Bare => {}
+    }
+    let Some(end) = mtime else {
+        return Some(utc_only(wall, format!("tag:{key}")));
+    };
+    let drift = end - (wall + dur);
+    if drift.abs() <= SLACK {
+        return Some(utc_only(wall, format!("tag:{key}")));
+    }
+    let quarter = (drift as f64 / 900.0).round() as i64 * 900;
+    if quarter.abs() <= 14 * 3600 && (drift - quarter).abs() <= SLACK {
+        // The tag is the wall clock; UTC is `quarter` seconds later.
+        let unix = wall + quarter;
+        let off = i32::try_from(-quarter / 60).ok()?;
+        return Some(RecordedAt {
+            utc: format_time(unix, None),
+            local: Some(format_time(unix, Some(off))),
+            source: format!("tag:{key}+mtime"),
+        });
+    }
+    Some(utc_only(wall, format!("tag:{key}")))
+}
+
+/// Camera make and model from the container tags: QuickTime / Android
+/// make and model keys, else a maker's fingerprint (a DJI encoder or
+/// handler, Canon's `CAEP` brand, Sony's `XAVC`, a GoPro handler).
+pub(crate) fn camera(json: &serde_json::Value) -> Option<String> {
+    let tags = tags(json);
+    let get = |keys: &[&str]| {
+        keys.iter().find_map(|key| {
+            tags.iter()
+                .find(|(k, v)| k == key && !v.is_empty())
+                .map(|(_, v)| v.clone())
+        })
+    };
+    let make = get(&[
+        "com.apple.quicktime.make",
+        "com.android.manufacturer",
+        "make",
+    ]);
+    let model = get(&["com.apple.quicktime.model", "com.android.model", "model"]);
+    match (make, model) {
+        (Some(make), Some(model)) => {
+            return Some(if model.to_lowercase().starts_with(&make.to_lowercase()) {
+                model
+            } else {
+                format!("{make} {model}")
+            });
+        }
+        (Some(one), None) | (None, Some(one)) => return Some(one),
+        (None, None) => {}
+    }
+    let fingerprint = |needle: &str| {
+        tags.iter()
+            .filter(|(k, _)| {
+                matches!(
+                    k.as_str(),
+                    "encoder" | "handler_name" | "compatible_brands" | "major_brand"
+                )
+            })
+            .find(|(_, v)| v.contains(needle))
+            .map(|(_, v)| v.clone())
+    };
+    if let Some(v) = fingerprint("DJI") {
+        // `DJIMavic3` names the model; `DJI.AVC` only the maker.
+        return Some(if v.starts_with("DJI") && !v.contains('.') {
+            v
+        } else {
+            "DJI".to_owned()
+        });
+    }
+    if fingerprint("CAEP").is_some() {
+        return Some("Canon EOS".to_owned());
+    }
+    if fingerprint("XAVC").is_some() {
+        return Some("Sony".to_owned());
+    }
+    if fingerprint("GoPro").is_some() {
+        return Some("GoPro".to_owned());
+    }
+    None
 }
 
 /// A decoded RGB frame.
@@ -290,6 +599,124 @@ mod tests {
         assert_eq!(parse_ratio("24000/1001"), Some([24000, 1001]), "NTSC film");
         assert_eq!(parse_ratio("30/1"), Some([30, 1]), "integer rate");
         assert_eq!(parse_ratio("junk"), None, "not a ratio");
+        Ok(())
+    }
+
+    /// Unix seconds of a UTC wall clock.
+    fn unix(text: &str) -> anyhow::Result<i64> {
+        super::parse_time(text)
+            .map(|(t, _)| t)
+            .ok_or_else(|| anyhow::anyhow!("{text} does not parse"))
+    }
+
+    #[test]
+    fn times_parse_and_format_round_trip() -> anyhow::Result<()> {
+        let t = unix("2026-11-12T03:51:11.000000Z")?;
+        assert_eq!(
+            super::format_time(t, None),
+            "2026-11-12T03:51:11Z",
+            "UTC round trip"
+        );
+        assert_eq!(
+            super::format_time(t, Some(-480)),
+            "2026-11-11T19:51:11-08:00",
+            "the wall clock at -08:00 is the evening before"
+        );
+        assert_eq!(
+            unix("2026-11-11T19:51:11-0800")?,
+            t,
+            "an offset without a colon"
+        );
+        assert_eq!(unix("2026-11-11 19:51:11-08:00")?, t, "a space for the T");
+        assert_eq!(unix("1970-01-01T00:00:00Z")?, 0, "the epoch");
+        assert_eq!(
+            super::format_time(951_782_400, None),
+            "2000-02-29T00:00:00Z",
+            "a leap day"
+        );
+        assert!(super::parse_time("yesterday").is_none(), "junk");
+        Ok(())
+    }
+
+    #[test]
+    fn a_camera_clock_in_z_is_corrected_by_the_file_time() -> anyhow::Result<()> {
+        // A Canon EOS MOV: creation_time is the camera's local clock
+        // written as UTC; the file closed 13 s later in true UTC, 8 h on.
+        let json = serde_json::json!({
+            "format": {"tags": {"compatible_brands": "qt  CAEP",
+                "creation_time": "2026-11-11T19:51:11.000000Z"}},
+            "streams": [],
+        });
+        let mtime = unix("2026-11-12T03:51:24Z")?;
+        let r = super::recorded_at(&json, Some(mtime), 12.2)
+            .ok_or_else(|| anyhow::anyhow!("no time"))?;
+        assert_eq!(r.utc, "2026-11-12T03:51:11Z", "true UTC: {r:?}");
+        assert_eq!(
+            r.local.as_deref(),
+            Some("2026-11-11T19:51:11-08:00"),
+            "the camera's clock and offset: {r:?}"
+        );
+        assert_eq!(r.source, "tag:creation_time+mtime", "{r:?}");
+        assert_eq!(r.clock(), "19:51:11", "printed on the camera clock");
+        assert_eq!(
+            super::camera(&json).as_deref(),
+            Some("Canon EOS"),
+            "the CAEP brand"
+        );
+        // The same tag with the file time agreeing: it is true UTC.
+        let agree = unix("2026-11-11T19:51:24Z")?;
+        let r = super::recorded_at(&json, Some(agree), 12.2)
+            .ok_or_else(|| anyhow::anyhow!("no time"))?;
+        assert!(
+            r.utc == "2026-11-11T19:51:11Z" && r.local.is_none() && r.source == "tag:creation_time",
+            "{r:?}"
+        );
+        // A copied file (mtime days later): the tag stands as UTC.
+        let r = super::recorded_at(&json, Some(mtime + 5 * 86_400), 12.2)
+            .ok_or_else(|| anyhow::anyhow!("no time"))?;
+        assert_eq!(r.utc, "2026-11-11T19:51:11Z", "{r:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn an_offset_tag_wins_and_no_tag_falls_back_to_the_file_time() -> anyhow::Result<()> {
+        let json = serde_json::json!({
+            "format": {"tags": {
+                "creation_time": "2026-11-12T03:51:11.000000Z",
+                "com.apple.quicktime.creationdate": "2026-11-11T19:51:11-0800",
+                "com.apple.quicktime.make": "Apple",
+                "com.apple.quicktime.model": "iPhone 15 Pro"}},
+        });
+        let r = super::recorded_at(&json, None, 5.0).ok_or_else(|| anyhow::anyhow!("no time"))?;
+        assert_eq!(
+            (r.utc.as_str(), r.local.as_deref(), r.source.as_str()),
+            (
+                "2026-11-12T03:51:11Z",
+                Some("2026-11-11T19:51:11-08:00"),
+                "tag:com.apple.quicktime.creationdate"
+            ),
+            "{r:?}"
+        );
+        assert_eq!(
+            super::camera(&json).as_deref(),
+            Some("Apple iPhone 15 Pro"),
+            "make and model"
+        );
+        let bare =
+            serde_json::json!({"format": {}, "streams": [{"tags": {"handler_name": "DJI.AVC"}}]});
+        let end = unix("2026-11-11T20:00:10Z")?;
+        let r =
+            super::recorded_at(&bare, Some(end), 10.0).ok_or_else(|| anyhow::anyhow!("no time"))?;
+        assert_eq!(
+            (r.utc.as_str(), r.source.as_str()),
+            ("2026-11-11T20:00:00Z", "mtime"),
+            "the file time less the duration: {r:?}"
+        );
+        assert_eq!(super::camera(&bare).as_deref(), Some("DJI"), "DJI handler");
+        assert!(
+            super::recorded_at(&bare, None, 10.0).is_none(),
+            "nothing to go on"
+        );
         Ok(())
     }
 }

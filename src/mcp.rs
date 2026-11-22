@@ -161,20 +161,23 @@ pub(crate) fn api_tools() -> Value {
 pub(crate) fn tools() -> Value {
     let ops_schema = json!({
         "type": "array",
-        "description": "Edits, applied in order; slots are 1-based and each op sees the plan as earlier ops left it.",
+        "description": "Edits, applied in order; slots and marker numbers are 1-based and each op sees the plan as earlier ops left it. add_marker {time, note, color} pins a marker (a review comment) at time seconds on the cut; remove_marker / resolve_marker {marker} take the number plan_get lists (m3 is marker 3).",
         "items": {"type": "object", "required": ["op"], "properties": {
-            "op": {"type": "string", "enum": ["replace_shot", "set_in", "set_beats", "move_shot", "remove_shot", "set_cx", "set_note"]},
+            "op": {"type": "string", "enum": ["replace_shot", "set_in", "set_beats", "move_shot", "remove_shot", "set_cx", "set_note", "add_marker", "remove_marker", "resolve_marker"]},
             "index": {"type": "integer"}, "clip": {"type": "string"}, "in": {"type": "number"},
             "cx": {"type": "number"}, "beats": {"type": "integer"}, "from": {"type": "integer"},
-            "to": {"type": "integer"}, "note": {"type": "string"}, "reason": {"type": "string"}
+            "to": {"type": "integer"}, "note": {"type": "string"}, "reason": {"type": "string"},
+            "time": {"type": "number", "description": "add_marker: seconds from the plan's start."},
+            "color": {"type": "string", "enum": crate::plan::COMMENT_COLORS},
+            "marker": {"type": "integer", "description": "remove_marker / resolve_marker: the marker's number."}
         }}
     });
     json!([
-        {"name": "night_overview", "description": "The open night: clips, segments and flags, captions, music grid and drops, people, plans with their rule-check status.",
+        {"name": "night_overview", "description": "The open night: clips, segments and flags, captions, the night's sets (acts by recording time and setting, with their clips), music grid and drops, people, plans with their rule-check status.",
          "inputSchema": {"type": "object", "properties": {}}},
-        {"name": "search_shots", "description": "Search the shot log. Free text matches captions/people/settings/clip ids; facets: fire>0.3 led>0.2 move>0.5 focus<0.8 q>0.7 dark soft flag:blown move:pan|zoom-in|zoom-out|static person:<name> clip:MVI_79 moment:performing framing:close pick reject like:<segment id>; '-' negates. Shares are relative to the night (1 = its strongest).",
+        {"name": "search_shots", "description": "Search the shot log. Free text matches captions/people/settings/clip ids; facets: fire>0.3 led>0.2 move>0.5 focus<0.8 q>0.7 dark soft flag:blown move:pan|zoom-in|zoom-out|static person:<name> clip:MVI_79 moment:performing framing:close pick reject like:<segment id>; '-' negates. Shares are relative to the night (1 = its strongest). The first line says whether the results are complete: PARTIAL means some segments in scope have no caption, so free text and caption facets could not see them. Each hit's focal time is its best moment (seconds in the clip): the frame to look at or cut around.",
          "inputSchema": {"type": "object", "required": ["query"], "properties": {"query": {"type": "string"}, "limit": {"type": "integer", "default": 25}}}},
-        {"name": "segment_details", "description": "Exact facts for segments (ids like MVI_7987/3): times, camera, exposure, focus, fire/LED/moving light, action centre, quality, flags with thresholds, burst moments, caption, who, plans using it.",
+        {"name": "segment_details", "description": "Exact facts for segments (ids like MVI_7987/3): times, camera, exposure, focus, fire/LED/moving light, action centre, quality, flags with thresholds, bad spans (short bad stretches inside the segment: focus hunt, whip, jolt, dark or blown moment), burst moments, caption, who, plans using it.",
          "inputSchema": {"type": "object", "required": ["ids"], "properties": {"ids": {"type": "array", "items": {"type": "string"}}}}},
         {"name": "look", "description": "See frames: a contact sheet (JPEG) of up to 12 moments, left to right, top to bottom. Each item is a segment id (its mid time, or 'at') or a clip id with 'at' seconds. Use it when a choice depends on the picture.",
          "inputSchema": {"type": "object", "required": ["items"], "properties": {
@@ -182,7 +185,7 @@ pub(crate) fn tools() -> Value {
             "width": {"type": "integer", "default": 320}}}},
         {"name": "music_map", "description": "The track: bpm, bars with energy (low end, rms), sections, drop candidates (strongest first), song ranges.",
          "inputSchema": {"type": "object", "properties": {}}},
-        {"name": "plan_get", "description": "A plan: bars, aspect, every shot with its time on the cut, beats, clip, in-point, crop, who and note, plus the rule-check problems and its version (for base_version).",
+        {"name": "plan_get", "description": "A plan: bars, aspect, every shot with its time on the cut, beats, clip, in-point, crop, who and note, its numbered markers (review comments: time, colour, author, note, resolved), plus the rule-check problems and its version (for base_version).",
          "inputSchema": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}}}},
         {"name": "plan_edit", "description": "Apply edit ops to a plan's working copy. Returns the diff, the rule check (new problems, problems fixed) and the base_version. Without commit the edit is staged: the person sees it as a card and applies it. commit:true saves a new version, only when the person allowed the assistant to apply edits and only if base_version still matches the plan file.",
          "inputSchema": {"type": "object", "required": ["name", "ops", "reason"], "properties": {
@@ -246,7 +249,11 @@ pub(crate) fn call(work: &Path, name: &str, args: &Value, caller: Caller) -> Res
                 .into_iter()
                 .find(|v| v.n == n)
                 .with_context(|| format!("{name} has no v{n}"))?;
-            let plan = Plan::load(&v.path)?;
+            let mut plan = Plan::load(&v.path)?;
+            // The live plan's markers (review comments) survive a revert.
+            if let Ok(live) = Plan::load(&plan_path(&project, name)) {
+                plan.comments = live.comments;
+            }
             let saved =
                 store::save_version(&project.work, name, &plan, &format!("revert to v{n}"))?;
             plan.save(&plan_path(&project, name))?;
@@ -300,6 +307,7 @@ fn overview(p: &Project) -> String {
                 i.clips.len(),
                 i.segments.len()
             ));
+            s.push_str(&sets_section(i));
         }
         None => s.push_str("footage: not indexed yet\n"),
     }
@@ -345,6 +353,29 @@ fn overview(p: &Project) -> String {
     s
 }
 
+/// The night's acts for `night_overview`: one line per set with its
+/// clips, so the agent can plan by act (open on the first, close on the
+/// last) before searching shots.
+fn sets_section(i: &crate::index::Index) -> String {
+    let sets = crate::analyze::sets::group(i);
+    if sets.is_empty() {
+        return "sets: no recording times yet (re-run index to read them)\n".to_owned();
+    }
+    let mut s = format!(
+        "sets ({}, the night's acts in recording order: split by pauses over {} min and lasting indoor/outdoor changes):\n",
+        sets.len(),
+        crate::analyze::sets::GAP_SECS / 60
+    );
+    for set in &sets {
+        s.push_str(&format!(
+            "  {} — clips {}\n",
+            set.heading(),
+            set.clips.join(" ")
+        ));
+    }
+    s
+}
+
 /// `search_shots`.
 fn search(p: &Project, args: &Value) -> Result<Vec<Value>> {
     let index = p.index.as_ref().context("the night is not indexed yet")?;
@@ -352,7 +383,8 @@ fn search(p: &Project, args: &Value) -> Result<Vec<Value>> {
     let limit = args["limit"].as_u64().unwrap_or(25) as usize;
     let (marks, _) = crate::search::marks::Marks::load(&p.work);
     let night = crate::search::Night::new(index, &p.people, &marks);
-    let hits = crate::search::search(&query, &night);
+    let results = crate::search::search(&query, &night);
+    let hits = &results.hits;
     let lines: Vec<String> = hits
         .iter()
         .take(limit)
@@ -364,13 +396,22 @@ fn search(p: &Project, args: &Value) -> Result<Vec<Value>> {
                 .map(|c| format!(" — {}", c.summary))
                 .unwrap_or_default();
             Some(format!(
-                "{} {:.1}-{:.1}s score {:.2}: {}{cap}",
-                s.id, s.seg.start, s.seg.end, h.score, h.reason
+                "{} {:.1}-{:.1}s focal {:.1}s score {:.2}: {}{cap}",
+                s.id, s.seg.start, s.seg.end, h.focal, h.score, h.reason
             ))
         })
         .collect();
+    let coverage = if results.complete {
+        "complete: every segment in scope was searchable".to_owned()
+    } else {
+        format!(
+            "PARTIAL: {} segments in scope have no caption, so the caption terms could not see them \
+             (complete=false, uncaptioned_in_scope={}); caption the night or use measured facets",
+            results.uncaptioned_in_scope, results.uncaptioned_in_scope
+        )
+    };
     Ok(text(format!(
-        "{} matches{}\n{}",
+        "{} matches{} · {coverage}\n{}",
         hits.len(),
         if hits.len() > limit {
             format!(", first {limit}")
@@ -399,8 +440,14 @@ fn details(p: &Project, args: &Value) -> Result<Vec<Value>> {
                 let people: Vec<String> = c.people.iter().map(|x| format!("{} [{}]", x.appearance, x.prop)).collect();
                 format!("\n  caption: {} | moment {} | framing {} | setting {} | people: {} | issues: {}", c.summary, c.effective_moment(), c.framing, c.setting, people.join("; "), c.issues.join(", "))
             });
+            let bad = if g.bad_spans.is_empty() {
+                String::new()
+            } else {
+                let spans: Vec<String> = g.bad_spans.iter().map(|b| b.text()).collect();
+                format!(" · bad spans (avoid these seconds): {}", spans.join(", "))
+            };
             format!(
-                "\n  camera {:?} · exposure {:.2}/{:.2} · focus {:.2} · fire {:.3} · led {:.3} · moving {:.3} · cx {:.2}±{:.2} · q {:.2} · flags {:?} · who {who}{caption}",
+                "\n  camera {:?} · exposure {:.2}/{:.2} · focus {:.2} · fire {:.3} · led {:.3} · moving {:.3} · cx {:.2}±{:.2} · q {:.2} · flags {:?}{bad} · who {who}{caption}",
                 g.camera, g.luma, g.p95, g.sharp, g.flame, g.led, g.moving, g.cx, g.cx_spread / 2.0, s.q, s.flags
             )
         });
@@ -444,6 +491,31 @@ fn check_summary(findings: &[crate::plan::Finding]) -> String {
     }
 }
 
+/// A plan's markers (review comments), numbered as `remove_marker` and
+/// `resolve_marker` take them; empty when it has none.
+pub(crate) fn markers_text(plan: &Plan) -> String {
+    if plan.comments.is_empty() {
+        return String::new();
+    }
+    let mut s = format!("markers ({}):\n", plan.comments.len());
+    for (i, c) in plan.comments.iter().enumerate() {
+        s.push_str(&format!(
+            "m{} {:.2}s {} · {}{} · {}\n",
+            i + 1,
+            c.time,
+            c.color,
+            c.author,
+            if c.resolved { " · resolved" } else { "" },
+            if c.note.is_empty() {
+                "(no note)"
+            } else {
+                c.note.trim()
+            }
+        ));
+    }
+    s
+}
+
 /// A plan as text, with its check.
 fn describe_plan(p: &Project, plan: &Plan) -> String {
     let mut s = format!(
@@ -472,6 +544,7 @@ fn describe_plan(p: &Project, plan: &Plan) -> String {
             shot.note
         ));
     }
+    s.push_str(&markers_text(plan));
     match ops::check(plan, p.index.as_ref(), p.music.as_ref(), &p.people) {
         Some(problems) => {
             s.push_str(&format!("check: {}\n", check_summary(&problems)));
@@ -950,6 +1023,76 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn markers_are_read_by_plan_get_and_edited_by_plan_edit() -> anyhow::Result<()> {
+        use super::{Caller, call};
+        let dir = night(2)?;
+        let work = dir.path();
+        std::fs::write(
+            work.join("ave.toml"),
+            "[pages.assistant]\nallow_commit = true\n",
+        )?;
+        let get = || -> anyhow::Result<String> {
+            Ok(first_text(&call(
+                work,
+                "plan_get",
+                &json!({"name": "t"}),
+                Caller::Agent,
+            )?))
+        };
+        let before = get()?;
+        assert!(!before.contains("markers"), "no markers yet: {before}");
+        let base = super::plan_version(&work.join("plans/t.toml"))?;
+        let add = json!({"name": "t", "reason": "review", "commit": true, "base_version": base, "ops": [
+            {"op": "add_marker", "time": 1.5, "note": "hold the hoop longer", "color": "yellow"},
+            {"op": "add_marker", "time": 3.0}
+        ]});
+        let done = first_text(&call(work, "plan_edit", &add, Caller::Agent)?);
+        assert!(done.contains("committed"), "markers commit: {done}");
+        let got = get()?;
+        assert!(
+            got.contains("markers (2):")
+                && got.contains("m1 1.50s yellow · assistant · hold the hoop longer")
+                && got.contains("m2 3.00s green · assistant · (no note)"),
+            "plan_get lists numbered markers: {got}"
+        );
+        let saved = crate::plan::Plan::load(&work.join("plans/t.toml"))?;
+        assert_eq!(saved.comments.len(), 2, "saved in the plan file");
+
+        let base = super::plan_version(&work.join("plans/t.toml"))?;
+        let edit = json!({"name": "t", "reason": "done", "commit": true, "base_version": base, "ops": [
+            {"op": "resolve_marker", "marker": 1},
+            {"op": "remove_marker", "marker": 2}
+        ]});
+        call(work, "plan_edit", &edit, Caller::Agent)?;
+        let got = get()?;
+        assert!(
+            got.contains("markers (1):") && got.contains("m1 1.50s yellow · assistant · resolved"),
+            "resolved kept, the other removed: {got}"
+        );
+
+        let bad = json!({"name": "t", "reason": "x", "ops": [{"op": "add_marker", "time": 1.0, "color": "purple"}]});
+        let refused = call(work, "plan_edit", &bad, Caller::Agent);
+        assert!(
+            refused
+                .as_ref()
+                .is_err_and(|e| e.to_string().contains("purple")),
+            "an unknown colour is refused: {refused:?}"
+        );
+
+        // A revert brings back old shots but keeps today's markers.
+        let reverted = first_text(&call(
+            work,
+            "plan_revert",
+            &json!({"name": "t", "version": 1}),
+            Caller::Person,
+        )?);
+        assert!(reverted.contains("restored"), "reverted: {reverted}");
+        let after = crate::plan::Plan::load(&work.join("plans/t.toml"))?;
+        assert_eq!(after.comments.len(), 1, "markers survive the revert");
+        Ok(())
+    }
+
+    #[test]
     fn api_tools_mirror_the_mcp_tools() -> anyhow::Result<()> {
         let api = super::api_tools();
         let names = |v: &serde_json::Value| -> Vec<String> {
@@ -997,6 +1140,93 @@ pub(crate) mod tests {
                 "refused up front: {bad}"
             );
         }
+        Ok(())
+    }
+
+    /// Writes an `index.json` of segments `(id, caption summary)` into `work`.
+    fn write_index(work: &std::path::Path, segs: &[(&str, Option<&str>)]) -> anyhow::Result<()> {
+        let mut segments = Vec::new();
+        for (k, (id, summary)) in segs.iter().enumerate() {
+            let mut s = crate::index::Scored {
+                id: (*id).to_owned(),
+                clip: id.split('/').next().unwrap_or(id).to_owned(),
+                q: 0.5,
+                caption: summary.map(|t| crate::caption::Caption {
+                    summary: t.to_owned(),
+                    ..crate::caption::Caption::default()
+                }),
+                ..crate::index::Scored::default()
+            };
+            s.seg.start = k as f32 * 4.0;
+            s.seg.end = s.seg.start + 3.0;
+            s.seg.peak_t = s.seg.start + 2.0;
+            segments.push(serde_json::to_value(s)?);
+        }
+        let index = json!({"source": "", "sharp_ref": 1.0, "clips": [], "segments": segments});
+        std::fs::write(work.join("index.json"), index.to_string())?;
+        Ok(())
+    }
+
+    #[test]
+    fn search_says_when_its_results_are_partial() -> anyhow::Result<()> {
+        use super::{Caller, call};
+        let dir = tempfile::tempdir()?;
+        let work = dir.path();
+        write_index(
+            work,
+            &[
+                ("A/1", Some("Fire spinner by the stage.")),
+                ("A/2", None),
+                ("B/1", None),
+            ],
+        )?;
+        let partial = first_text(&call(
+            work,
+            "search_shots",
+            &json!({"query": "spinner"}),
+            Caller::Agent,
+        )?);
+        assert!(
+            partial.contains("PARTIAL") && partial.contains("uncaptioned_in_scope=2"),
+            "a caption query names what it could not see: {partial}"
+        );
+        assert!(
+            partial.contains("A/1 0.0-3.0s focal 2.0s"),
+            "each hit carries its focal time: {partial}"
+        );
+        let whole = first_text(&call(
+            work,
+            "search_shots",
+            &json!({"query": "clip:B"}),
+            Caller::Agent,
+        )?);
+        assert!(
+            whole.contains("complete") && !whole.contains("PARTIAL"),
+            "a measured facet sees everything: {whole}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn the_overview_lists_the_nights_sets() -> anyhow::Result<()> {
+        use crate::analyze::sets::tests::{clip, night};
+        let index = night(vec![
+            clip("A", 0, 10.0, "outdoor parking lot at night", "fire"),
+            clip("B", 3600, 10.0, "indoor venue", "led"),
+        ]);
+        let text = super::sets_section(&index);
+        assert!(
+            text.starts_with("sets (2,")
+                && text.contains("Set 1: Outdoor parking lot · fire · 19:00-19:00 · 1 clips")
+                && text.contains("Set 2: Indoor venue · LED")
+                && text.contains("(60 min gap) — clips B"),
+            "{text}"
+        );
+        let old = crate::index::Index::default();
+        assert!(
+            super::sets_section(&old).contains("no recording times"),
+            "an index without times says so"
+        );
         Ok(())
     }
 

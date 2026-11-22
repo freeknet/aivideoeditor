@@ -3478,6 +3478,8 @@ fn open_link(ctx: &mut PageCtx<'_>, state: &mut State, r: &Reference) {
             }) {
                 let (t0, t1, cx) = (f64::from(s.seg.start), f64::from(s.seg.end), s.seg.cx);
                 ctx.player.open_clip(Path::new(&path), t0, t1, cx);
+                // Land on the segment's focal time, not its first frame.
+                ctx.player.seek(f64::from(crate::search::focal(s)) - t0);
             }
         }
         Target::Range { clip, t0, t1 } => {
@@ -4145,6 +4147,10 @@ enum CardAction {
 /// One op's before → after.
 fn effect_row(ctx: &mut PageCtx<'_>, ui: &mut Ui, e: &Effect, plan: &str) {
     let theme = ctx.theme;
+    // A marker op changes no shot: its label and note say it all.
+    if e.before.is_none() && e.after.is_none() {
+        return;
+    }
     ui.horizontal(|ui| {
         let side = |ui: &mut Ui, s: Option<&(usize, Shot)>, ctx: &mut PageCtx<'_>| {
             let size = Vec2::new(56.0, 32.0);
@@ -4517,7 +4523,12 @@ fn history(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
     if let Some((n, path)) = restore
         && let Some(chat) = state.chat.as_mut()
     {
-        let result = Plan::load(&path).and_then(|plan| {
+        let live = chat.work.join("plans").join(format!("{}.toml", chat.plan));
+        let result = Plan::load(&path).and_then(|mut plan| {
+            // The live plan's markers (review comments) survive a restore.
+            if let Ok(now) = Plan::load(&live) {
+                plan.comments = now.comments;
+            }
             store::save_version(&chat.work, &chat.plan, &plan, &format!("restored v{n}"))
         });
         match result {

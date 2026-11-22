@@ -40,6 +40,14 @@
 //! 0..1 and a one-line reason saying why it is there ("caption: …poi
 //! spinner…; fire 0.62"), so a low-confidence hit is visible as one and the
 //! interface can cut the tail off.
+//!
+//! ## Completeness
+//!
+//! Free text and the caption facets only see captioned segments. The
+//! [`Results`] say so: `uncaptioned_in_scope` counts the segments that pass
+//! every measured filter but have no caption, and `complete` is false when
+//! the query reads captions and that count is not zero, so the Shots
+//! browser and the chat agent know the hits are partial.
 
 pub(crate) mod marks;
 
@@ -574,13 +582,70 @@ pub(crate) struct Hit {
     pub(crate) score: f32,
     /// Why it matched, one line.
     pub(crate) reason: String,
+    /// The segment's focal time, seconds in the clip: where the viewer
+    /// lands when the hit is opened (see [`focal`]).
+    pub(crate) focal: f32,
+}
+
+/// A segment's focal time, seconds in the clip: its best moment (the
+/// strongest burst's onset, else `peak_t`, the peak of the action), kept
+/// inside the segment; the start when the index predates moments.
+pub(crate) fn focal(s: &Scored) -> f32 {
+    let (start, end) = (s.seg.start, s.seg.end.max(s.seg.start));
+    let t = s.seg.moments.first().copied().unwrap_or(s.seg.peak_t);
+    if t.is_finite() && (start..=end).contains(&t) {
+        t
+    } else {
+        start
+    }
+}
+
+/// What a search found, and how much of the night it could see.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Results {
+    /// The hits, best first.
+    pub(crate) hits: Vec<Hit>,
+    /// False when the query reads captions (free text, `person:`,
+    /// `moment:`, `framing:`, `setting:`) and some segments it would
+    /// otherwise have considered have no caption: the results are partial.
+    pub(crate) complete: bool,
+    /// Segments that pass the query's non-caption filters but have no
+    /// caption, so a caption query could not see them.
+    pub(crate) uncaptioned_in_scope: usize,
+}
+
+/// Whether a positive clause can only match through a caption, so an
+/// uncaptioned segment is invisible to it.
+fn reads_captions(c: &Clause) -> bool {
+    !c.negate
+        && match c.term {
+            Term::Text(_)
+            | Term::Person(_)
+            | Term::Moment(_)
+            | Term::Framing(_)
+            | Term::Setting(_) => true,
+            Term::Metric { .. }
+            | Term::Source(_)
+            | Term::Flag(_)
+            | Term::Clean
+            | Term::Camera(_)
+            | Term::Clip(_)
+            | Term::Pick
+            | Term::Reject
+            | Term::Unreviewed
+            | Term::Rated
+            | Term::Captioned
+            | Term::Uncaptioned
+            | Term::Like(_) => false,
+        }
 }
 
 /// Below this a source is "not visible" (matches the indexer's subject test).
 const SOURCE_MIN: f32 = 0.003;
 
-/// Runs `query` over the night. Hits come best first.
-pub(crate) fn search(query: &Query, night: &Night<'_>) -> Vec<Hit> {
+/// Runs `query` over the night. Hits come best first; the results say how
+/// many uncaptioned segments a caption query could not see.
+pub(crate) fn search(query: &Query, night: &Night<'_>) -> Results {
     let like = query
         .clauses
         .iter()
@@ -605,9 +670,20 @@ pub(crate) fn search(query: &Query, night: &Night<'_>) -> Vec<Hit> {
         })
         .collect();
     let mut hits = Vec::new();
+    let caption_bound = query.clauses.iter().any(reads_captions);
+    let mut uncaptioned_in_scope = 0;
     for (i, s) in night.index.segments.iter().enumerate() {
         if like == Some(i) {
             continue;
+        }
+        if s.caption.is_none()
+            && query
+                .clauses
+                .iter()
+                .filter(|c| !reads_captions(c) && !matches!(c.term, Term::Like(_)))
+                .all(|c| facet(night, s, &c.term).0 != c.negate)
+        {
+            uncaptioned_in_scope += 1;
         }
         let mut reasons: Vec<String> = Vec::new();
         let mut pass = true;
@@ -651,10 +727,15 @@ pub(crate) fn search(query: &Query, night: &Night<'_>) -> Vec<Hit> {
             seg: i,
             score: score.clamp(0.0, 1.0),
             reason: reasons.join("; "),
+            focal: focal(s),
         });
     }
     hits.sort_by(|a, b| b.score.total_cmp(&a.score).then(a.seg.cmp(&b.seg)));
-    hits
+    Results {
+        hits,
+        complete: !caption_bound || uncaptioned_in_scope == 0,
+        uncaptioned_in_scope,
+    }
 }
 
 /// Whether a segment passes a (non-text) facet, and the reason to show.
@@ -1105,6 +1186,7 @@ mod tests {
             clips: Vec::new(),
             thresholds: Default::default(),
             skipped: Vec::new(),
+            sets: Vec::new(),
             work: None,
             segments: vec![
                 scored(
@@ -1143,6 +1225,7 @@ mod tests {
         let people = People::default();
         let n = Night::new(index, &people, marks);
         search(&Query::parse(query), &n)
+            .hits
             .into_iter()
             .filter_map(|h| index.segments.get(h.seg).map(|s| s.id.clone()))
             .collect()
@@ -1256,31 +1339,31 @@ mod tests {
         let people = People::default();
         let marks = Marks::default();
         let n = Night::new(&index, &people, &marks);
-        let hits = search(&Query::parse("spinner crowd"), &n);
+        let hits = search(&Query::parse("spinner crowd"), &n).hits;
         assert_eq!(hits.len(), 2, "both spinner shots: {hits:?}");
         let top = hits.first();
         assert!(
             top.is_some_and(|h| h.reason.contains("caption") && h.reason.contains("spinner")),
             "the reason quotes the caption: {top:?}"
         );
-        let poi = search(&Query::parse("poi hoodie"), &n);
+        let poi = search(&Query::parse("poi hoodie"), &n).hits;
         assert_eq!(
             poi.len(),
             3,
             "everyone in the fixture wears the hoodie: {poi:?}"
         );
-        let partial = search(&Query::parse("spinner zebra"), &n);
+        let partial = search(&Query::parse("spinner zebra"), &n).hits;
         assert!(
             partial.iter().all(|h| h.score < 0.6),
             "half a match scores low: {partial:?}"
         );
-        let syn = search(&Query::parse("flames"), &n);
+        let syn = search(&Query::parse("flames"), &n).hits;
         assert_eq!(
             syn.len(),
             2,
             "`flames` is the fire facet (fire visible), not text: {syn:?}"
         );
-        let audience = search(&Query::parse("audience"), &n);
+        let audience = search(&Query::parse("audience"), &n).hits;
         assert_eq!(audience.len(), 2, "synonym of crowd: {audience:?}");
     }
 
@@ -1329,18 +1412,78 @@ mod tests {
         let marks = Marks::default();
         let people: People = toml::from_str("[names]\n\"MVI_7925\" = \"green-poi\"\n")?;
         let n = Night::new(&index, &people, &marks);
-        let hits = search(&Query::parse("person:green-poi"), &n);
+        let hits = search(&Query::parse("person:green-poi"), &n).hits;
         assert_eq!(hits.len(), 1, "only the mapped clip: {hits:?}");
         assert!(
             hits.first()
                 .is_some_and(|h| h.reason.contains("person green-poi")),
             "named by the map: {hits:?}"
         );
-        let hoodie = search(&Query::parse("person:hoodie"), &n);
+        let hoodie = search(&Query::parse("person:hoodie"), &n).hits;
         assert_eq!(
             hoodie.len(),
             3,
             "caption descriptions match too: {hoodie:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn results_say_how_much_a_caption_query_could_see() -> anyhow::Result<()> {
+        let index = night();
+        let people = People::default();
+        let marks = Marks::default();
+        let n = Night::new(&index, &people, &marks);
+        let text = search(&Query::parse("spinner"), &n);
+        assert!(!text.complete, "free text cannot see the uncaptioned shot");
+        assert_eq!(
+            text.uncaptioned_in_scope, 1,
+            "one segment has no caption: {text:?}"
+        );
+        let dark = search(&Query::parse("spinner -dark"), &n);
+        assert!(
+            dark.complete && dark.uncaptioned_in_scope == 0,
+            "the uncaptioned shot is dark, so outside the scope: {dark:?}"
+        );
+        let facet = search(&Query::parse("shaky"), &n);
+        assert!(
+            facet.complete,
+            "a measured facet sees every segment: {facet:?}"
+        );
+        assert_eq!(
+            facet.uncaptioned_in_scope, 1,
+            "the uncaptioned shot is still counted in scope: {facet:?}"
+        );
+        let moment = search(&Query::parse("moment:performing"), &n);
+        assert!(!moment.complete, "caption fields are partial too");
+        let negated = search(&Query::parse("-moment:performing"), &n);
+        assert!(negated.complete, "a negated caption facet keeps them");
+        Ok(())
+    }
+
+    #[test]
+    fn hits_carry_the_focal_time() -> anyhow::Result<()> {
+        let mut index = night();
+        if let Some(s) = index.segments.first_mut() {
+            s.seg.start = 10.0;
+            s.seg.end = 14.0;
+            s.seg.peak_t = 12.5;
+        }
+        if let Some(s) = index.segments.get_mut(1) {
+            s.seg.start = 20.0;
+            s.seg.end = 23.0;
+            s.seg.peak_t = 0.0;
+        }
+        let people = People::default();
+        let marks = Marks::default();
+        let n = Night::new(&index, &people, &marks);
+        let hits = search(&Query::parse("spinner"), &n).hits;
+        let at = |seg: usize| hits.iter().find(|h| h.seg == seg).map(|h| h.focal);
+        assert_eq!(at(0), Some(12.5), "the peak, not the start: {hits:?}");
+        assert_eq!(
+            at(1),
+            Some(20.0),
+            "a peak outside the segment (an old index) falls back to its start: {hits:?}"
         );
         Ok(())
     }

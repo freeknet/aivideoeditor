@@ -388,6 +388,8 @@ mod tests {
                 fps: [24, 1],
                 vcodec: "h264".into(),
                 has_audio: false,
+                recorded_at: None,
+                camera: None,
             },
             samples: (0..360)
                 .map(|i| Sample {

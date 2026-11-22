@@ -82,7 +82,8 @@ pub(crate) struct Rules {
     /// (soft `reused`; see [`Memory`]). The drafter avoids them either way.
     pub(crate) reject_reused: bool,
     /// Shots whose source range carries any of these flags are reported
-    /// (soft `flagged`).
+    /// (soft `flagged`); a shot overlapping a bad span (see
+    /// [`crate::analyze::spans`]) with one of them is hard `bad-span`.
     pub(crate) reject_flags: Vec<String>,
     /// The shot on the drop must have this subject (empty: no requirement).
     pub(crate) drop_subject: String,
@@ -355,14 +356,22 @@ pub(crate) struct Plan {
     /// The cuts, in order.
     #[serde(rename = "shot")]
     pub(crate) shots: Vec<Shot>,
-    /// Review comments pinned to moments of the cut (`[[comment]]`).
-    #[serde(default, rename = "comment", skip_serializing_if = "Vec::is_empty")]
+    /// Markers: review comments pinned to moments of the cut (`[[comment]]`,
+    /// also read as `[[marker]]`).
+    #[serde(
+        default,
+        rename = "comment",
+        alias = "marker",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub(crate) comments: Vec<Comment>,
 }
 
-/// A review comment: a note pinned to a moment of the cut, the way an
-/// editor leaves a feedback marker. It belongs to the plan, not to a shot,
-/// so it stays at its time when the shots under it change.
+/// A marker: a moment of the cut with a colour and, usually, a note. Like
+/// Selects, a marker with a note *is* a review comment, so markers and
+/// comments are one thing. It belongs to the plan, not to a shot, so it
+/// stays at its time when the shots under it change, and version restores
+/// keep the live plan's markers.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Comment {
     /// Seconds from the plan's start bar.
@@ -515,7 +524,7 @@ impl Finding {
 
 /// Every finding id with its severity and what it means, in check order.
 /// `ave check --help` and the MCP instructions point here.
-pub(crate) const IDS: [(&str, Severity, &str); 20] = [
+pub(crate) const IDS: [(&str, Severity, &str); 21] = [
     (
         "beat-count",
         Severity::Hard,
@@ -546,7 +555,16 @@ pub(crate) const IDS: [(&str, Severity, &str); 20] = [
         Severity::Hard,
         "the shot's clip is not in the index",
     ),
-    ("bad-span", Severity::Hard, "the shot runs outside its clip"),
+    (
+        "outside-clip",
+        Severity::Hard,
+        "the shot runs outside its clip",
+    ),
+    (
+        "bad-span",
+        Severity::Hard,
+        "the shot overlaps a bad span (a short bad stretch) with a rejected flag",
+    ),
     (
         "crop-outside",
         Severity::Hard,
@@ -834,7 +852,7 @@ pub(crate) fn check_with(
         let t_out = shot.t_in + dur;
         if shot.t_in < 0.0 || f64::from(t_out) > clip.probe.duration {
             push(
-                "bad-span",
+                "outside-clip",
                 n,
                 format!(
                     "{} {:.2}-{:.2} runs outside the clip ({:.2}s)",
@@ -868,6 +886,15 @@ pub(crate) fn check_with(
                         g.id,
                         bad.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" ")
                     ),
+                );
+            }
+            for b in
+                crate::analyze::spans::hits(&g.seg.bad_spans, shot.t_in, t_out, &r.reject_flags)
+            {
+                push(
+                    "bad-span",
+                    n,
+                    format!("overlaps a bad span in {}: {}", g.id, b.text()),
                 );
             }
             if let Some(c) = &g.caption
@@ -1167,6 +1194,7 @@ beats = 4
             peak_t: 0.0,
             moments: Vec::new(),
             sig: Default::default(),
+            bad_spans: Vec::new(),
         };
         let probe = Probe {
             duration: 120.0,
@@ -1175,6 +1203,8 @@ beats = 4
             fps: [24000, 1001],
             vcodec: "h264".into(),
             has_audio: false,
+            recorded_at: None,
+            camera: None,
         };
         let clip = |id: &str, hist: f32| ClipIndex {
             id: id.into(),
@@ -1447,6 +1477,7 @@ beats = 4
                 "past-track",
                 "off-drop",
                 "missing-clip",
+                "outside-clip",
                 "bad-span",
                 "crop-outside",
                 "empty-shot"
@@ -1477,7 +1508,10 @@ beats = 4
             has("missing-clip", Some(2), true),
             "Z is not indexed: {got:?}"
         );
-        assert!(has("bad-span", Some(1), true), "119 + 2 s > 120: {got:?}");
+        assert!(
+            has("outside-clip", Some(1), true),
+            "119 + 2 s > 120: {got:?}"
+        );
         assert!(
             has("same-stretch", Some(3), false),
             "A again at 119: {got:?}"
