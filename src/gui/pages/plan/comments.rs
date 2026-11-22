@@ -1,23 +1,32 @@
 // ============================================================================
 // Module:       gui::pages::plan::comments
-// Description:  Review comments on the open plan: the list beside the tracks
-//               (seek, edit, resolve, delete), adding one at the playhead,
-//               and the batch message that hands them to the chat.
+// Description:  Markers (review comments) on the open plan: the list beside
+//               the tracks (seek, edit, recolour, resolve, delete), adding
+//               one at the playhead, jumping between them, and the batch
+//               message that hands them to the chat.
 //
 // Dependencies: egui; crate::{plan, refs}, crate::gui::pages::plan
 // ============================================================================
 
-//! Comments, the way Selects reviews a cut.
+//! Markers and comments, the way Selects reviews a cut.
 //!
-//! A comment is a `[[comment]]` in the plan's TOML ([`crate::plan::Comment`]):
-//! a time on the cut, a note, a colour, who left it and whether it is dealt
-//! with. `F` drops one at the playhead and focuses its text; the ruler shows
-//! each as a coloured pin; this list seeks on click, edits on double-click,
-//! resolves and deletes. **Send to chat** writes every open comment as one
-//! message, each with its timecode and the shot under it as an
+//! Selects has one concept here and so does ave: a marker is a moment of
+//! the cut with a colour, and a marker with a note *is* a review comment.
+//! Each is a `[[comment]]` in the plan's TOML (`[[marker]]` is read too;
+//! [`crate::plan::Comment`]): a time on the cut, a note, a colour, who left
+//! it and whether it is dealt with. `M` (or `F`) drops one at the playhead
+//! and focuses its text; `Shift+M` and `Alt+M` go to the next and previous
+//! one; the ruler shows each as a coloured pin (click to select and seek,
+//! double-click to edit, `Delete` removes the selected one); this list
+//! seeks on click, edits on double-click, recolours from the swatches of
+//! the selected row, resolves and deletes. **Send to chat** writes every
+//! open comment as one message, each with its timecode and the shot under
+//! it as an
 //! `@shot:<plan>#<n>` reference, and asks the assistant for a plan covering
 //! all of them that waits for the go-ahead, so the review turns into one
 //! proposal rather than a string of edits.
+
+use std::collections::BTreeSet;
 
 use egui::{Color32, CornerRadius, Rect, Sense, Ui, UiBuilder, vec2};
 
@@ -59,6 +68,89 @@ pub(super) fn add(plan: &mut Plan, t: f32) -> usize {
         resolved: false,
     });
     plan.comments.len() - 1
+}
+
+/// The marker to go to from `t` seconds: the first one after it (or the
+/// last one before it), skipping resolved ones unless they are shown.
+/// Markers within a hundredth of a second of `t` count as "here".
+pub(super) fn jump_target(
+    comments: &[Comment],
+    t: f32,
+    forward: bool,
+    show_resolved: bool,
+) -> Option<usize> {
+    const HERE: f32 = 0.01;
+    let mut shown = by_time(comments)
+        .into_iter()
+        .filter(|&i| show_resolved || !comments[i].resolved);
+    if forward {
+        shown.find(|&i| comments[i].time > t + HERE)
+    } else {
+        shown.rfind(|&i| comments[i].time < t - HERE)
+    }
+}
+
+/// The playhead in plan seconds (the selected shot's start when the viewer
+/// is not on this plan).
+fn playhead(s: &Shown<'_>, io: &Io<'_>) -> f32 {
+    if s.ours {
+        io.player.position() as f32
+    } else {
+        s.single()
+            .and_then(|k| s.timing.get(k))
+            .map_or(0.0, |&(a, _)| a)
+    }
+    .clamp(0.0, s.total)
+}
+
+/// Seeks to the next (or previous) marker and selects it.
+pub(super) fn jump(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, forward: bool) {
+    let comments = &s.plan.comments;
+    let Some(i) = jump_target(comments, playhead(s, io), forward, state.show_resolved) else {
+        state.status = format!("no {} marker", if forward { "later" } else { "earlier" });
+        return;
+    };
+    if let Some(c) = comments.get(i) {
+        io.seek(s, c.time.clamp(0.0, s.total));
+    }
+    select(state, s, io, i);
+}
+
+/// Makes marker `i` the selection (shots deselected, so `Delete` takes it).
+pub(super) fn select(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, i: usize) {
+    state.comment_sel = Some(i);
+    io.select(&s.name, &BTreeSet::new());
+}
+
+/// Deletes the selected marker; whether there was one.
+pub(super) fn delete_selected(state: &mut State) -> bool {
+    let Some(i) = state.comment_sel.take() else {
+        return false;
+    };
+    state.comment_edit = None;
+    state.comment_focus = None;
+    state.apply("delete marker", |p| {
+        if i < p.comments.len() {
+            p.comments.remove(i);
+            true
+        } else {
+            false
+        }
+    })
+}
+
+/// Opens marker `i` for editing: the list shows it selected, with its
+/// colour swatches and its note in a text box.
+pub(super) fn edit(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, i: usize) {
+    let Some(c) = s.plan.comments.get(i) else {
+        return;
+    };
+    select(state, s, io, i);
+    state.show_comments = true;
+    if s.editable {
+        state.comment_edit = Some((i, c.note.clone()));
+        state.comment_focus = Some(i);
+    }
 }
 
 /// Indices of the comments in time order.
@@ -154,7 +246,7 @@ pub(super) fn panel(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut 
                 }
                 let add = ui
                     .add_enabled_ui(s.editable, |ui| {
-                        widgets::icon_btn(ui, t, icons::PLUS, "Add a comment at the playhead", "F")
+                        widgets::icon_btn(ui, t, icons::PLUS, "Add a marker at the playhead", "M")
                     })
                     .inner;
                 if add.clicked() {
@@ -178,7 +270,7 @@ pub(super) fn panel(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut 
                 t,
                 icons::MESSAGE_SQUARE,
                 "No comments",
-                "Press F over the timeline to leave one at the playhead.",
+                "Press M over the timeline to leave one at the playhead.",
                 |_| {},
             );
             return;
@@ -201,6 +293,49 @@ pub(super) fn panel(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut 
     if let Some(at) = seek {
         io.seek(s, at);
     }
+}
+
+/// The edit that paints marker `i` `color`.
+fn recolour(i: usize, color: String) -> Edit {
+    (
+        format!("marker colour {color}"),
+        Box::new(move |p: &mut Plan| {
+            p.comments.get_mut(i).is_some_and(|c| {
+                c.color = color;
+                true
+            })
+        }),
+    )
+}
+
+/// The selected row's colour picker: one dot per marker colour, the
+/// current one ringed; a click repaints the marker.
+fn swatches(ui: &mut Ui, s: &Shown<'_>, i: usize, c: &Comment, edits: &mut Vec<Edit>) {
+    let t = s.theme;
+    ui.spacing_mut().item_spacing.x = theme::SPACE_XS;
+    for name in COMMENT_COLORS {
+        let (dot, resp) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::click());
+        let (fill, active) = super::timeline::marker(name);
+        let current = c.color == name;
+        let hot = resp.hovered();
+        ui.painter()
+            .circle_filled(dot.center(), 5.0, if hot { active } else { fill });
+        if current {
+            ui.painter().circle_stroke(
+                dot.center(),
+                6.5,
+                egui::Stroke::new(1.0, theme::rgb(t.text)),
+            );
+        }
+        let tip = format!("Paint it {name}");
+        resp.widget_info(|| {
+            egui::WidgetInfo::selected(egui::Role::RadioButton, true, current, &tip)
+        });
+        if widgets::tip(resp, t, &tip, "").clicked() && !current {
+            edits.push(recolour(i, name.to_owned()));
+        }
+    }
+    ui.spacing_mut().item_spacing.x = theme::SPACE_SM;
 }
 
 /// One comment row: its colour, time, shot and author, resolve and delete,
@@ -233,25 +368,28 @@ fn item(
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = theme::SPACE_SM;
-                let (dot, resp) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::click());
-                let ink = color(&c.color);
-                let ink = if c.resolved {
-                    ink.gamma_multiply(0.35)
+                if selected && s.editable {
+                    swatches(ui, s, i, c, edits);
                 } else {
-                    ink
-                };
-                ui.painter().circle_filled(dot.center(), 5.0, ink);
-                if widgets::tip(resp, t, "Change the colour", "").clicked() && s.editable {
-                    let next = next_color(&c.color).to_owned();
-                    edits.push((
-                        format!("comment colour {next}"),
-                        Box::new(move |p: &mut Plan| {
-                            p.comments.get_mut(i).is_some_and(|c| {
-                                c.color = next;
-                                true
-                            })
-                        }),
-                    ));
+                    let (dot, resp) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::click());
+                    let ink = color(&c.color);
+                    let ink = if c.resolved {
+                        ink.gamma_multiply(0.35)
+                    } else {
+                        ink
+                    };
+                    ui.painter().circle_filled(dot.center(), 5.0, ink);
+                    resp.widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::Role::Button,
+                            s.editable,
+                            "Change the colour",
+                        )
+                    });
+                    if widgets::tip(resp, t, "Change the colour", "").clicked() && s.editable {
+                        let next = next_color(&c.color).to_owned();
+                        edits.push(recolour(i, next));
+                    }
                 }
                 let at = super::timeline::timecode(c.time, true);
                 let time = ui.add(
@@ -413,14 +551,8 @@ fn item(
 /// Adds a comment at the playhead (or the selected shot's start when the
 /// viewer is not on this plan), opens the list and focuses its text.
 pub(super) fn add_at_playhead(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>) {
-    let t = if s.ours {
-        io.player.position() as f32
-    } else {
-        s.single()
-            .and_then(|k| s.timing.get(k))
-            .map_or(0.0, |&(a, _)| a)
-    }
-    .clamp(0.0, s.total);
+    let t = playhead(s, io);
+    io.select(&s.name, &BTreeSet::new());
     add_at(state, t);
 }
 
@@ -441,7 +573,7 @@ pub(super) fn add_at(state: &mut State, t: f32) {
 
 #[cfg(test)]
 mod tests {
-    use super::{add, by_time, chat_text, next_color, shot_at};
+    use super::{add, by_time, chat_text, jump_target, next_color, shot_at};
     use crate::plan::{Aspect, Comment, Plan, Rules};
 
     fn plan() -> Plan {
@@ -498,6 +630,55 @@ mod tests {
             ("green", "you", false),
             "defaults for a hand-written comment"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn marker_tables_read_as_comments_and_survive_edits() -> anyhow::Result<()> {
+        let text = "name = \"reel-30\"\naspect = \"9x16\"\nmusic = \"m.wav\"\nstart_bar = 0\n\
+                    drop_bar = 1\ncard_bar = 2\nend_bar = 3\nshot = []\n\n\
+                    [[marker]]\ntime = 4.0\nnote = \"flash frame\"\ncolor = \"yellow\"\n";
+        let mut p: Plan = toml::from_str(text)?;
+        assert_eq!(p.comments.len(), 1, "[[marker]] is read as a marker");
+        assert_eq!(
+            (p.comments[0].note.as_str(), p.comments[0].color.as_str()),
+            ("flash frame", "yellow"),
+            "with its note and colour"
+        );
+        // An edit to the shots leaves the markers where they are.
+        p.shots.push(crate::plan::Shot {
+            clip: "A".into(),
+            t_in: 1.0,
+            beats: 4,
+            cx: 0.5,
+            who: String::new(),
+            seg: String::new(),
+            note: String::new(),
+        });
+        let back: Plan = toml::from_str(&toml::to_string_pretty(&p)?)?;
+        assert_eq!(back, p, "saved as [[comment]] and read back the same");
+        Ok(())
+    }
+
+    #[test]
+    fn jumps_go_to_the_next_and_previous_marker() -> anyhow::Result<()> {
+        let mut p = plan();
+        add(&mut p, 5.0);
+        add(&mut p, 1.0);
+        let r = add(&mut p, 3.0);
+        p.comments[r].resolved = true;
+        let next = |t, show| jump_target(&p.comments, t, true, show);
+        let prev = |t, show| jump_target(&p.comments, t, false, show);
+        assert_eq!(next(0.0, false), Some(1), "first marker after the start");
+        assert_eq!(next(1.0, false), Some(0), "the resolved one is skipped");
+        assert_eq!(next(1.0, true), Some(2), "unless resolved ones are shown");
+        assert_eq!(next(5.0, false), None, "nothing after the last");
+        assert_eq!(
+            prev(5.0, false),
+            Some(1),
+            "the one at the playhead is not 'previous'"
+        );
+        assert_eq!(prev(0.5, false), None, "nothing before the first");
         Ok(())
     }
 

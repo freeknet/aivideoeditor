@@ -17,6 +17,10 @@
 //! Crop centres, performer names and notes ride along in each clip's
 //! `metadata.ave`, where an editor's scripting (or a later import) can
 //! read them; editors themselves ignore unknown metadata.
+//!
+//! The plan's markers (review comments) become timeline markers beside the
+//! drop, with their colour and note, so a review left in ave shows up on
+//! the editor's ruler.
 
 use std::path::Path;
 
@@ -86,6 +90,42 @@ fn track(name: &str, kind: &str, children: Vec<Value>) -> Value {
     })
 }
 
+/// OTIO's name for a marker colour (`MarkerColor`); an unknown one is green,
+/// as ave draws it.
+fn marker_color(name: &str) -> &'static str {
+    match name {
+        "blue" => "BLUE",
+        "yellow" => "YELLOW",
+        "red" => "RED",
+        _ => "GREEN",
+    }
+}
+
+/// The plan's markers (its review comments) as timeline `Marker.2`s at
+/// their frame: the note is the comment, its first line the name (the
+/// colour when there is no note), and who left it and whether it is
+/// resolved ride in `metadata.ave`.
+fn plan_markers(plan: &Plan, rate: f64) -> Vec<Value> {
+    plan.comments
+        .iter()
+        .map(|c| {
+            let note = c.note.trim();
+            let name: String = note
+                .lines()
+                .next()
+                .map_or_else(|| c.color.clone(), |l| l.chars().take(60).collect());
+            json!({
+                "OTIO_SCHEMA": "Marker.2",
+                "name": name,
+                "color": marker_color(&c.color),
+                "comment": note,
+                "marked_range": range((f64::from(c.time) * rate).round(), 0.0, rate),
+                "metadata": {"ave": {"color": c.color, "author": c.author, "resolved": c.resolved}},
+            })
+        })
+        .collect()
+}
+
 /// Builds the timeline JSON for `plan`.
 pub(crate) fn timeline(plan: &Plan, index: &Index, map: &MusicMap) -> Result<Value> {
     let first = plan.shots.first().context("the plan has no shots")?;
@@ -137,12 +177,16 @@ pub(crate) fn timeline(plan: &Plan, index: &Index, map: &MusicMap) -> Result<Val
         json!({"bpm": map.bpm, "start_bar": plan.start_bar, "drop_bar": plan.drop_bar}),
     );
     let drop_at = f64::from(map.beat_time(plan.drop_bar, 0) - origin);
+    let mut markers = vec![
+        json!({"OTIO_SCHEMA": "Marker.2", "name": "drop", "color": "RED",
+        "comment": "", "marked_range": range(frames(drop_at), 0.0, rate), "metadata": {}}),
+    ];
+    markers.extend(plan_markers(plan, rate));
     let mut stack = json!({
         "OTIO_SCHEMA": "Stack.1", "name": "tracks",
         "children": [track("V1", "Video", video), track("A1", "Audio", vec![music])],
         "source_range": Value::Null, "effects": [], "enabled": true, "metadata": {},
-        "markers": [{"OTIO_SCHEMA": "Marker.2", "name": "drop", "color": "RED", "comment": "",
-            "marked_range": range(frames(drop_at), 0.0, rate), "metadata": {}}],
+        "markers": markers,
     });
     stack["name"] = json!("tracks");
     Ok(json!({
@@ -166,7 +210,64 @@ pub(crate) fn export(plan: &Plan, index: &Index, map: &MusicMap, out: &Path) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::{file_url, range};
+    use super::{file_url, plan_markers, range};
+    use crate::plan::{Aspect, Comment, Plan, Rules};
+
+    #[test]
+    fn plan_markers_export_with_colour_note_and_frame() -> anyhow::Result<()> {
+        let comment = |time: f32, note: &str, color: &str, resolved: bool| Comment {
+            time,
+            note: note.into(),
+            color: color.into(),
+            author: "you".into(),
+            resolved,
+        };
+        let plan = Plan {
+            name: "reel-30".into(),
+            aspect: Aspect::Vertical,
+            music: "m.wav".into(),
+            start_bar: 0,
+            drop_bar: 1,
+            card_bar: 2,
+            end_bar: 3,
+            end_card: String::new(),
+            rules: Rules::default(),
+            finish: Default::default(),
+            shots: Vec::new(),
+            comments: vec![
+                comment(2.0, "cut on the snare\nnot the kick", "yellow", false),
+                comment(4.5, "", "blue", true),
+            ],
+        };
+        let m = plan_markers(&plan, 24.0);
+        assert_eq!(m.len(), 2, "one OTIO marker per plan marker");
+        assert_eq!(m[0]["OTIO_SCHEMA"], "Marker.2", "a timeline marker");
+        assert_eq!(m[0]["color"], "YELLOW", "OTIO's colour name");
+        assert_eq!(m[0]["name"], "cut on the snare", "first line names it");
+        assert_eq!(
+            m[0]["comment"], "cut on the snare\nnot the kick",
+            "the whole note is the comment"
+        );
+        assert_eq!(
+            m[0]["marked_range"]["start_time"]["value"], 48.0,
+            "2 s at 24 fps is frame 48"
+        );
+        assert_eq!(
+            m[0]["marked_range"]["duration"]["value"], 0.0,
+            "a point in time"
+        );
+        assert_eq!(m[1]["name"], "blue", "no note: named by its colour");
+        assert_eq!(m[1]["color"], "BLUE", "blue");
+        assert_eq!(
+            m[1]["marked_range"]["start_time"]["value"], 108.0,
+            "4.5 s at 24 fps"
+        );
+        assert_eq!(
+            m[1]["metadata"]["ave"]["resolved"], true,
+            "resolved rides in metadata"
+        );
+        Ok(())
+    }
 
     #[test]
     fn windows_paths_become_file_urls() -> anyhow::Result<()> {
