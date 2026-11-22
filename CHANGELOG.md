@@ -12,6 +12,17 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Recording time, camera and sets. The probe now reads when each clip was recorded
+  (`recorded_at`: UTC, the camera's local clock when known, and its source) and the
+  camera make / model from the container tags. A `creation_time` written in `Z` from a
+  camera's local clock (Canon EOS, many DJI drones) is corrected by the file time; with no
+  tag the file time less the duration is used and marked `mtime`. Re-running `ave index`
+  fills both for cached clips with one ffprobe each, no re-analysis. Clips are grouped
+  into `sets`, the night's acts: runs split by pauses over 15 minutes and by lasting
+  indoor/outdoor changes in the captions, each titled from its captions and props
+  (`Outdoor parking lot · fire`). `index.json` stores them, `shotlog.md` lists them and
+  heads each set's clips in recording order, and `night_overview` shows them to the
+  chat agent.
 - A Shot list tab in the inspector, Selects' Transcript for a cut: the open plan's shots
   in timeline order under their song sections, each with its number, time (MM:SS.s),
   bar, source segment, caption line, the plan's note and a quiet icon for its
