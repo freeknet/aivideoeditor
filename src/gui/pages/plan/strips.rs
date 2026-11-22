@@ -81,8 +81,10 @@ pub(super) fn viewing_banner(
                 .clicked()
                     && let Some(v) = state.viewing.take()
                 {
-                    let plan = v.plan;
+                    let mut plan = v.plan;
                     state.apply(format!("restore v{n}"), |p| {
+                        // The live plan's markers survive a restore.
+                        plan.comments = std::mem::take(&mut p.comments);
                         *p = plan;
                         true
                     });

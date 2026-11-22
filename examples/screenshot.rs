@@ -19,7 +19,10 @@
 //! (`plan-compare.png`): it opens the tab strip's "Compare" menu and picks
 //! the first other plan, or else the latest earlier version. It also
 //! shoots the inspector's Shot list tab on the plan page
-//! (`plan-shot-list.png`), with the second shot selected.
+//! (`plan-shot-list.png`), with the second shot selected, and the
+//! timeline's markers (`plan-markers.png`): three markers written into
+//! every plan for the shot, the list open beside the tracks and the second
+//! marker selected, so its colour swatches show.
 //!
 //! And the chat's cards: a staged edit (`chat-proposal.png`), a slow step
 //! waiting for approval (`chat-approval.png`) and the first-cut settings
@@ -44,6 +47,9 @@ const COMPARE: &str = "plan-compare";
 
 /// The shot that opens the inspector's Shot list tab.
 const SHOT_LIST: &str = "plan-shot-list";
+/// The shot of the timeline's markers: pins on the ruler and the list.
+const MARKERS: &str = "plan-markers";
+
 /// The shot of a staged edit's card.
 const PROPOSAL: &str = "chat-proposal";
 
@@ -103,6 +109,10 @@ fn fixtures(work: &Path, shot: &str) -> anyhow::Result<Fixtures> {
             })
             .collect(),
     };
+    if shot == MARKERS {
+        markers(work, &mut written)?;
+        return Ok(written);
+    }
     std::fs::create_dir_all(chat.join("chats"))?;
     let mut index: Value = std::fs::read_to_string(&index_path)
         .ok()
@@ -185,6 +195,70 @@ fn fixtures(work: &Path, shot: &str) -> anyhow::Result<Fixtures> {
     Ok(written)
 }
 
+/// Writes three markers into every plan of `work` and turns the timeline's
+/// marker list on in `ave.toml`, remembering each file to put back.
+fn markers(work: &Path, fixtures: &mut Fixtures) -> anyhow::Result<()> {
+    for entry in std::fs::read_dir(work.join("plans"))? {
+        let path = entry?.path();
+        if path.extension().is_none_or(|e| e != "toml") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path)?;
+        let mut plan: toml::Table = toml::from_str(&text)?;
+        let marker = |time: f64, note: &str, color: &str, author: &str| {
+            let mut m = toml::Table::new();
+            m.insert("time".into(), time.into());
+            m.insert("note".into(), note.into());
+            m.insert("color".into(), color.into());
+            m.insert("author".into(), author.into());
+            toml::Value::Table(m)
+        };
+        plan.insert(
+            "comment".into(),
+            toml::Value::Array(vec![
+                marker(1.2, "Open tighter on the hoop", "green", "you"),
+                marker(3.4, "Cut on the snare, not the kick", "yellow", "you"),
+                marker(6.8, "Flash frame here?", "red", "assistant"),
+            ]),
+        );
+        fixtures
+            .restore
+            .push((path.clone(), Some(text.into_bytes())));
+        std::fs::write(&path, toml::to_string_pretty(&plan)?)?;
+    }
+    let settings = work.join("ave.toml");
+    let mut table: toml::Table = std::fs::read_to_string(&settings)
+        .ok()
+        .and_then(|t| toml::from_str(&t).ok())
+        .unwrap_or_default();
+    let pages = table
+        .entry("pages")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    if let toml::Value::Table(pages) = pages {
+        let plan = pages
+            .entry("plan")
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+        if let toml::Value::Table(plan) = plan {
+            plan.insert("comments".into(), true.into());
+        }
+    }
+    std::fs::write(&settings, toml::to_string_pretty(&table)?)?;
+    Ok(())
+}
+
+/// Selects the second marker in the list (its timecode seeks and selects).
+fn select_marker(harness: &mut egui_kittest::Harness<'_, Option<App>>) -> anyhow::Result<()> {
+    harness
+        .query_by_label("0:03.4")
+        .ok_or_else(|| anyhow::anyhow!("no marker at 0:03.4 in the list"))?
+        .click();
+    for _ in 0..6 {
+        harness.run_steps(15);
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+    Ok(())
+}
+
 /// One picture: its name, the actions that set it up, then the keys
 /// pressed once the app is up.
 type Shot = (String, Vec<Action>, Vec<(egui::Modifiers, egui::Key)>);
@@ -236,6 +310,7 @@ fn main() -> anyhow::Result<()> {
             vec![Action::Go(Page::Plan)],
             Vec::new(),
         ));
+        shots.push((MARKERS.to_owned(), vec![Action::Go(Page::Plan)], Vec::new()));
         for name in [PROPOSAL, APPROVAL, FIRST_CUT, CHAT_LIST, CHAT_TABS] {
             shots.push((name.to_owned(), vec![Action::Go(Page::Review)], Vec::new()));
         }
@@ -307,6 +382,9 @@ fn main() -> anyhow::Result<()> {
         }
         if name == SHOT_LIST {
             open_shot_list(&mut harness)?;
+        }
+        if name == MARKERS {
+            select_marker(&mut harness)?;
         }
         if name == FIRST_CUT {
             harness

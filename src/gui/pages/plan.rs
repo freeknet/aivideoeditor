@@ -24,9 +24,10 @@
 //! ([`crate::alternatives`]); `1`–`8` swaps one in.
 //!
 //! Plans sit in tabs above the tracks ([`tabs`]), one per plan file, so a
-//! plan the assistant writes shows up as a tab to compare against. Review
-//! comments (`F`) are pinned to moments of the cut and handed to the chat
-//! as one batch ([`comments`]). While the assistant commits an edit it
+//! plan the assistant writes shows up as a tab to compare against. Markers
+//! (`M` or `F`; `Shift+M` / `Alt+M` to step between them), whose notes are
+//! the review comments, are pinned to moments of the cut and handed to the
+//! chat as one batch ([`comments`]). While the assistant commits an edit it
 //! holds `plans/.lock-<name>` and the timeline goes read-only. A
 //! storyboard lane ([`storyboard`]) shows the plan as cards with their
 //! notes, grouped by song section. "Compare plans" in the tab strip
@@ -1823,12 +1824,28 @@ fn keys(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &egui::Ui, hovere
         state.redo();
     }
     let plain = |key: Key| ui.input(|i| i.key_pressed(key) && i.modifiers.is_none());
-    // F: a comment at the playhead (over the timeline or in Comment mode).
-    if (hovered || state.show_comments) && plain(Key::F) {
+    // M (or F): a marker at the playhead (over the timeline or in Comment
+    // mode); Shift+M / Alt+M go to the next / previous one.
+    let marker = |id: &str| ui.input(|i| crate::gui::ui::keymap::pressed(i, id, s.preset));
+    if (hovered || state.show_comments) && (plain(Key::F) || marker("marker-add")) {
         comments::add_at_playhead(state, s, io);
     }
+    if hovered || state.show_comments {
+        if marker("marker-next") {
+            comments::jump(state, s, io, true);
+        }
+        if marker("marker-prev") {
+            comments::jump(state, s, io, false);
+        }
+    }
+    // Delete lifts the selected shots, or else removes the selected marker.
     if plain(Key::Delete) || plain(Key::Backspace) {
-        lift_selected(state, s, io);
+        if s.sel.is_empty() && s.editable {
+            comments::delete_selected(state);
+        } else {
+            state.comment_sel = None;
+            lift_selected(state, s, io);
+        }
     }
     if plain(Key::A)
         && let Some(k) = s.single().or_else(|| s.sel.first().copied())
@@ -1854,6 +1871,7 @@ fn keys(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &egui::Ui, hovere
         if state.alts.is_some() {
             state.alts = None;
         } else {
+            state.comment_sel = None;
             io.select(&s.name, &BTreeSet::new());
         }
     }
@@ -2176,6 +2194,80 @@ mod tests {
             vec!["original", "adopt reel-b"],
             "saved through the version path, the original kept"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn m_adds_a_marker_at_the_playhead_and_shift_m_delete_remove_it() -> anyhow::Result<()> {
+        let (_dir, work) = night()?;
+        let mut h = harness(work);
+        {
+            let app = h
+                .state_mut()
+                .as_mut()
+                .ok_or_else(|| anyhow::anyhow!("no app"))?;
+            app.pages.plan.show_comments = true;
+            app.player.seek(1.5);
+        }
+        h.run_steps(3);
+        h.key_press(egui::Key::M);
+        h.run_steps(3);
+        let markers = |h: &egui_kittest::Harness<'static, Option<crate::gui::app::App>>| {
+            h.state()
+                .as_ref()
+                .and_then(|app| app.pages.plan.plan.as_ref())
+                .map(|p| p.comments.clone())
+                .unwrap_or_default()
+        };
+        let got = markers(&h);
+        assert_eq!(got.len(), 1, "M added one marker");
+        assert!(
+            got.first().is_some_and(|c| (c.time - 1.5).abs() < 1e-3),
+            "at the playhead: {got:?}"
+        );
+        {
+            let app = h
+                .state()
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("no app"))?;
+            assert!(
+                app.pages.plan.comment_edit.is_some(),
+                "its note opens for typing"
+            );
+        }
+        // Leave the note, go back to the start, then Shift+M finds it.
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        {
+            let app = h
+                .state_mut()
+                .as_mut()
+                .ok_or_else(|| anyhow::anyhow!("no app"))?;
+            app.pages.plan.comment_sel = None;
+            app.player.seek(0.0);
+        }
+        h.run_steps(3);
+        h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::M);
+        h.run_steps(3);
+        {
+            let app = h
+                .state()
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("no app"))?;
+            assert_eq!(
+                app.pages.plan.comment_sel,
+                Some(0),
+                "Shift+M selects the next marker"
+            );
+            assert!(
+                (app.player.position() - 1.5).abs() < 1e-3,
+                "and moves the playhead to it: {}",
+                app.player.position()
+            );
+        }
+        h.key_press(egui::Key::Delete);
+        h.run_steps(3);
+        assert!(markers(&h).is_empty(), "Delete removes the selected marker");
         Ok(())
     }
 
