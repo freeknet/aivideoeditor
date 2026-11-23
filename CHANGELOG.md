@@ -360,6 +360,10 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Without the local vision model set up, the set-up's *Start analysis* stopped at the
+  captions step, so who's who and the first cut never ran. A failed caption run no
+  longer stops the queue: it is noted in the guide strip and on the progress page, and
+  the rest runs without captions.
 - Drafting a plan failed outright on a track where no drop was detected ("pick bars
   by hand in the plan file"). The bar with the biggest rise in loudness and low end now
   stands in for the drop; only a track too short for the cut is refused, and the message

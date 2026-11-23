@@ -170,6 +170,8 @@ pub(crate) struct State {
     total: usize,
     /// Why the queue stopped, if a job failed.
     stopped: Option<String>,
+    /// A step that failed without stopping the queue (captions), and why.
+    skipped: Option<String>,
     /// The step whose log is shown.
     selected: Option<Step>,
     /// A re-run waiting for the user to confirm.
@@ -180,7 +182,10 @@ pub(crate) struct State {
 
 impl State {
     /// Starts the next queued job when nothing queued is running. Stops the
-    /// queue when a job failed.
+    /// queue when a job failed, except captions: every later step works
+    /// without them (the vision model is optional set-up), so a failed
+    /// caption run is noted in [`State::skipped`] and the queue goes on to
+    /// people and the first cut.
     pub(crate) fn tick(&mut self, jobs: &mut Jobs) {
         if let Some(id) = self.current {
             match jobs.get(id).map(|j| j.status.clone()) {
@@ -189,14 +194,22 @@ impl State {
                 Some(Status::Failed(e)) => {
                     let label = jobs.get(id).map(|j| j.label.clone()).unwrap_or_default();
                     let first = e.lines().next().unwrap_or_default().to_owned();
-                    self.stopped = Some(if crate::commands::is_cancelled(&e) {
-                        format!("{label} cancelled; what it finished is kept")
-                    } else {
-                        format!("{label} failed: {first}")
-                    });
-                    self.queue.clear();
                     self.current = None;
-                    return;
+                    let cancelled = crate::commands::is_cancelled(&e);
+                    if label == "caption" && !cancelled {
+                        self.skipped = Some(format!(
+                            "Captions were skipped ({first}). The rest runs without them; \
+                             set captions up and run Caption on the Home screen to add them."
+                        ));
+                    } else {
+                        self.stopped = Some(if cancelled {
+                            format!("{label} cancelled; what it finished is kept")
+                        } else {
+                            format!("{label} failed: {first}")
+                        });
+                        self.queue.clear();
+                        return;
+                    }
                 }
             }
         }
@@ -233,6 +246,16 @@ impl State {
         self.stopped.as_deref()
     }
 
+    /// A step the queue went on without, and why.
+    pub(crate) fn skipped(&self) -> Option<&str> {
+        self.skipped.as_deref()
+    }
+
+    /// Forgets the skipped step (the person dismissed it).
+    pub(crate) fn dismiss_skipped(&mut self) {
+        self.skipped = None;
+    }
+
     /// Appends jobs to the queue, skipping any already queued or running.
     pub(crate) fn enqueue(&mut self, jobs: &Jobs, list: Vec<(String, Cmd)>) {
         if self.current.is_none() && self.queue.is_empty() {
@@ -240,6 +263,9 @@ impl State {
             self.total = 0;
         }
         self.stopped = None;
+        if list.iter().any(|(l, _)| l == "caption") {
+            self.skipped = None;
+        }
         for (label, cmd) in list {
             let queued = self.queue.iter().any(|(l, _)| *l == label);
             let running = jobs.running().any(|j| j.label == label);
@@ -1178,6 +1204,52 @@ fn confirm(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
 #[cfg(test)]
 mod tests {
     use super::{Step, ago, progress};
+
+    #[test]
+    fn a_failed_caption_run_is_skipped_and_the_queue_goes_on() -> anyhow::Result<()> {
+        // An empty work folder: captions fail (no shot log), and so does
+        // the step after them, which must still be tried.
+        let dir = tempfile::tempdir()?;
+        let work = dir.path();
+        let mut jobs = crate::jobs::Jobs::default();
+        let mut state = super::State::default();
+        state.enqueue(
+            &jobs,
+            vec![
+                super::caption_cmd(work),
+                (
+                    "people".to_owned(),
+                    crate::commands::Cmd::People {
+                        work: work.to_path_buf(),
+                        force: false,
+                    },
+                ),
+            ],
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        state.tick(&mut jobs);
+        while state.active() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            jobs.poll();
+            state.tick(&mut jobs);
+        }
+        assert!(!state.active(), "the queue finished");
+        assert!(
+            state
+                .skipped()
+                .is_some_and(|s| s.contains("Captions were skipped")),
+            "the caption failure is noted, not fatal: {:?}",
+            state.skipped()
+        );
+        assert!(
+            state
+                .stopped()
+                .is_some_and(|s| s.starts_with("people failed")),
+            "the step after captions ran, and its failure stops the queue: {:?}",
+            state.stopped()
+        );
+        Ok(())
+    }
 
     #[test]
     fn progress_is_read_from_the_newest_line_that_has_it() {

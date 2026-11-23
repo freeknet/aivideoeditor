@@ -334,6 +334,25 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, home: &mut super::State, ui: &mut egui
             }
         });
     }
+    // A failed step is said where the person is, not only on Home.
+    let problem = home
+        .pipeline
+        .stopped()
+        .map(|s| (s.to_owned(), true))
+        .or_else(|| home.pipeline.skipped().map(|s| (s.to_owned(), false)));
+    if let Some((why, stopped)) = problem {
+        ui.add_space(theme::SPACE_XS);
+        ui.horizontal(|ui| {
+            parts::status_line(ui, theme, parts::Kind::Warning, &why);
+            if widgets::ghost_button(ui, theme, "See the log").clicked() {
+                home.view = View::Night;
+                ctx.actions.push(Action::Go(Page::Night));
+            }
+            if !stopped && widgets::ghost_button(ui, theme, "Dismiss").clicked() {
+                home.pipeline.dismiss_skipped();
+            }
+        });
+    }
     if progress {
         home.view = View::Processing;
         ctx.actions.push(Action::Go(Page::Night));

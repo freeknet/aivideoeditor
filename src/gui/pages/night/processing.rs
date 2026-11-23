@@ -316,6 +316,10 @@ pub(crate) fn draw(
             parts::notice(ui, theme, parts::Kind::Warning, why);
             ui.add_space(theme::SPACE_MD);
         }
+        if let Some(why) = queue.skipped() {
+            parts::notice(ui, theme, parts::Kind::Info, why);
+            ui.add_space(theme::SPACE_MD);
+        }
         if !phases.is_empty() {
             steps(ctx, ui, &phases);
             ui.add_space(theme::SPACE_LG);
