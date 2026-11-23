@@ -215,8 +215,11 @@ The chat panel can talk to Claude in one of three ways. Pick one in the
 model menu under the chat box:
 
 - **Claude Code:** install [Claude Code](https://docs.claude.com/en/docs/claude-code),
-  run `claude` once in a terminal and sign in. `ave` then uses your Claude
-  subscription, with only `ave`'s own tools available to it.
+  then press **Sign in** in the chat settings (or on the notice above the chat
+  box). Your browser opens to log in to Claude; no API key needed. `ave` then
+  uses your Claude subscription, with only `ave`'s own tools available to it.
+  The sign-in is Claude Code's own (`claude auth login`), so if you already
+  use Claude Code you are signed in already.
 - **Claude API key:** `setx ANTHROPIC_API_KEY "sk-ant-..."`, or paste the key
   into the chat settings.
 - **Local model:** the llama.cpp server from step 7. No account needed.

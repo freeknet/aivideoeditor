@@ -12,6 +12,11 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Sign in to Claude from the chat panel with your browser, with no API key. The chat
+  settings show whether Claude Code is signed in and have a *Sign in* button, and so
+  does the notice that appears when its sign-in has expired. The button runs Claude
+  Code's own `claude auth login` in a console window, and the panel checks the sign-in
+  when that finishes. `ave` never handles the token.
 - The night's acts in the Shots browser. The order menu's new *Group by → Acts* puts
   the shots in recording order under a full-width header per set (`Set 3 · Indoor neon ·
   LED · 20:35–20:42 · 4 clips`, with its shot count) in both the grid and the list,

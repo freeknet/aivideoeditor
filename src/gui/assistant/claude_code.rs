@@ -46,8 +46,120 @@ use crate::plan::Plan;
 
 /// What the panel shows when the CLI is not signed in.
 pub(crate) const LOGIN_HINT: &str = "Claude Code is not signed in (its sign-in can expire). \
-Run `claude` once in a terminal and log in, then send again. Until then the panel uses the \
+Press Sign in to log in with your browser, then send again. Until then the panel uses the \
 Claude API key or the local model.";
+
+/// Whether `claude auth status --json` output says the CLI is signed in;
+/// `None` when it is not that shape (an older CLI without `auth`).
+pub(crate) fn signed_in(status: &str) -> Option<bool> {
+    serde_json::from_str::<Value>(status.trim())
+        .ok()?
+        .get("loggedIn")?
+        .as_bool()
+}
+
+/// Asks the CLI whether it is signed in (blocking: run it off the UI thread).
+fn auth_status(exe: &Path) -> Option<bool> {
+    let mut cmd = Command::new(exe);
+    cmd.args(["auth", "status", "--json"])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null());
+    crate::gui::player::video::quiet(&mut cmd);
+    // Signed out may exit non-zero and still print the JSON.
+    let out = cmd.output().ok()?;
+    signed_in(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// A sign-in check running in the background, or a browser sign-in and the
+/// check after it.
+///
+/// The sign-in is Claude Code's own (`claude auth login`): the CLI opens the
+/// browser, takes the person through claude.ai, and keeps the credentials in
+/// its own store. The app never sees a token; it only asks the CLI afterwards
+/// whether it is signed in. The CLI runs in a console window of its own so
+/// that, if the browser cannot hand the code back, the person can paste it.
+#[derive(Debug)]
+pub(crate) struct Auth {
+    /// The answer: signed in or not (`None`: the CLI did not say).
+    rx: crossbeam_channel::Receiver<Option<bool>>,
+    /// Whether this is a sign-in (the person is at the browser), not a check.
+    pub(crate) signing_in: bool,
+}
+
+impl Auth {
+    /// Checks whether `exe` is signed in; `on_done` is called with the answer
+    /// ready (to repaint).
+    pub(crate) fn check(exe: &Path, on_done: impl Fn() + Send + 'static) -> Self {
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        let exe = exe.to_path_buf();
+        let spawned = std::thread::Builder::new()
+            .name("claude-auth-status".to_owned())
+            .spawn(move || {
+                let _ = tx.send(auth_status(&exe));
+                on_done();
+            });
+        if let Err(e) = spawned {
+            log::warn!("could not check the Claude Code sign-in: {e}");
+        }
+        Self {
+            rx,
+            signing_in: false,
+        }
+    }
+
+    /// Starts `claude auth login`, which opens the browser; once it exits the
+    /// sign-in is checked and `on_done` is called.
+    pub(crate) fn login(exe: &Path, on_done: impl Fn() + Send + 'static) -> Result<Self, String> {
+        let mut cmd = Command::new(exe);
+        cmd.args(["auth", "login"]);
+        own_console(&mut cmd);
+        let mut child = cmd.spawn().map_err(|e| {
+            format!(
+                "could not start the Claude sign-in ({}): {e}",
+                exe.display()
+            )
+        })?;
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        let exe = exe.to_path_buf();
+        std::thread::Builder::new()
+            .name("claude-auth-login".to_owned())
+            .spawn(move || {
+                let _ = child.wait();
+                let _ = tx.send(auth_status(&exe));
+                on_done();
+            })
+            .map_err(|e| format!("could not wait for the Claude sign-in: {e}"))?;
+        Ok(Self {
+            rx,
+            signing_in: true,
+        })
+    }
+
+    /// The answer once it is in: `Some(Some(true))` signed in,
+    /// `Some(Some(false))` not, `Some(None)` unknown; `None` still running.
+    pub(crate) fn poll(&self) -> Option<Option<bool>> {
+        match self.rx.try_recv() {
+            Ok(answer) => Some(answer),
+            Err(crossbeam_channel::TryRecvError::Empty) => None,
+            Err(crossbeam_channel::TryRecvError::Disconnected) => Some(None),
+        }
+    }
+}
+
+/// Gives a child a console window of its own on Windows (the app may have
+/// none), so the person can see and answer it.
+fn own_console(cmd: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+        cmd.creation_flags(CREATE_NEW_CONSOLE);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = cmd;
+    }
+}
 
 /// Finds the `claude` executable on `PATH`.
 pub(crate) fn find() -> Option<PathBuf> {
@@ -769,7 +881,7 @@ mod tests {
             })
             .collect();
         assert_eq!(notices.len(), 1, "one notice, not one per line: {events:?}");
-        assert!(notices[0].contains("Run `claude` once"), "{}", notices[0]);
+        assert!(notices[0].contains("Press Sign in"), "{}", notices[0]);
         assert!(
             matches!(events.last(), Some(Event::Done { .. })),
             "the turn ends"
@@ -778,6 +890,24 @@ mod tests {
             s.session_id.as_deref(),
             Some("0a85d52d-21d9-48f3-bdb6-77c696b7ae8f"),
             "session id kept"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn auth_status_is_read_from_the_cli_json() -> anyhow::Result<()> {
+        // The shape of `claude auth status --json` from `claude` 2.1.330.
+        let yes = r#"{"loggedIn":true,"authMethod":"claude.ai","apiProvider":"firstParty","subscriptionType":"max"}"#;
+        assert_eq!(super::signed_in(yes), Some(true), "signed in");
+        assert_eq!(
+            super::signed_in("{\"loggedIn\": false}\n"),
+            Some(false),
+            "signed out"
+        );
+        assert_eq!(
+            super::signed_in("error: unknown command 'auth'"),
+            None,
+            "an older CLI is unknown, not signed out"
         );
         Ok(())
     }

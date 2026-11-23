@@ -282,6 +282,12 @@ pub(crate) struct State {
     session: Option<claude_code::Session>,
     /// Why Claude Code cannot be used right now (not signed in).
     claude_down: Option<String>,
+    /// A sign-in check or browser sign-in for Claude Code, while it runs.
+    auth: Option<claude_code::Auth>,
+    /// Whether the sign-in was checked once this run.
+    auth_checked: bool,
+    /// What the CLI last said: signed in or not (`None`: not known).
+    signed_in: Option<bool>,
     /// Contact sheets shown under tool calls.
     images: Sheets,
     /// The night's chats, and the work folder they were read from.
@@ -347,6 +353,7 @@ pub(crate) fn panel(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
     if state.claude.is_none() {
         state.claude = Some(claude_code::find());
     }
+    poll_auth(state, ui.ctx());
     if ctx.project.is_none() {
         widgets::panel_header(ui, ctx.theme, "Assistant", |_| {});
         widgets::empty_state(
@@ -977,6 +984,60 @@ fn poll(ctx: &mut PageCtx<'_>, state: &mut State, egui_ctx: &egui::Context) {
     }
 }
 
+/// Why Claude Code is set aside when its CLI is not signed in.
+const NOT_SIGNED_IN: &str =
+    "Claude Code is not signed in: press Sign in to log in with your browser.";
+
+/// Checks the Claude Code sign-in once on first draw, and takes in the answer
+/// of a check or a browser sign-in when it arrives.
+fn poll_auth(state: &mut State, egui_ctx: &egui::Context) {
+    if !state.auth_checked
+        && let Some(Some(exe)) = &state.claude
+    {
+        state.auth_checked = true;
+        let repaint = egui_ctx.clone();
+        state.auth = Some(claude_code::Auth::check(exe, move || {
+            repaint.request_repaint();
+        }));
+    }
+    let Some(answer) = state.auth.as_ref().and_then(claude_code::Auth::poll) else {
+        return;
+    };
+    let signing_in = state.auth.as_ref().is_some_and(|a| a.signing_in);
+    state.auth = None;
+    state.signed_in = answer;
+    match answer {
+        Some(true) => state.claude_down = None,
+        Some(false) => {
+            state.claude_down = Some(if signing_in {
+                "The Claude sign-in did not finish. Press Sign in to try again.".to_owned()
+            } else {
+                NOT_SIGNED_IN.to_owned()
+            });
+        }
+        // An older CLI cannot say; let the first turn find out.
+        None if signing_in => state.claude_down = None,
+        None => {}
+    }
+}
+
+/// Starts Claude Code's browser sign-in.
+fn start_sign_in(state: &mut State, egui_ctx: &egui::Context) {
+    let Some(Some(exe)) = &state.claude else {
+        return;
+    };
+    let repaint = egui_ctx.clone();
+    match claude_code::Auth::login(exe, move || repaint.request_repaint()) {
+        Ok(auth) => state.auth = Some(auth),
+        Err(e) => state.error = Some(e),
+    }
+}
+
+/// Whether a browser sign-in is waiting for the person.
+fn signing_in(state: &State) -> bool {
+    state.auth.as_ref().is_some_and(|a| a.signing_in)
+}
+
 /// After a Claude Code turn: keep the session id for a restart, and fall
 /// back when the CLI is not signed in or died.
 fn claude_turn_over(state: &mut State) {
@@ -984,8 +1045,8 @@ fn claude_turn_over(state: &mut State) {
         return;
     };
     if session.auth_failed() {
-        state.claude_down =
-            Some("Claude Code is not signed in: run `claude` once and log in.".to_owned());
+        state.claude_down = Some(NOT_SIGNED_IN.to_owned());
+        state.signed_in = Some(false);
         state.session = None;
         return;
     }
@@ -1191,6 +1252,30 @@ fn settings(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = SPACE_SM;
+            if matches!(state.claude, Some(Some(_))) {
+                widgets::menu_heading(ui, theme, "Claude account");
+                let waiting = signing_in(state);
+                let mut sign_in = false;
+                ui.horizontal(|ui| {
+                    let status = match (waiting, state.auth.is_some(), state.signed_in) {
+                        (true, _, _) => "Finish signing in in your browser…",
+                        (false, true, _) => "Checking…",
+                        (false, false, Some(true)) => "Signed in through Claude Code.",
+                        (false, false, Some(false)) => "Not signed in.",
+                        (false, false, None) => "Sign-in unknown.",
+                    };
+                    widgets::muted(ui, theme, status);
+                    if !waiting {
+                        let label = if state.signed_in == Some(true) { "Switch account" } else { "Sign in" };
+                        sign_in = widgets::outline_button(ui, theme, label)
+                            .on_hover_text("Opens your browser to log in to Claude (claude auth login). The sign-in is Claude Code's own; the app never sees a token.")
+                            .clicked();
+                    }
+                });
+                if sign_in {
+                    start_sign_in(state, ui.ctx());
+                }
+            }
             let Some(prefs) = state.prefs.as_mut() else {
                 return;
             };
@@ -1290,7 +1375,7 @@ fn runtime(state: &State) -> Runtime {
 fn blocked_reason(state: &State) -> Option<String> {
     match runtime(state) {
         Runtime::Api(_) if state.prefs.as_ref().and_then(store::Prefs::key).is_none() => Some(
-            "No Claude API key. Set ANTHROPIC_API_KEY, paste a key in the assistant settings, or pick Claude Code or the local model."
+            "No Claude API key. Pick Claude Code and sign in with your browser, set ANTHROPIC_API_KEY, paste a key in the assistant settings, or pick the local model."
                 .to_owned(),
         ),
         Runtime::ClaudeCode(_) | Runtime::Api(_) | Runtime::Local => None,
@@ -1496,14 +1581,25 @@ fn composer(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                 look::notice_row(ui, theme, reason, look::Tone::Warning, |_| {});
             } else if let Some(note) = fallback_note(state) {
                 let down = state.claude_down.is_some();
-                let mut retry = false;
+                let can_sign_in =
+                    matches!(state.claude, Some(Some(_))) && state.signed_in != Some(true);
+                let waiting = signing_in(state);
+                let (mut retry, mut sign_in) = (false, false);
                 look::notice_row(ui, theme, &note, look::Tone::Hint, |ui| {
+                    if waiting {
+                        widgets::muted(ui, theme, "Waiting for the browser…");
+                    } else if down && can_sign_in {
+                        sign_in = widgets::ghost_button(ui, theme, "Sign in").clicked();
+                    }
                     if down && widgets::ghost_button(ui, theme, "Retry Claude Code").clicked() {
                         retry = true;
                     }
                 });
                 if retry {
                     state.claude_down = None;
+                }
+                if sign_in {
+                    start_sign_in(state, ui.ctx());
                 }
             }
             egui::Frame::new()
