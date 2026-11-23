@@ -10,76 +10,27 @@
 
 </div>
 
-`ave` turns a folder of raw footage into text an LLM can plan an edit from,
-then turns the plan back into video. The model never watches the footage:
-a deterministic index (exposure, focus, fire/LED light, moving light, camera
-pans and zooms, shot boundaries) plus local vision-model captions stand in
-for watching, and the plan is a TOML storyboard on the music's beat grid
-that a rule checker verifies before anything renders.
+`ave` is a desktop video editor that cuts a first edit for you. You give it
+a folder of raw clips and a music track. It analyses the footage (exposure,
+focus, fire and LED light, camera moves, shot boundaries, plus captions from
+a local vision model), finds the track's beats, bars and drops, and drafts a
+cut on the beat grid. Then you review it, change it by hand or by asking the
+chat, and export the video or a timeline for Resolve or Kdenlive.
 
-Built for the weekly JaJa Flow Night promo edits; nothing in it is specific
-to that event except the default rules, which live in each plan file.
+It was built for the weekly JaJa Flow Night promo edits, so its default rules
+favour fire on the drop. Footage without fire, or music without a drop,
+still gets a cut.
 
-## The app
+- [Install](#install-on-windows)
+- [Make a video](#make-a-video)
+- [Captions and the chat assistant (optional)](#optional-captions-and-the-chat-assistant)
+- [Troubleshooting](#troubleshooting)
+- [The command line (reference)](#the-command-line-reference)
 
-`ave` with no arguments opens the desktop editor; `ave --open <night>/_ave`
-opens a night directly. One workspace, laid out like Selects or Resolve's Cut
-page (details in [`docs/GUI_CONTRACTS.md`](docs/GUI_CONTRACTS.md)):
-
-- **Home** — recent nights, "new night from last week", the pipeline
-  (index → caption → music → people → plans → export) with live job logs,
-  footage / track / end-card settings and the weekly recipe.
-- **Chat** (left) — ask for changes in plain words; attach **references**
-  as chips (`R` on any selection, `Shift-R` to say keep / avoid / replace /
-  more like / feature, or type `@shot:reel-30#5`, `~@seg:MVI_7925/3`,
-  `!@person:x`, `@bars:17-20`). Answers come back as proposals with a diff
-  and the predicted rule check; applying one saves a new plan version.
-  Claude via `ANTHROPIC_API_KEY`, or a local llama.cpp server.
-- **Browser** — *Shots* (searchable shot log: `fire>0.3 -dark person:x`,
-  grid or list, hover scrub, pick/reject P/X/U, more-like-this), *People*
-  (groups, merge/split, confirm queue), *Music* (beat grid, sections, drops,
-  grid fixes, song ranges).
-- **Viewer** — real-time playback with audio, 16:9 / 9:16 / 4:5 framing with
-  safe areas, J/K/L, I/O marks, `Alt-R` to reference a range.
-- **Inspector** — everything known about the selection.
-- **Timeline** — the plan on the beat grid over the waveform: reorder, roll,
-  slip, `A` for ranked alternatives, live rule check, versions and undo.
-- **Export** — deliverables × plan versions, filename templates, render and
-  OTIO queue.
-
-## The workflow (command line)
-
-```bash
-ave index  <footage-dir> --work <work>   # ~40 s for 20 min of 1080p: index.json + shotlog.md
-ave caption --work <work>                # Qwen3-VL captions per segment (local GPU)
-ave beats  <track.wav>  --work <work>    # tempo, beat grid on the kicks, bars, drops
-ave people --work <work>                 # draft people.toml (who is in which clip)
-ave plan reel-30 --work <work> --aspect 9x16 --seconds 30 --end-card card.png
-ave check  <work>/plans/reel-30.toml --work <work>
-ave render <work>/plans/reel-30.toml --work <work>      # mp4 + 720p preview
-ave otio   <work>/plans/reel-30.toml --work <work>      # timeline for Resolve / Kdenlive
-```
-
-| Step | What it produces | How |
-|---|---|---|
-| `index` | `shotlog.md`, `index.json`, per-clip cache | ffmpeg decode at 6 fps; Rust measures luma, focus (Laplacian), emitters split by hue into fire / LED / white, moving light (motion-compensated), camera motion (block matching → pan + zoom fit), colour cuts; segments of one camera behaviour, scored and flagged `dark soft shaky whip blown no-action` |
-| `caption` | captions under each shot-log line | two stills per segment → llama.cpp server running Qwen3-VL-4B, JSON-schema constrained: summary, people (appearance + prop), moment (`performing / transition / idle / no-performer`), framing, setting, issues |
-| `beats` | `music.json` | spectral-flux onsets, autocorrelation tempo, dynamic-programming beat tracking, grid shifted onto measured kick onsets, bars by low-end phase, drops by low-end jump |
-| `people` | `people.toml` draft | groups clips whose performer descriptions share identifying words; edit names and ranges by hand |
-| `plan` | `plans/<name>.toml` | beat grid (breakdown → build 2+1+1 → hero on the drop → 2-beat cuts, 1-beat stutters → fire finale → end card), filled most-important-slot first under the rules |
-| `check` | pass / list of problems | no repeated stretch of a clip (30 s), no performer within 8 shots, no rejected flags or captions, drop on fire, crop inside frame, action fits the crop |
-| `render` | `renders/<name>.mp4` + `-720p.mp4` | one ffmpeg graph: frame-exact trims on the beat grid, crop, per-shot exposure match, light denoise, end card, straight music trim (no fades, no gain) |
-| `otio` | `renders/<name>.otio` | OpenTimelineIO JSON: source clips at frame accuracy, end card, music, a marker on the drop |
-
-A plan is meant to be edited: change a shot's `clip`, `in`, `beats` or `cx`,
-run `ave check`, render. The checker is the guard rail whether the edit came
-from the drafter, a person or an LLM.
-
-## Install and run on Windows
+## Install on Windows
 
 Step by step on a fresh Windows 10 or 11 machine. Run the commands in
-**PowerShell**. Steps 1–6 are all you need to edit footage. Step 7 adds
-captions, which the planner leans on, and step 8 adds the chat assistant.
+**PowerShell**. You only do this once.
 
 ### 1. Install the build tools
 
@@ -131,11 +82,7 @@ cargo install --path . --profile release-fast
 
 The first build downloads the pinned toolchain and every dependency, so give
 it several minutes. It puts `ave.exe` in `%USERPROFILE%\.cargo\bin`, which
-rustup has already added to `PATH`. Check it worked:
-
-```powershell
-ave --help
-```
+rustup has already added to `PATH`.
 
 `--profile release-fast` builds a few times faster than the shipped
 `release` profile (no link-time optimisation) and runs at nearly the same
@@ -143,51 +90,104 @@ speed. Leave it off for the smallest, fastest binary.
 
 **Updating later:** `git pull`, then run the same `cargo install` line again.
 
-### 5. Lay out a night
+## Make a video
 
-Keep one folder per night with its raw clips inside. `ave` writes everything
-it makes into a `_ave` work folder in the night folder, and never changes
-the clips:
-
-```text
-C:\Users\you\Pictures\Flow Night\2026-11-11\
-    originals\video\     the camera and drone clips
-    _ave\                created by ave: index, shot log, plans, renders
-```
-
-The music can live anywhere; you pick the track in the app.
-
-### 6. Open the app
+Everything from here happens in the app. Start it:
 
 ```powershell
 ave
 ```
 
-With no arguments `ave` opens the desktop editor. Open a night by picking
-its footage folder (or the night folder); `ave` creates `_ave` the first
-time. Then run the pipeline from the Home page (index → caption → music →
-people → plans → export). Each step shows its progress and log. To jump
-straight into a night you have already set up:
+### Start a project
 
-```powershell
-ave --open "C:\Users\you\Pictures\Flow Night\2026-11-11\_ave"
+The start page asks **What are we making?** Drop the folder your clips are
+in onto the window, or press **Open footage folder…**. The folder can be
+anywhere and named anything. `ave` keeps everything it makes in an `_ave`
+folder inside it: the analysis, the cuts and the renders. It never changes
+your clips.
+
+If the folder has no video clips in it, `ave` says so. If a subfolder has
+clips (a camera card's `DCIM\100CANON`, say), it names that subfolder so
+you can pick it instead.
+
+### Follow the guide
+
+Once a project is open, a strip under the top bar shows where it stands:
+
+```text
+✓ Footage  ›  ● Analyse  ›  ○ Music  ›  ○ First cut  ›  ○ Review  ›  ○ Export      Next: [ Set up and analyse ]
 ```
 
-Or run the same steps from the command line, as in
-[the workflow](#the-workflow-command-line):
+**Next** always does the next thing, so you can press it until the video
+is done:
 
-```powershell
-$night = "C:\Users\you\Pictures\Flow Night\2026-11-11"
-ave index "$night\originals\video" --work "$night\_ave"
-```
+1. **Set up and analyse.** A short set-up asks for the footage, the music
+   track and end cards, and what to make (the deliverables: a 15 s reel, a
+   30 s reel, a 60 s recap…). It shows how long the analysis will take, and
+   nothing slow starts until you press **Start analysis**. Analysis then
+   runs on its own: it indexes the clips, captions them, maps the music,
+   works out who's who and drafts the first cut. You can open the editor
+   as soon as indexing finishes; the rest carries on in the background.
+2. **Music.** If you skipped the track in set-up, **Choose music…** picks it
+   and maps its beats, bars and drops.
+3. **First cut.** **Draft the first cut** drafts every deliverable that has
+   no cut yet. It never redrafts one you have already edited.
+4. **Review the cut.** The editor opens on the timeline. Play the cut,
+   reorder, trim and slip shots, press `A` on a shot for ranked
+   alternatives, or ask the chat for a change ("a stronger opening shot",
+   "no shot of the DJ before the drop"). Every change keeps the old version,
+   and a live rule check under the timeline flags anything that breaks the
+   rules (a repeated clip, a performer twice in a row, a crop outside the
+   frame).
+5. **Export.** Renders each cut to MP4 (plus a 720p preview) and copies it
+   to the output folder under the names you chose. Switch on **OTIO for
+   Resolve** to also get an OpenTimelineIO timeline to finish the edit in
+   Resolve or Kdenlive.
 
-Re-running `index` is cheap: clips already measured come from the cache, so
-it only does the new work.
+Click any stage on the strip to go to the screen for it. If you start a
+step from somewhere else (an empty timeline offers **Map the music**, an
+empty shot browser offers **Analyse footage**), it runs through the same
+queue and shows up on the strip.
 
-### 7. Captions (optional, recommended)
+### Coming back to a project
 
-Captions come from a vision model running locally on your GPU through
-llama.cpp. You need about 4 GB of free video memory.
+The start page lists the projects you have opened. Pick one and the strip
+carries on where you left off. Adding clips to the folder later is fine:
+**Update** on the Home screen analyses only the new ones.
+
+### The workspace
+
+Laid out like Selects or Resolve's Cut page (details in
+[`docs/GUI_CONTRACTS.md`](docs/GUI_CONTRACTS.md)):
+
+- **Chat** (left): ask for changes in plain words; attach **references**
+  as chips (`R` on any selection, `Shift-R` to say keep / avoid / replace /
+  more like / feature, or type `@shot:reel-30#5`, `@bars:17-20`). Answers
+  come back as proposals with a diff and the predicted rule check; applying
+  one saves a new version.
+- **Browser**: *Shots* (searchable: `fire>0.3 -dark person:x`, grid or
+  list, hover scrub, pick/reject with P/X/U), *People* (groups, merge and
+  split, a confirm queue), *Music* (beat grid, sections, drops, grid fixes).
+- **Viewer**: real-time playback with audio, 16:9 / 9:16 / 4:5 framing with
+  safe areas, J/K/L, I/O marks.
+- **Inspector**: everything known about the selection, and the open cut as
+  a shot list.
+- **Timeline**: the cut on the beat grid over the waveform, with markers,
+  comments, versions and undo.
+- **Home** (the house button): the project's pipeline step by step, with
+  each step's log, the project's settings and what it makes.
+
+Press `?` for every keyboard shortcut.
+
+## Optional: captions and the chat assistant
+
+### Captions
+
+Captions describe each shot in words (who is in it, what they are doing,
+the framing), and the planner uses them to pick shots. They come from a
+vision model running locally on your GPU through llama.cpp. You need about
+4 GB of free video memory. Without them, analysis still works and the
+captions step is skipped.
 
 1. Download a llama.cpp Windows release from
    <https://github.com/ggml-org/llama.cpp/releases>. Pick the **Vulkan**
@@ -197,8 +197,7 @@ llama.cpp. You need about 4 GB of free video memory.
    <https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF>:
    `Qwen3VL-4B-Instruct-Q4_K_M.gguf` and `mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf`.
    Put both in `C:\tools\models`.
-3. Tell `ave` where they are. `setx` saves the setting for new PowerShell
-   windows, so reopen PowerShell after running these:
+3. Tell `ave` where they are, then restart it:
 
    ```powershell
    setx AVE_LLAMA_DIR  "C:\tools\llama.cpp"
@@ -206,10 +205,10 @@ llama.cpp. You need about 4 GB of free video memory.
    setx AVE_VLM_MMPROJ "C:\tools\models\mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf"
    ```
 
-`ave caption` (or the Caption step in the app) then starts `llama-server`,
-captions every segment, and stops it again. Expect 7–9 s per segment.
+The captions step then starts `llama-server`, captions every segment and
+stops it again. Expect 7–9 s per segment.
 
-### 8. The chat assistant (optional)
+### The chat assistant
 
 The chat panel can talk to Claude in one of three ways. Pick one in the
 model menu under the chat box:
@@ -222,39 +221,69 @@ model menu under the chat box:
   use Claude Code you are signed in already.
 - **Claude API key:** `setx ANTHROPIC_API_KEY "sk-ant-..."`, or paste the key
   into the chat settings.
-- **Local model:** the llama.cpp server from step 7. No account needed.
+- **Local model:** the llama.cpp server from the captions setup. No account
+  needed, but small local models plan poorly.
 
-### Troubleshooting
+## Troubleshooting
 
 - **`link.exe` not found, or a linker error on the first build:** the C++
   build tools from step 1 are missing. Rerun that `winget` line, or open the
   Visual Studio Installer and add "Desktop development with C++".
+- **"An Application Control policy has blocked this file" while building:**
+  Windows Smart App Control blocks the build scripts cargo compiles. Turn it
+  off in Windows Security → App & browser control → Smart App Control.
+  A Dev Drive does not help.
 - **`ave` is not recognised:** reopen PowerShell, or check that
   `%USERPROFILE%\.cargo\bin` is on your `PATH`.
 - **"ffprobe failed" or "ffmpeg not available":** ffmpeg is not on `PATH`.
   Reopen PowerShell after installing it, or set `AVE_FFMPEG_DIR`.
-- **Captions never start:** run `ave caption --work <work>` in a terminal to
-  see the error. The usual cause is a wrong path in one of the `AVE_*`
-  settings, or a llama.cpp build that does not match your graphics card.
+- **A step failed:** the Home screen shows each step's log. Click the step
+  to read why. For captions the usual cause is a wrong path in one of the
+  `AVE_*` settings, or a llama.cpp build that does not match your graphics
+  card.
 
-## Setup reference
+## The command line (reference)
 
-- **ffmpeg / ffprobe** on `PATH`, or `AVE_FFMPEG_DIR` pointing at their folder.
-- **Vision captions** (optional but the planner uses them): a llama.cpp build
-  with a vision model. Either run `llama-server` yourself on port 8089
-  (`AVE_VLM_URL` to change it), or set these and `ave caption` starts and stops it:
-
-  ```bash
-  AVE_LLAMA_DIR=C:\Users\you\tools\llama.cpp            # llama-server.exe (Vulkan build works on AMD)
-  AVE_VLM_MODEL=C:\Users\you\tools\models\Qwen3VL-4B-Instruct-Q4_K_M.gguf
-  AVE_VLM_MMPROJ=C:\Users\you\tools\models\mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf
-  ```
-
-  The 4B model at Q4 uses about 3.7 GB of VRAM and captions a segment in 7–9 s.
+You never need it, but every step the app runs is also an `ave` command, on
+the same `_ave` folder. That is useful for scripts and for agents. The app
+picks up whatever the commands write.
 
 ```bash
-cargo install --path .           # puts `ave` on your PATH
+ave index  <footage-dir> --work <work>   # ~40 s for 20 min of 1080p: index.json + shotlog.md
+ave caption --work <work>                # Qwen3-VL captions per segment (local GPU)
+ave beats  <track.wav>  --work <work>    # tempo, beat grid on the kicks, bars, drops
+ave people --work <work>                 # draft people.toml (who is in which clip)
+ave plan reel-30 --work <work> --aspect 9x16 --seconds 30 --end-card card.png
+ave check  <work>/plans/reel-30.toml --work <work>
+ave render <work>/plans/reel-30.toml --work <work>      # mp4 + 720p preview
+ave otio   <work>/plans/reel-30.toml --work <work>      # timeline for Resolve / Kdenlive
+ave --open <footage-dir or work>        # open the app on a project
 ```
+
+| Step | What it produces | How |
+|---|---|---|
+| `index` | `shotlog.md`, `index.json`, per-clip cache | ffmpeg decode at 6 fps; Rust measures luma, focus (Laplacian), emitters split by hue into fire / LED / white, moving light (motion-compensated), camera motion (block matching → pan + zoom fit), colour cuts; segments of one camera behaviour, scored and flagged `dark soft shaky whip blown no-action` |
+| `caption` | captions under each shot-log line | two stills per segment → llama.cpp server running Qwen3-VL-4B, JSON-schema constrained: summary, people (appearance + prop), moment (`performing / transition / idle / no-performer`), framing, setting, issues |
+| `beats` | `music.json` | spectral-flux onsets, autocorrelation tempo, dynamic-programming beat tracking, grid shifted onto measured kick onsets, bars by low-end phase, drops by low-end jump |
+| `people` | `people.toml` draft | groups clips whose performer descriptions share identifying words |
+| `plan` | `plans/<name>.toml` | beat grid (breakdown → build 2+1+1 → hero on the drop → 2-beat cuts, 1-beat stutters → fire finale → end card), filled most-important-slot first under the rules; with no drop detected, the biggest rise stands in |
+| `check` | pass / list of problems | no repeated stretch of a clip (30 s), no performer within 8 shots, no rejected flags or captions, drop on fire, crop inside frame, action fits the crop |
+| `render` | `renders/<name>.mp4` + `-720p.mp4` | one ffmpeg graph: frame-exact trims on the beat grid, crop, per-shot exposure match, light denoise, end card, straight music trim (no fades, no gain) |
+| `otio` | `renders/<name>.otio` | OpenTimelineIO JSON: source clips at frame accuracy, end card, music, a marker on the drop |
+
+A plan is a TOML storyboard: every shot carries a `note` saying why it is
+there. The checker is the guard rail whether an edit came from the drafter,
+a person, the chat or another program.
+
+### Settings reference
+
+- **ffmpeg / ffprobe** on `PATH`, or `AVE_FFMPEG_DIR` pointing at their folder.
+- **Vision captions:** run `llama-server` yourself on port 8089
+  (`AVE_VLM_URL` to change it), or set `AVE_LLAMA_DIR`, `AVE_VLM_MODEL` and
+  `AVE_VLM_MMPROJ` and the captions step starts and stops it. The 4B model
+  at Q4 uses about 3.7 GB of VRAM.
+- **Chat:** `ANTHROPIC_API_KEY` (or the chat settings) for the Claude API;
+  `AVE_LLM_URL` for a local llama.cpp chat server.
 
 ## Development
 
@@ -263,6 +292,7 @@ cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-features
 cargo deny check                                         # licences, advisories, sources
+cargo run --example screenshot                           # every screen, headless, to target/screenshots
 ```
 
 All of these are clean on `main` and enforced by CI
