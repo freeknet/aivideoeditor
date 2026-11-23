@@ -214,7 +214,7 @@ pub(crate) fn music_text(plan: &Plan, music: &MusicMap) -> String {
 /// The check as the model reads it.
 pub(crate) fn problems_text(problems: Option<&[Finding]>) -> String {
     match problems {
-        None => "check: cannot run yet (the night needs its index and music map)".to_owned(),
+        None => "check: cannot run yet (the project needs its index and music map)".to_owned(),
         Some([]) => "check: passes".to_owned(),
         Some(ps) => {
             let hard = crate::plan::hard_count(ps);

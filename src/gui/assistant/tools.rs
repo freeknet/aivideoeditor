@@ -116,7 +116,7 @@ pub(crate) fn describe(name: &str, input: &Value, live: bool) -> String {
     let name = name.strip_prefix(MCP_PREFIX).unwrap_or(name);
     let s = |k: &str| input.get(k).and_then(Value::as_str).unwrap_or_default();
     let (now, past, what) = match name {
-        "night_overview" => ("Reading the night", "Read the night", String::new()),
+        "night_overview" => ("Reading the project", "Read the project", String::new()),
         "search_shots" => ("Searching shots", "Searched shots", s("query").to_owned()),
         "segment_details" => (
             "Reading segments",

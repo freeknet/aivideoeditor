@@ -275,14 +275,29 @@ fn no_music(
             }
         }
         None => {
+            let mut choose = false;
             widgets::empty_state(
                 ui,
                 theme,
                 icons::MUSIC,
                 "No track chosen",
-                "Choose the track on the Home screen, then map it here.",
-                |_| {},
+                "Pick the track every cut is timed to; it is mapped right after.",
+                |ui| {
+                    choose = widgets::button_with(
+                        ui,
+                        theme,
+                        widgets::ButtonKind::Outline,
+                        Some(icons::MUSIC),
+                        "Choose music\u{2026}",
+                    )
+                    .clicked();
+                },
             );
+            if choose {
+                ctx.actions.push(crate::gui::app::Action::RunStep(
+                    crate::gui::app::Stage::Music,
+                ));
+            }
         }
     }
 }

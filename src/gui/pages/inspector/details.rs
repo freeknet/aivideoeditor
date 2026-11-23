@@ -85,7 +85,7 @@ pub(super) fn flag_reason(flag: &str, seg: &Scored, sharp_ref: f32) -> String {
         "dark" if g.p95 < 0.30 => format!("highlights p95 {:.2} < 0.30", g.p95),
         "dark" => format!("mean luma {:.3} < 0.035", g.luma),
         "soft" => format!(
-            "focus {:.2}× the night's median < 0.60",
+            "focus {:.2}× the project's median < 0.60",
             g.sharp / sharp_ref.max(1e-6)
         ),
         "shaky" => "handheld jitter with no steady direction".to_owned(),
@@ -196,7 +196,7 @@ fn measurements(v: &View<'_>, ui: &mut Ui, seg: &Scored) {
         ui,
         p,
         "Focus",
-        format!("{:.2}× the night's median", g.sharp / sharp_ref.max(1e-6)),
+        format!("{:.2}× the project's median", g.sharp / sharp_ref.max(1e-6)),
     );
     rows::row(ui, p, "Subject", seg.subject.as_str());
     rows::row(

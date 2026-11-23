@@ -674,7 +674,7 @@ fn everything(
     recipe: &Recipe,
 ) -> (Vec<(String, Cmd)>, Vec<String>) {
     let Some(p) = ctx.project.as_ref() else {
-        return (Vec::new(), vec!["no night open".to_owned()]);
+        return (Vec::new(), vec!["no project open".to_owned()]);
     };
     let work = &p.work;
     let mut jobs = Vec::new();
@@ -771,7 +771,7 @@ pub(crate) fn draw(
                     widgets::button_with(
                         ui,
                         ctx.theme,
-                        widgets::ButtonKind::Key,
+                        widgets::ButtonKind::Outline,
                         Some(icons::PLAY),
                         "Run everything",
                     )

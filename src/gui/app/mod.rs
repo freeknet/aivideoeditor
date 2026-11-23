@@ -62,7 +62,7 @@ impl Page {
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
-            Self::Night => "Night",
+            Self::Night => "Home",
             Self::Review => "Review",
             Self::People => "People",
             Self::Music => "Music",
@@ -129,6 +129,24 @@ impl BrowserTab {
             Self::Music => "Music",
         }
     }
+}
+
+/// A stage of a project, in the order they happen: what the guide strip
+/// under the top bar shows, and what [`Action::RunStep`] asks for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stage {
+    /// The clips the project is cut from.
+    Footage,
+    /// Indexing, captions and who's who.
+    Analyse,
+    /// The track and its beat map.
+    Music,
+    /// The drafted plans.
+    FirstCut,
+    /// Watching and changing the cut.
+    Review,
+    /// Rendering and delivering.
+    Export,
 }
 
 /// Everything a user can do, from any input.
@@ -198,6 +216,10 @@ pub enum Action {
         /// The shots, 0-based.
         shots: Vec<usize>,
     },
+    /// Do the next thing for a stage of the project (analyse, map the
+    /// music, draft the first cut…) from whatever screen asked; the guide
+    /// strip runs it through Home's pipeline queue.
+    RunStep(Stage),
 }
 
 /// The application state.
@@ -418,6 +440,7 @@ impl App {
                     );
                 }
             }
+            Action::RunStep(stage) => self.pages.night.guide.requests.push(stage),
             Action::OpenSettings => self.settings_open = true,
             Action::CloseSettings => self.settings_open = false,
             Action::OpenCommands => self.commands.open(),
@@ -432,7 +455,7 @@ impl App {
             Action::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Action::PickProject => {
                 let picked = rfd::FileDialog::new()
-                    .set_title("Open a night (its footage folder or its _ave folder)")
+                    .set_title("Open a project (its footage folder or its _ave folder)")
                     .pick_folder();
                 if let Some(path) = picked {
                     self.open_project(&path);

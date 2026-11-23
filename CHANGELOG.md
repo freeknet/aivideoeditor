@@ -12,6 +12,17 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- A guide strip under the top bar on every screen of an open project: *Footage → Analyse
+  → Music → First cut → Review → Export*. It shows which stages are done (read from what
+  is on disk, so work done from the command line or by the chat counts too) and has one
+  *Next* button for the first stage that is not done yet: choose the footage, set up and
+  analyse, choose or map the music, draft the first cut (only plans that do not exist
+  yet), review it, export it. While something runs, the button shows what is running
+  and how far it has got, with *Progress*. Clicking a stage goes to the screen for it.
+  After the set-up wizard's analysis drafts the first cut, the editor opens on it.
+- Empty screens run the missing step in place instead of saying "run X on the Home
+  screen": *Analyse footage* in Shots and People, *Choose music…* / *Map the music* on the
+  timeline and the Music tab, *Draft the first cut* in the chat.
 - Sign in to Claude from the chat panel with your browser, with no API key. The chat
   settings show whether Claude Code is signed in and have a *Sign in* button, and so
   does the notice that appears when its sign-in has expired. The button runs Claude
@@ -338,6 +349,14 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   drop shot (black, highlights and emitters excluded, gains clamped), and an
   optional cut ahead of the beat; both set in the plan's `[finish]` table
   (`match_colour`, `cut_lead_frames`).
+
+### Changed
+
+- The app says *project* where it said *night*, and drops the weekly-event wording
+  ("this week's footage", "last week") from the start page and set-up. The Home
+  screen's "not analysed yet" banner is gone (the guide strip carries it), and the
+  guide's *Next* is the one bright button: *Run everything* and the empty screens'
+  buttons are outlined.
 
 ### Fixed
 

@@ -116,10 +116,10 @@ pub(crate) fn no_project(ctx: &mut PageCtx<'_>, ui: &mut egui::Ui) {
     heading(
         ctx,
         ui,
-        "No night open",
-        "Open a night's folder (its footage folder or its _ave work folder) to start.",
+        "No project open",
+        "Open a project: its footage folder, or the _ave folder inside it.",
     );
-    if widgets::button(ui, ctx.theme, "Open night…", widgets::Emphasis::Primary).clicked() {
+    if widgets::button(ui, ctx.theme, "Open project…", widgets::Emphasis::Primary).clicked() {
         ctx.actions.push(Action::PickProject);
     }
 }

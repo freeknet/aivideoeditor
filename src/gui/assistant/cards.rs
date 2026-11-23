@@ -567,10 +567,10 @@ impl Step {
                 .as_ref()
                 .map(|f| crate::gui::pages::night::pipeline::index_cmd(work, f, false))
                 .ok_or_else(|| {
-                    "The night has no footage folder: set it on the night page.".to_owned()
+                    "The project has no footage folder: set it on the Home screen.".to_owned()
                 }),
             Self::Caption if project.index.is_none() => {
-                Err("Index the night before captioning it.".to_owned())
+                Err("Analyse the footage before captioning it.".to_owned())
             }
             Self::Caption => Ok(crate::gui::pages::night::pipeline::caption_cmd(work)),
             Self::Render(plan) => {

@@ -241,10 +241,10 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
             ui,
             theme,
             icons::SHARE,
-            "No night open",
-            "Open a night to render its deliverables.",
+            "No project open",
+            "Open a project to render its videos.",
             |ui| {
-                pick = widgets::outline_button(ui, theme, "Open night\u{2026}").clicked();
+                pick = widgets::outline_button(ui, theme, "Open project\u{2026}").clicked();
             },
         );
         if pick {
@@ -712,7 +712,7 @@ fn options(ctx: &PageCtx<'_>, state: &mut State, ui: &mut egui::Ui, out: &Path) 
             {
                 let night = recipe::night_dir(&loaded.work);
                 if let Some(dir) = rfd::FileDialog::new()
-                    .set_title("Where the night's videos go")
+                    .set_title("Where the project's videos go")
                     .set_directory(if out.is_dir() {
                         out.to_path_buf()
                     } else {

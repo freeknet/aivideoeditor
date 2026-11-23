@@ -377,14 +377,29 @@ fn body(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui, ops: &mut Vec<Op>
     });
     let indexed = ctx.project.as_ref().is_some_and(|p| p.index.is_some());
     if !indexed {
+        let mut analyse = false;
         widgets::empty_state(
             ui,
             ctx.theme,
             icons::USERS,
-            "No shot log yet",
-            "Index the footage to see who is in it.",
-            |_| {},
+            "Not analysed yet",
+            "Analyse the footage to see who is in it.",
+            |ui| {
+                analyse = widgets::button_with(
+                    ui,
+                    ctx.theme,
+                    widgets::ButtonKind::Outline,
+                    Some(icons::SPARKLES),
+                    "Analyse footage",
+                )
+                .clicked();
+            },
         );
+        if analyse {
+            ctx.actions.push(crate::gui::app::Action::RunStep(
+                crate::gui::app::Stage::Analyse,
+            ));
+        }
         return;
     }
     if empty && captioned {

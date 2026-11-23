@@ -360,8 +360,8 @@ pub(crate) fn panel(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
             ui,
             ctx.theme,
             icons::MESSAGE_SQUARE,
-            "No night open",
-            "Open a night to talk about its plans.",
+            "No project open",
+            "Open a project to talk about its cuts.",
             |_| {},
         );
         return;
@@ -383,14 +383,28 @@ pub(crate) fn panel(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
         if let Some(e) = state.error.clone() {
             error_row(ctx, state, ui, &e);
         }
+        let mut draft = false;
         widgets::empty_state(
             ui,
             ctx.theme,
             icons::FILE_TEXT,
-            "No plans yet",
-            "Draft one (ave plan) and the assistant can edit it.",
-            |_| {},
+            "No cut yet",
+            "Draft the first cut and the assistant can change it with you.",
+            |ui| {
+                draft = widgets::button_with(
+                    ui,
+                    ctx.theme,
+                    widgets::ButtonKind::Outline,
+                    Some(icons::SPARKLES),
+                    "Draft the first cut",
+                )
+                .clicked();
+            },
         );
+        if draft {
+            ctx.actions
+                .push(Action::RunStep(crate::gui::app::Stage::FirstCut));
+        }
         return;
     }
     match state.tab {
@@ -642,7 +656,7 @@ fn decide(ctx: &mut PageCtx<'_>, state: &mut State, id: &str, choice: cards::Cho
             let job = ctx
                 .project
                 .as_ref()
-                .ok_or_else(|| "no night is open".to_owned())
+                .ok_or_else(|| "no project is open".to_owned())
                 .and_then(|p| a.step.job(p));
             match job {
                 Ok((label, cmd)) => {

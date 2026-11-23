@@ -283,7 +283,8 @@ pub(crate) fn previous(ctx: &PageCtx<'_>, state: &State) -> Option<PathBuf> {
 
 /// Asks for this week's footage folder, starting beside the last night.
 pub(crate) fn pick_footage(ctx: &PageCtx<'_>, state: &State) -> Option<PathBuf> {
-    let mut dialog = rfd::FileDialog::new().set_title("New night: pick this week's footage folder");
+    let mut dialog =
+        rfd::FileDialog::new().set_title("New project: pick the folder your clips are in");
     if let Some(parent) = previous(ctx, state)
         .as_deref()
         .and_then(|p| recipe::night_dir(p).parent().map(Path::to_path_buf))
@@ -332,7 +333,7 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
         .map(|c| c.hint(ctx.keymap))
         .unwrap_or_default();
     let mut rescan = false;
-    widgets::panel_header(ui, theme, "Nights", |ui| {
+    widgets::panel_header(ui, theme, "Projects", |ui| {
         if state.scanning.is_some() {
             ui.add_space(theme::SPACE_XS);
             ui.add(
@@ -341,14 +342,15 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
                     .color(theme::rgb(theme.text_muted)),
             );
             ui.add_space(theme::SPACE_XS);
-        } else if widgets::icon_btn(ui, theme, icons::REFRESH, "Rescan the nights", "").clicked() {
+        } else if widgets::icon_btn(ui, theme, icons::REFRESH, "Rescan the projects", "").clicked()
+        {
             rescan = true;
         }
         if widgets::icon_btn(
             ui,
             theme,
             icons::FOLDER_OPEN,
-            "Open a night's footage or _ave folder",
+            "Open a project's footage or _ave folder",
             &open_keys,
         )
         .clicked()
@@ -359,7 +361,7 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
             ui,
             theme,
             icons::PLUS,
-            "New night: pick this week's footage folder",
+            "New project: pick the folder your clips are in",
             "",
         )
         .clicked()
@@ -382,14 +384,14 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
                 icons::FOLDER
             },
             if scanning {
-                "Looking for nights"
+                "Looking for projects"
             } else {
-                "No other nights"
+                "No other projects"
             },
             if scanning {
                 ""
             } else {
-                "Nights you open show up here, with last week's beside them."
+                "Projects you open show up here, with the ones beside them on disk."
             },
             |_| {},
         );

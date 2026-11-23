@@ -35,7 +35,7 @@ use crate::gui::ui::{icons, theme, widgets};
 /// The first-request templates: the pill's label and the request it fills.
 pub(crate) const TEMPLATES: [(&str, &str); 5] = [
     (
-        "Make this week's reels",
+        "Make the reels",
         "Make this week's reels: draft every deliverable in the recipe from the best moments, \
          beat-synced, no repeated shots or performers, drop on the hero fire shot.",
     ),
@@ -182,7 +182,7 @@ fn composer(ctx: &PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) -> bool {
                             .id(id)
                             .hint_text(
                                 egui::RichText::new(
-                                    "Describe what to make, or drop in this week's footage",
+                                    "Describe what to make, or drop in your footage",
                                 )
                                 .color(theme::rgb(theme.text_muted)),
                             )
@@ -203,7 +203,7 @@ fn composer(ctx: &PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) -> bool {
                             ui,
                             theme,
                             icons::PAPERCLIP,
-                            "Open this week's footage folder",
+                            "Open a footage folder",
                             "",
                             false,
                             TOOL,
@@ -332,7 +332,7 @@ fn drop_zone(ctx: &PageCtx<'_>, ui: &mut egui::Ui, hovering: bool) -> bool {
     let width = ui.available_width();
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, HEIGHT), egui::Sense::click());
     response.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::Role::Button, true, "Drop this week's footage folder")
+        egui::WidgetInfo::labeled(egui::Role::Button, true, "Drop a footage folder")
     });
     let lift = widgets::hover_t(ui, response.id, response.hovered() || hovering);
     let painter = ui.painter();
@@ -375,9 +375,9 @@ fn drop_zone(ctx: &PageCtx<'_>, ui: &mut egui::Ui, hovering: bool) -> bool {
         egui::pos2(x, rect.center().y - 9.0),
         egui::Align2::LEFT_CENTER,
         if hovering {
-            "Drop to set up the night"
+            "Drop to start a project"
         } else {
-            "Drop this week's footage folder"
+            "Drop a footage folder"
         },
         theme::medium(ui.ctx(), theme::LARGE_SIZE),
         theme::rgb(theme.text),
@@ -385,7 +385,7 @@ fn drop_zone(ctx: &PageCtx<'_>, ui: &mut egui::Ui, hovering: bool) -> bool {
     painter.text(
         egui::pos2(x, rect.center().y + 10.0),
         egui::Align2::LEFT_CENTER,
-        "Recipe, end cards and track come over from last week",
+        "Start a project from it: set up, analysed and cut, step by step",
         theme::font(theme::BODY_SIZE),
         theme::rgb(theme.text_muted),
     );
@@ -463,7 +463,7 @@ fn list(ctx: &mut PageCtx<'_>, nights: &recent::State, ui: &mut egui::Ui) -> Opt
     ui.horizontal(|ui| {
         ui.set_min_height(theme::CONTROL_HEIGHT);
         ui.add_space(theme::SPACE_XS);
-        parts::label(ui, theme, "Nights");
+        parts::label(ui, theme, "Projects");
         if nights.scanning() {
             ui.add(
                 egui::Spinner::new()
@@ -482,7 +482,7 @@ fn list(ctx: &mut PageCtx<'_>, nights: &recent::State, ui: &mut egui::Ui) -> Opt
             if widgets::tip(
                 open,
                 theme,
-                "Open any night's footage or _ave folder",
+                "Open any project's footage or _ave folder",
                 &keys,
             )
             .clicked()
@@ -509,14 +509,14 @@ fn list(ctx: &mut PageCtx<'_>, nights: &recent::State, ui: &mut egui::Ui) -> Opt
                     icons::FOLDER
                 },
                 if scanning {
-                    "Looking for nights"
+                    "Looking for projects"
                 } else {
-                    "No nights yet"
+                    "No projects yet"
                 },
                 if scanning {
                     ""
                 } else {
-                    "Nights you open show up here, with their siblings on disk."
+                    "Projects you open show up here, with the ones beside them on disk."
                 },
                 |_| {},
             );
@@ -557,7 +557,7 @@ fn overlay(ctx: &PageCtx<'_>, ui: &egui::Ui, view: egui::Rect) {
     painter.text(
         c + egui::vec2(0.0, 14.0),
         egui::Align2::CENTER_CENTER,
-        "Drop to set up the night",
+        "Drop to start a project",
         theme::medium(ui.ctx(), theme::LARGE_SIZE),
         theme::rgb(theme.text),
     );

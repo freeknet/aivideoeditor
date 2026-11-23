@@ -115,8 +115,8 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
             ui,
             ctx.theme,
             icons::FOLDER_OPEN,
-            "No night open",
-            "Open a night to inspect its footage.",
+            "No project open",
+            "Open a project to inspect its footage.",
             |_| {},
         );
         return;

@@ -100,6 +100,27 @@ pub fn draw(app: &mut App, ui: &mut Ui, actions: &mut Vec<Action>, blocked: bool
     crate::gui::pages::night::tick(&mut app.jobs, &mut app.pages.night);
     crate::gui::pages::deliver::tick(&mut app.jobs, &mut app.pages.deliver, ui.ctx());
 
+    // The guide: where the project stands and the next step, on every
+    // screen of an open project but the set-up wizard (which is its own
+    // step-by-step).
+    let in_wizard = app.home
+        && app.pages.night.view == crate::gui::pages::night::View::Wizard
+        && app.pages.night.wizard.is_some();
+    if app.project.is_some() && !in_wizard {
+        egui::Panel::top("guide")
+            .resizable(false)
+            .show_separator_line(true)
+            .frame(
+                egui::Frame::new()
+                    .fill(theme::bar_fill(&app.theme))
+                    .inner_margin(theme::margin_xy(theme::SPACE_SM, SPACE_XS)),
+            )
+            .show(ui, |ui| {
+                let mut ctx = page_ctx!(app, actions, blocked);
+                crate::gui::pages::night::guide::draw(&mut ctx, &mut app.pages.night, ui);
+            });
+    }
+
     if app.home || app.project.is_none() {
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(theme::rgb(app.theme.app)))

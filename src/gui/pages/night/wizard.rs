@@ -385,7 +385,7 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if widgets::ghost_button(ui, theme, "Skip setup")
-                    .on_hover_text("Go to the night page; nothing runs")
+                    .on_hover_text("Go to the Home screen; nothing runs")
                     .clicked()
                 {
                     outcome = Some(Outcome::Close);
@@ -660,7 +660,7 @@ fn footage_step(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
     step_head(
         ui,
         theme,
-        "This week's footage",
+        "Footage",
         "Every video directly in this folder is indexed.",
     );
     let footage = ctx
@@ -678,7 +678,7 @@ fn footage_step(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
     );
     if change
         && let Some(picked) = rfd::FileDialog::new()
-            .set_title("This week's footage folder")
+            .set_title("The folder your clips are in")
             .pick_folder()
         && let Some(p) = ctx.project.as_mut()
     {
@@ -814,7 +814,7 @@ fn music_step(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
     let start = recipe::night_dir(&state.work);
     if pick_track
         && let Some(track) = rfd::FileDialog::new()
-            .set_title("The night's music track")
+            .set_title("The track the cut is timed to")
             .set_directory(&start)
             .add_filter("Audio", &["wav", "mp3", "flac", "m4a", "aac", "ogg"])
             .pick_file()
@@ -859,7 +859,7 @@ fn music_step(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
             Some(icons::HISTORY),
             &format!("Carry over {from}'s"),
         )
-        .on_hover_text("Fill the track and end cards still missing from last week's night")
+        .on_hover_text("Fill the track and end cards still missing from the last project")
         .clicked()
             && let Some(p) = ctx.project.as_mut()
         {

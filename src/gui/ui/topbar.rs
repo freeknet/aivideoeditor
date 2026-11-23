@@ -49,7 +49,7 @@ const RECENT_SHOWN: usize = 6;
 /// The facets the popover offers, with what each one keeps. Every token
 /// here parses in `crate::search::Query`.
 const FACETS: [(&str, &str); 8] = [
-    ("fire>0.3", "light share, relative to the night"),
+    ("fire>0.3", "light share, relative to the project"),
     ("person:", "who is in it"),
     ("move:pan", "camera movement: pan, static, zoom-in…"),
     ("q>0.7", "quality (focus, exposure)"),
@@ -111,7 +111,7 @@ fn left(app: &App, ui: &mut Ui, theme: &Palette, actions: &mut Vec<Action>) {
         ui,
         theme,
         icons::HOME,
-        "Home: pipeline and recent nights",
+        "Home: the project, its pipeline and recent projects",
         "",
         app.home,
     );

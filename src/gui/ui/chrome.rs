@@ -41,10 +41,10 @@ pub fn status_bar(app: &App, ui: &mut Ui) {
                 let (glyph, color, text) = if let Some(notice) = &app.notice {
                     (icons::CIRCLE_ALERT, theme.danger, notice.clone())
                 } else if running.is_empty() {
-                    let night = app
-                        .project
-                        .as_ref()
-                        .map_or_else(|| "No night open".to_owned(), crate::project::Project::name);
+                    let night = app.project.as_ref().map_or_else(
+                        || "No project open".to_owned(),
+                        crate::project::Project::name,
+                    );
                     (icons::CIRCLE_CHECK, theme.success, night)
                 } else {
                     (

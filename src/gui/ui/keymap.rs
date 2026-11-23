@@ -280,7 +280,7 @@ pub const COMMANDS: &[Command] = &[
     ),
     global(
         "open-night",
-        "Open a night",
+        "Open a project",
         with(CMD, Key::O),
         None,
         None,
@@ -467,7 +467,7 @@ pub const COMMANDS: &[Command] = &[
     ),
     global(
         "reload-night",
-        "Reload the night from disk",
+        "Reload the project from disk",
         Keys::Unbound,
         None,
         None,

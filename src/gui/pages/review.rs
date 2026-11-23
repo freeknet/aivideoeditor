@@ -495,14 +495,29 @@ fn body(
     {
         let project = ctx.project.as_ref()?;
         let Some(index) = project.index.as_ref() else {
+            let mut analyse = false;
             widgets::empty_state(
                 ui,
                 ctx.theme,
                 icons::FILM,
-                "No shot log yet",
-                "Run Index on the Home screen, then cull here.",
-                |_| {},
+                "Not analysed yet",
+                "Analyse the footage and its shots show up here to cull.",
+                |ui| {
+                    analyse = widgets::button_with(
+                        ui,
+                        ctx.theme,
+                        widgets::ButtonKind::Outline,
+                        Some(icons::SPARKLES),
+                        "Analyse footage",
+                    )
+                    .clicked();
+                },
             );
+            if analyse {
+                ctx.actions.push(crate::gui::app::Action::RunStep(
+                    crate::gui::app::Stage::Analyse,
+                ));
+            }
             return None;
         };
         let night = Night::new(index, &project.people, marks);
@@ -1393,12 +1408,12 @@ fn empty(
     } else if query.is_empty() {
         (
             "The shot log is empty".to_owned(),
-            "Index the night on the Home screen.".to_owned(),
+            "Analyse the footage first (the Next button above).".to_owned(),
         )
     } else if unseen > 0 {
         (
             "No captioned shots match".to_owned(),
-            format!("{unseen} shots are not captioned yet; caption the night to search them."),
+            format!("{unseen} shots are not captioned yet; caption them to search them."),
         )
     } else {
         (

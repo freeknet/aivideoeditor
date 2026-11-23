@@ -29,6 +29,7 @@
 //! See `docs/research/05-selects-ui.md` §1 and §3 and
 //! `docs/research/02-ui-and-workflow.md` §6 and §9.3.
 
+pub(crate) mod guide;
 pub(crate) mod parts;
 pub(crate) mod pipeline;
 pub(crate) mod processing;
@@ -79,6 +80,8 @@ pub(crate) struct State {
     pub(crate) view: View,
     /// A night opened from the start page, until it has opened.
     arriving: Option<PathBuf>,
+    /// The guide strip: stages other screens asked for, and its notice.
+    pub(crate) guide: guide::State,
 }
 
 impl State {
@@ -214,14 +217,14 @@ fn new_night(ctx: &mut PageCtx<'_>, state: &mut State, footage: &std::path::Path
                 .map(|p| format!(" from {}", crate::recipe::Names::for_work(p).night))
                 .unwrap_or_default();
             state.notice = Some(if made.notes.is_empty() {
-                format!("New night set up{from}.")
+                format!("New project set up{from}.")
             } else {
-                format!("New night set up{from}: {}.", made.notes.join(", "))
+                format!("New project set up{from}: {}.", made.notes.join(", "))
             });
             state.arriving = None;
             state.start_wizard(made.work, made.previous, made.notes);
         }
-        Err(e) => state.notice = Some(format!("Could not set up the night: {e:#}")),
+        Err(e) => state.notice = Some(format!("Could not set up the project: {e:#}")),
     }
 }
 
@@ -276,7 +279,6 @@ fn wizard_page(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
 /// The open night.
 fn main(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
     header(ctx, state, ui);
-    banner(ctx, state, ui);
     state.settings.sync(ctx);
     pipeline::draw(ctx, &mut state.pipeline, &state.settings, ui);
     ui.add_space(theme::SPACE_XL);
@@ -292,96 +294,6 @@ fn notice_kind(text: &str) -> parts::Kind {
     } else {
         parts::Kind::Info
     }
-}
-
-/// "Not analysed yet: get started", or "analysing: view progress", as a
-/// quiet card with the one key button of the page.
-fn banner(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
-    let Some((work, indexed)) = ctx
-        .project
-        .as_ref()
-        .map(|p| (p.work.clone(), p.index.is_some()))
-    else {
-        return;
-    };
-    let busy = state.pipeline.active();
-    if indexed && !busy {
-        return;
-    }
-    let theme = ctx.theme;
-    egui::Frame::new()
-        .fill(theme::rgb(theme.panel))
-        .stroke(theme::ink_line(theme))
-        .corner_radius(egui::CornerRadius::same(theme::RADIUS_LG))
-        .inner_margin(theme::margin_xy(theme::SPACE_LG, theme::SPACE_MD))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = theme::SPACE_MD;
-                let rect = ui
-                    .allocate_exact_size(egui::Vec2::splat(icons::SIZE), egui::Sense::hover())
-                    .0;
-                if busy {
-                    parts::mark(ui, theme, rect, parts::Mark::Running);
-                } else {
-                    icons::paint(
-                        ui.painter(),
-                        rect,
-                        icons::SPARKLES,
-                        icons::SIZE,
-                        theme::rgb(theme.text_muted),
-                    );
-                }
-                ui.vertical(|ui| {
-                    ui.spacing_mut().item_spacing.y = 2.0;
-                    ui.label(
-                        egui::RichText::new(if busy {
-                            "Analysis is running"
-                        } else {
-                            "This night has not been analysed yet"
-                        })
-                        .font(theme::medium(ui.ctx(), theme::LARGE_SIZE))
-                        .color(theme::rgb(theme.text)),
-                    );
-                    parts::muted(
-                        ui,
-                        theme,
-                        if busy {
-                            "Open the editor once indexing is done; captions carry on behind it."
-                        } else {
-                            "Footage, music and deliverables, then approve what runs."
-                        },
-                    );
-                });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if busy {
-                        if widgets::button_with(
-                            ui,
-                            theme,
-                            widgets::ButtonKind::Outline,
-                            Some(icons::ACTIVITY),
-                            "View progress",
-                        )
-                        .clicked()
-                        {
-                            state.view = View::Processing;
-                        }
-                    } else if widgets::button_with(
-                        ui,
-                        theme,
-                        widgets::ButtonKind::Key,
-                        Some(icons::SPARKLES),
-                        "Get started",
-                    )
-                    .clicked()
-                    {
-                        let previous = state.recent.last_night(Some(&work));
-                        state.start_wizard(work.clone(), previous, Vec::new());
-                    }
-                });
-            });
-        });
-    ui.add_space(theme::SPACE_XL);
 }
 
 /// The night's name, where it lives, and the way into the workspace.

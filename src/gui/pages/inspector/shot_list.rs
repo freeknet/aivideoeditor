@@ -255,8 +255,8 @@ pub(super) fn draw(ctx: &mut PageCtx<'_>, plans: &mut Plans, state: &mut State, 
             ui,
             palette,
             icons::FOLDER_OPEN,
-            "No night open",
-            "Open a night to read its plans as shot lists.",
+            "No project open",
+            "Open a project to read its cuts as shot lists.",
             |_| {},
         );
         return;
@@ -269,8 +269,8 @@ pub(super) fn draw(ctx: &mut PageCtx<'_>, plans: &mut Plans, state: &mut State, 
             ui,
             palette,
             icons::CLAPPERBOARD,
-            "No plan open",
-            "Draft a plan on the timeline to read it here, shot by shot.",
+            "No cut open",
+            "Open a cut on the timeline to read it here, shot by shot.",
             |_| {},
         );
         return;

@@ -724,14 +724,34 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
     }
 
     let Some(map) = project.music.as_ref() else {
+        let has_track = project.settings.track.is_some();
+        let mut map_it = false;
         widgets::empty_state(
             ui,
             palette,
             icons::MUSIC,
             "No music map yet",
-            "Run Beats on the Home screen, then draft a plan.",
-            |_| {},
+            "Cuts land on the track's beats, so the music is mapped before the first cut.",
+            |ui| {
+                map_it = widgets::button_with(
+                    ui,
+                    palette,
+                    widgets::ButtonKind::Outline,
+                    Some(icons::AUDIO_WAVEFORM),
+                    if has_track {
+                        "Map the music"
+                    } else {
+                        "Choose music\u{2026}"
+                    },
+                )
+                .clicked();
+            },
         );
+        if map_it {
+            ctx.actions.push(crate::gui::app::Action::RunStep(
+                crate::gui::app::Stage::Music,
+            ));
+        }
         return;
     };
     let shown_plan = match (&state.viewing, &state.plan) {

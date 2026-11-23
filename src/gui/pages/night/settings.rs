@@ -189,8 +189,8 @@ fn settings_rows(ctx: &mut PageCtx<'_>, state: &State, ui: &mut egui::Ui) {
     parts::section(
         ui,
         ctx.theme,
-        "Night settings",
-        "Saved in the night's ave.toml. A new night starts with last week's.",
+        "Project settings",
+        "Saved with the project. A new project starts with the last one's.",
     );
     let Some(p) = ctx.project.as_ref() else {
         return;
@@ -273,7 +273,7 @@ fn settings_rows(ctx: &mut PageCtx<'_>, state: &State, ui: &mut egui::Ui) {
     let settings = &mut project.settings;
     let changed = match (what.as_str(), action) {
         ("footage", RowAction::Change) => {
-            let mut dialog = rfd::FileDialog::new().set_title("The night's footage folder");
+            let mut dialog = rfd::FileDialog::new().set_title("The folder your clips are in");
             if let Some(dir) = start(footage.as_deref()) {
                 dialog = dialog.set_directory(dir);
             }
@@ -285,7 +285,7 @@ fn settings_rows(ctx: &mut PageCtx<'_>, state: &State, ui: &mut egui::Ui) {
         ("footage", RowAction::Clear) => false,
         ("track", RowAction::Change) => {
             let mut dialog = rfd::FileDialog::new()
-                .set_title("The night's music track")
+                .set_title("The track the cut is timed to")
                 .add_filter(
                     "Audio",
                     &["wav", "mp3", "flac", "m4a", "aac", "ogg", "opus"],
@@ -341,18 +341,18 @@ fn recipe_table(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
     };
     let theme = ctx.theme;
     let from = match loaded.source {
-        Source::Night => "Saved in the night's recipe.toml.",
+        Source::Night => "Saved with the project.",
         Source::UserDefault => {
-            "From your last saved recipe; saved to this night on the first edit."
+            "From your last saved recipe; saved to this project on the first edit."
         }
-        Source::BuiltIn => "The built-in week; saved to this night on the first edit.",
+        Source::BuiltIn => "The built-in week; saved to this project on the first edit.",
     };
     parts::section(
         ui,
         theme,
         "Deliverables",
         &format!(
-            "What this night produces. Each deliverable is drafted as the plan of the same name. {from}"
+            "What this project makes. Each deliverable is drafted as the plan of the same name. {from}"
         ),
     );
     for w in &loaded.warnings {
@@ -492,7 +492,7 @@ fn recipe_table(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
         ui,
         theme,
         "Output",
-        "How the night's videos are named, where they go and how they are encoded.",
+        "How the project's videos are named, where they go and how they are encoded.",
     );
     ui.scope(|ui| {
         ui.set_max_width(FORM_WIDTH);
@@ -539,7 +539,7 @@ fn recipe_table(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
                 if widgets::outline_button(ui, theme, "Change\u{2026}").clicked() {
                     let night = recipe::night_dir(&loaded.work);
                     if let Some(dir) = rfd::FileDialog::new()
-                        .set_title("Where the night's videos go")
+                        .set_title("Where the project's videos go")
                         .set_directory(&night)
                         .pick_folder()
                     {

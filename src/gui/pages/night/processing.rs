@@ -48,6 +48,8 @@ pub(crate) struct Run {
     pub(crate) started: Instant,
     /// Its steps, in order.
     pub(crate) steps: Vec<Planned>,
+    /// Whether the guide has already opened the editor on its first cut.
+    pub(crate) handed_over: bool,
 }
 
 /// The page's state.
@@ -66,6 +68,7 @@ impl State {
             work,
             started: Instant::now(),
             steps,
+            handed_over: false,
         });
     }
 }
@@ -324,7 +327,7 @@ pub(crate) fn draw(
                 theme,
                 widgets::ButtonKind::Ghost,
                 Some(icons::CHEVRON_LEFT),
-                "Night page",
+                "Home",
             )
             .clicked()
             {
