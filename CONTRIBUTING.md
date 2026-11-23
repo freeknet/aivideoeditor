@@ -73,6 +73,18 @@ run a test, and it cannot show you the window: **anything visible still
 needs a Windows run, and a visible change wants a screenshot in the pull
 request.**
 
+Two examples drive the real app headlessly and render it to PNGs:
+
+```bash
+cargo run --example screenshot                           # every screen, to target/screenshots
+cargo run --example walkthrough -- <clips> <track.wav>   # a whole project, clicked through
+```
+
+The walkthrough starts a project from a fresh folder of clips (no `_ave`
+in it), follows the guide's *Next* through set-up and analysis, and fails
+naming the button it could not find if the guided path breaks. Run it after
+changing anything on that path.
+
 ## Rules the codebase enforces
 
 These are enforced by lints and tests, so a violation fails the build
