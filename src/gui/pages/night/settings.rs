@@ -345,7 +345,7 @@ fn recipe_table(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
         Source::UserDefault => {
             "From your last saved recipe; saved to this project on the first edit."
         }
-        Source::BuiltIn => "The built-in week; saved to this project on the first edit.",
+        Source::BuiltIn => "The built-in set; saved to this project on the first edit.",
     };
     parts::section(
         ui,

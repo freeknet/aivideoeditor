@@ -36,22 +36,22 @@ use crate::gui::ui::{icons, theme, widgets};
 pub(crate) const TEMPLATES: [(&str, &str); 5] = [
     (
         "Make the reels",
-        "Make this week's reels: draft every deliverable in the recipe from the best moments, \
+        "Make the reels: draft every deliverable in the recipe from the best moments, \
          beat-synced, no repeated shots or performers, drop on the hero fire shot.",
     ),
     (
         "Find the best fire moments",
-        "Find the best fire moments of the night: list the strongest fire shots with their \
+        "Find the best fire moments in the footage: list the strongest fire shots with their \
          segment ids, sharpest and best lit first, one per performer.",
     ),
     (
         "Cut a 60 s recap",
-        "Cut a 60 s recap of the night in 16:9: open wide on the venue, build through the acts, \
+        "Cut a 60 s recap in 16:9: open wide on the venue, build through the acts, \
          land the hero fire shot on the drop, end card last.",
     ),
     (
-        "Who performed tonight",
-        "List everyone who performed tonight with their three best shots and segment ids, so I \
+        "Who is in the footage",
+        "List everyone in the footage with their three best shots and segment ids, so I \
          can check the people file before the cuts.",
     ),
     (
@@ -219,7 +219,7 @@ fn composer(ctx: &PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) -> bool {
                                         widgets::ButtonKind::Secondary,
                                         icons::ARROW_UP,
                                         "Pick the footage; the request goes to the chat once \
-                                         the night is set up",
+                                         the project is set up",
                                         "",
                                         TOOL,
                                     )

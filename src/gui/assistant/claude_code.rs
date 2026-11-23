@@ -373,7 +373,7 @@ impl Stream {
             Some(status) => out.push(Event::Notice {
                 text: format!(
                     "ave's tool server did not start in Claude Code ({status}); the agent cannot \
-                     read the night."
+                     read the project."
                 ),
                 error: true,
             }),

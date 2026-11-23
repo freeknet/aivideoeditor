@@ -845,8 +845,12 @@ fn draft_paced(
         };
         let Some((score, c)) = best else {
             bail!(
-                "ran out of distinct footage for slot {} ({:?}, {} beats); shorten the edit or loosen the rules",
+                "not enough different footage for a {:.0} s cut: by shot {} of {}, every clip \
+                 left was already used as much as the rules allow. Add clips, or make a shorter \
+                 cut ({:?} slot, {} beats)",
+                spec.seconds,
                 k + 1,
+                slots.len(),
                 slot.want,
                 slot.beats
             );

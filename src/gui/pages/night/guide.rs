@@ -335,17 +335,18 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, home: &mut super::State, ui: &mut egui
         });
     }
     // A failed step is said where the person is, not only on Home.
+    // One line here; the full reasons are on the progress page.
     let problem = home
         .pipeline
         .stopped()
-        .map(|s| (s.to_owned(), true))
-        .or_else(|| home.pipeline.skipped().map(|s| (s.to_owned(), false)));
+        .map(|s| (short(s), true))
+        .or_else(|| summary(home.pipeline.skipped_lines()).map(|s| (s, false)));
     if let Some((why, stopped)) = problem {
         ui.add_space(theme::SPACE_XS);
         ui.horizontal(|ui| {
             parts::status_line(ui, theme, parts::Kind::Warning, &why);
-            if widgets::ghost_button(ui, theme, "See the log").clicked() {
-                home.view = View::Night;
+            if widgets::ghost_button(ui, theme, "Details").clicked() {
+                home.view = View::Processing;
                 ctx.actions.push(Action::Go(Page::Night));
             }
             if !stopped && widgets::ghost_button(ui, theme, "Dismiss").clicked() {
@@ -363,6 +364,50 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, home: &mut super::State, ui: &mut egui
     if let Some(stage) = next {
         run(ctx, home, &recipe, &f, stage);
     }
+}
+
+/// The skipped steps of a run as one short line: captions skipped, which
+/// cuts were not drafted, anything else by count. `None` when nothing was.
+pub(crate) fn summary(lines: &[String]) -> Option<String> {
+    let captions = lines.iter().any(|l| l.starts_with("Captions were skipped"));
+    let undrafted: Vec<&str> = lines
+        .iter()
+        .filter_map(|l| l.split_once(" was not drafted").map(|(name, _)| name))
+        .collect();
+    let other = lines.len() - usize::from(captions) - undrafted.len();
+    // Say why only when every failed draft failed for that reason.
+    let footage = lines
+        .iter()
+        .filter(|l| l.contains(" was not drafted"))
+        .all(|l| l.contains("not enough different footage"));
+    let why = if footage { ": not enough footage" } else { "" };
+    let mut parts = Vec::new();
+    if captions {
+        parts.push("Captions skipped (not set up)".to_owned());
+    }
+    match undrafted.as_slice() {
+        [] => {}
+        [one] => parts.push(format!("{one} not drafted{why}")),
+        many => parts.push(format!(
+            "{} cuts not drafted ({}){why}",
+            many.len(),
+            many.join(", ")
+        )),
+    }
+    if other > 0 {
+        parts.push(format!("{other} other step(s) skipped"));
+    }
+    (!parts.is_empty()).then(|| parts.join(" \u{b7} "))
+}
+
+/// A long message cut to its first clause, for one line on the strip.
+fn short(text: &str) -> String {
+    const MAX: usize = 110;
+    if text.chars().count() <= MAX {
+        return text.to_owned();
+    }
+    let cut: String = text.chars().take(MAX).collect();
+    format!("{}\u{2026}", cut.trim_end())
 }
 
 /// What a job label reads as on the strip.
@@ -698,6 +743,30 @@ mod tests {
         assert_eq!(m[2], (Stage::Music, Mark::Busy), "{m:?}");
         assert_eq!(m[3], (Stage::FirstCut, Mark::Later), "{m:?}");
         assert_eq!(m[1], (Stage::Analyse, Mark::Done), "{m:?}");
+    }
+
+    #[test]
+    fn skipped_steps_read_as_one_short_line() {
+        let lines: Vec<String> = [
+            "Captions were skipped (the vision server is not answering). The rest runs…",
+            "reel-30 was not drafted: not enough different footage for a 30 s cut: by shot 13…",
+            "recap was not drafted: not enough different footage for a 180 s cut: by shot 10…",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        assert_eq!(
+            super::summary(&lines).as_deref(),
+            Some(
+                "Captions skipped (not set up) \u{b7} 2 cuts not drafted (reel-30, recap): not enough footage"
+            )
+        );
+        assert_eq!(
+            super::summary(&lines[1..2]).as_deref(),
+            Some("reel-30 not drafted: not enough footage"),
+            "one cut is named"
+        );
+        assert_eq!(super::summary(&[]), None, "nothing skipped");
     }
 
     #[test]

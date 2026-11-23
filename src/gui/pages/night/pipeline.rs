@@ -170,8 +170,9 @@ pub(crate) struct State {
     total: usize,
     /// Why the queue stopped, if a job failed.
     stopped: Option<String>,
-    /// A step that failed without stopping the queue (captions), and why.
-    skipped: Option<String>,
+    /// Steps that failed without stopping the queue (captions, one
+    /// deliverable's draft), each with why.
+    skipped: Vec<String>,
     /// The step whose log is shown.
     selected: Option<Step>,
     /// A re-run waiting for the user to confirm.
@@ -182,10 +183,11 @@ pub(crate) struct State {
 
 impl State {
     /// Starts the next queued job when nothing queued is running. Stops the
-    /// queue when a job failed, except captions: every later step works
-    /// without them (the vision model is optional set-up), so a failed
-    /// caption run is noted in [`State::skipped`] and the queue goes on to
-    /// people and the first cut.
+    /// queue when a job failed, except where nothing after it depends on
+    /// it: captions (every later step works without them, and the vision
+    /// model is optional set-up) and one deliverable's draft (the others
+    /// draft on their own). Those are noted in [`State::skipped`] and the
+    /// queue goes on.
     pub(crate) fn tick(&mut self, jobs: &mut Jobs) {
         if let Some(id) = self.current {
             match jobs.get(id).map(|j| j.status.clone()) {
@@ -196,8 +198,13 @@ impl State {
                     let first = e.lines().next().unwrap_or_default().to_owned();
                     self.current = None;
                     let cancelled = crate::commands::is_cancelled(&e);
-                    if label == "caption" && !cancelled {
-                        self.skipped = Some(format!(
+                    if let Some(name) = label.strip_prefix("plan ")
+                        && !cancelled
+                    {
+                        self.skipped
+                            .push(format!("{name} was not drafted: {first}"));
+                    } else if label == "caption" && !cancelled {
+                        self.skipped.push(format!(
                             "Captions were skipped ({first}). The rest runs without them; \
                              set captions up and run Caption on the Home screen to add them."
                         ));
@@ -246,14 +253,24 @@ impl State {
         self.stopped.as_deref()
     }
 
-    /// A step the queue went on without, and why.
-    pub(crate) fn skipped(&self) -> Option<&str> {
-        self.skipped.as_deref()
+    /// The steps the queue went on without, and why, one line each.
+    pub(crate) fn skipped(&self) -> Option<String> {
+        (!self.skipped.is_empty()).then(|| {
+            self.skipped.join(
+                "
+",
+            )
+        })
     }
 
-    /// Forgets the skipped step (the person dismissed it).
+    /// The steps the queue went on without, one line each.
+    pub(crate) fn skipped_lines(&self) -> &[String] {
+        &self.skipped
+    }
+
+    /// Forgets the skipped steps (the person dismissed them).
     pub(crate) fn dismiss_skipped(&mut self) {
-        self.skipped = None;
+        self.skipped.clear();
     }
 
     /// Appends jobs to the queue, skipping any already queued or running.
@@ -261,11 +278,9 @@ impl State {
         if self.current.is_none() && self.queue.is_empty() {
             self.started = 0;
             self.total = 0;
+            self.skipped.clear();
         }
         self.stopped = None;
-        if list.iter().any(|(l, _)| l == "caption") {
-            self.skipped = None;
-        }
         for (label, cmd) in list {
             let queued = self.queue.iter().any(|(l, _)| *l == label);
             let running = jobs.running().any(|j| j.label == label);
@@ -1218,6 +1233,17 @@ mod tests {
             vec![
                 super::caption_cmd(work),
                 (
+                    "plan reel-15".to_owned(),
+                    crate::commands::Cmd::Plan {
+                        name: "reel-15".to_owned(),
+                        work: work.to_path_buf(),
+                        aspect: "9x16".to_owned(),
+                        seconds: 15.0,
+                        end_card: String::new(),
+                        card_bars: 2,
+                    },
+                ),
+                (
                     "people".to_owned(),
                     crate::commands::Cmd::People {
                         work: work.to_path_buf(),
@@ -1234,12 +1260,14 @@ mod tests {
             state.tick(&mut jobs);
         }
         assert!(!state.active(), "the queue finished");
+        let skipped = state.skipped().unwrap_or_default();
         assert!(
-            state
-                .skipped()
-                .is_some_and(|s| s.contains("Captions were skipped")),
-            "the caption failure is noted, not fatal: {:?}",
-            state.skipped()
+            skipped.contains("Captions were skipped"),
+            "the caption failure is noted, not fatal: {skipped:?}"
+        );
+        assert!(
+            skipped.contains("reel-15 was not drafted"),
+            "one deliverable's failed draft is noted, not fatal: {skipped:?}"
         );
         assert!(
             state

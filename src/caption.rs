@@ -143,6 +143,31 @@ fn schema() -> serde_json::Value {
 /// The instruction sent with every pair of stills.
 const PROMPT: &str = "Two frames, about a second apart, from event footage (a night of fire spinning, \nLED props, aerial silks and DJs). Answer tersely. summary: one short sentence. people: at most the 3 most \nprominent people, each with appearance (clothing, colours, hair, build: enough to recognise them in another clip, \nunder 15 words) and prop (fire fans, fire staff, fire poi, fire hoop, LED hoop, LED poi, silks, DJ decks, none). \nmoment: performing = actively doing a trick with the prop in motion; transition = walking in, climbing, \nwrapping, lighting or picking up props, adjusting, fumbling, turning away; idle = standing still or watching; \ncrowd = mainly audience; venue = no person in focus. props_active: is a prop lit AND moving in both frames? \nblocked: is a person, head or object between the camera and the main subject? framing: size of the main \nsubject. setting: where, in a few words. issues: only real problems (out of focus, motion blur, too dark, \nblown out), else empty. Be literal; never guess names.";
 
+/// Why captions cannot run here, or `None` when they look set up: a server
+/// of the person's own (`AVE_VLM_URL`), or llama-server and both model
+/// files where the `AVE_LLAMA_DIR` / `AVE_VLM_MODEL` / `AVE_VLM_MMPROJ`
+/// settings say. No network call, so a screen can ask while it draws; a
+/// server on the default port without `AVE_VLM_URL` set still works when
+/// the step runs, it is just not promised here.
+pub(crate) fn not_set_up() -> Option<String> {
+    let set = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty());
+    if set("AVE_VLM_URL").is_some() {
+        return None;
+    }
+    let (Some(dir), Some(model), Some(mmproj)) = (
+        set("AVE_LLAMA_DIR"),
+        set("AVE_VLM_MODEL"),
+        set("AVE_VLM_MMPROJ"),
+    ) else {
+        return Some("needs the local vision model: see Captions in the README".to_owned());
+    };
+    let exe = Path::new(&dir).join(format!("llama-server{}", std::env::consts::EXE_SUFFIX));
+    [exe, PathBuf::from(model), PathBuf::from(mmproj)]
+        .into_iter()
+        .find(|p| !p.is_file())
+        .map(|missing| format!("{} is missing", missing.display()))
+}
+
 /// The server URL.
 fn server_url() -> String {
     std::env::var("AVE_VLM_URL").unwrap_or_else(|_| "http://127.0.0.1:8089".to_owned())

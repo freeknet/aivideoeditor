@@ -360,6 +360,16 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- One deliverable that could not be drafted (too little footage for a 60 s or 180 s
+  cut, say) stopped the analysis queue, so the deliverables after it were never drafted
+  and the editor never opened on the first cut. A failed draft is now noted and the rest
+  carry on. The guide strip sums up what was skipped in one line ("5 cuts not drafted
+  (…): not enough footage"), with *Details* for the full reasons.
+- Set-up offered Captions, with a time estimate, when the vision model was not set up,
+  so the step was certain to fail. The row is now off and says what is missing.
+- The drafter's "ran out of distinct footage for slot 13 (Other, 2 beats); shorten the
+  edit or loosen the rules" now says what happened and what to do: not enough different
+  footage for a cut that long, add clips or make a shorter cut.
 - Without the local vision model set up, the set-up's *Start analysis* stopped at the
   captions step, so who's who and the first cut never ran. A failed caption run no
   longer stops the queue: it is noted in the guide strip and on the progress page, and

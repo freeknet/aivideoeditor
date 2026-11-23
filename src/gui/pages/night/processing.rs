@@ -317,7 +317,7 @@ pub(crate) fn draw(
             ui.add_space(theme::SPACE_MD);
         }
         if let Some(why) = queue.skipped() {
-            parts::notice(ui, theme, parts::Kind::Info, why);
+            parts::notice(ui, theme, parts::Kind::Info, &why);
             ui.add_space(theme::SPACE_MD);
         }
         if !phases.is_empty() {

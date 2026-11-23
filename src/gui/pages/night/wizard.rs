@@ -227,15 +227,22 @@ fn rows(ctx: &PageCtx<'_>, state: &mut State, scanned: Option<&scan::Scanned>) -
         }
         None => pending("reading the footage\u{2026}"),
     };
+    // A step certain to fail is not offered: without the vision model the
+    // rest runs without captions, and the row says how to add them.
+    let missing_model = crate::caption::not_set_up();
     out.push(Row {
         key: "caption",
         title: "Captions",
-        estimate,
+        estimate: match &missing_model {
+            Some(why) => pending(why),
+            None => estimate,
+        },
         blocked: p
             .settings
             .footage
             .is_none()
-            .then(|| "Needs the footage".to_owned()),
+            .then(|| "Needs the footage".to_owned())
+            .or_else(|| missing_model.map(|_| "Not set up".to_owned())),
         jobs: vec![pipeline::caption_cmd(&work)],
     });
 
@@ -893,8 +900,8 @@ fn deliverables_step(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui
         ui,
         theme,
         "Deliverables",
-        "From the night's recipe. Untick one to leave it out of the first drafts; edit the \
-         recipe itself on the night page.",
+        "What this project makes. Untick one to leave it out of the first drafts; change the \
+         list itself on the Home screen.",
     );
     let cards = ctx
         .project
