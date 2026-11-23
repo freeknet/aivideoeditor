@@ -75,7 +75,7 @@ use crate::analyze::{self, ClipIndex};
 use crate::commands::{ItemState, Progress, Report};
 
 /// File extensions treated as video.
-const VIDEO_EXT: [&str; 8] = ["mov", "mp4", "m4v", "mkv", "avi", "mts", "mxf", "webm"];
+pub(crate) const VIDEO_EXT: [&str; 8] = ["mov", "mp4", "m4v", "mkv", "avi", "mts", "mxf", "webm"];
 
 /// The technical-cull thresholds of one night (see the module docs).
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]

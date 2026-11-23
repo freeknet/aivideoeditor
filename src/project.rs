@@ -59,8 +59,12 @@ pub(crate) struct Settings {
 ///
 /// - an `_ave` folder, or one holding `index.json` / `ave.toml`, is the work folder;
 /// - a folder with an `_ave` inside opens that;
-/// - a footage folder (`<night>/originals/video`, or any folder of clips)
-///   gets `<night>/_ave`, where `<night>` skips an `originals/video` tail.
+/// - a footage folder gets an `_ave` of its own, except the
+///   `<project>/originals/video` layout, which gets `<project>/_ave`.
+///
+/// Only that exact layout climbs out of the picked folder: a folder that
+/// just happens to be called `Videos` (Windows' own library folder, say)
+/// keeps its project inside it, never in the folder above.
 pub(crate) fn work_dir_for(picked: &Path) -> PathBuf {
     let is_work = picked.file_name().is_some_and(|n| n == "_ave")
         || picked.join("index.json").exists()
@@ -71,15 +75,76 @@ pub(crate) fn work_dir_for(picked: &Path) -> PathBuf {
     if picked.join("_ave").is_dir() {
         return picked.join("_ave");
     }
-    let mut night = picked;
     let is = |p: &Path, name: &str| p.file_name().is_some_and(|n| n.eq_ignore_ascii_case(name));
-    if is(night, "video") || is(night, "videos") {
-        night = night.parent().unwrap_or(night);
+    let originals = picked.parent().filter(|p| is(p, "originals"));
+    if (is(picked, "video") || is(picked, "videos"))
+        && let Some(project) = originals.and_then(Path::parent)
+    {
+        return project.join("_ave");
     }
-    if is(night, "originals") {
-        night = night.parent().unwrap_or(night);
+    if is(picked, "originals")
+        && let Some(project) = picked.parent()
+    {
+        return project.join("_ave");
     }
-    night.join("_ave")
+    picked.join("_ave")
+}
+
+/// Where the clips are when `folder` itself holds none: the nearest
+/// subfolder (two levels down at most, the first by name) that does, with
+/// how many it holds. Camera cards put clips in `DCIM/100CANON`, and a
+/// picked parent folder is the commonest wrong pick.
+pub(crate) fn clips_below(folder: &Path) -> Option<(PathBuf, usize)> {
+    let subfolders = |dir: &Path| -> Vec<PathBuf> {
+        let mut out: Vec<PathBuf> = std::fs::read_dir(dir)
+            .map(|entries| {
+                entries
+                    .filter_map(Result::ok)
+                    .map(|e| e.path())
+                    .filter(|p| p.is_dir() && p.file_name().is_none_or(|n| n != "_ave"))
+                    .collect()
+            })
+            .unwrap_or_default();
+        out.sort();
+        out
+    };
+    let count = |dir: &Path| crate::index::list_videos(dir).map_or(0, |v| v.len());
+    for child in subfolders(folder) {
+        let n = count(&child);
+        if n > 0 {
+            return Some((child, n));
+        }
+    }
+    for child in subfolders(folder) {
+        for grandchild in subfolders(&child) {
+            let n = count(&grandchild);
+            if n > 0 {
+                return Some((grandchild, n));
+            }
+        }
+    }
+    None
+}
+
+/// Why `folder` cannot be a project's footage, if it cannot: it is missing
+/// or holds no video clips. The message names a subfolder with clips when
+/// there is one, so the fix is one click away.
+pub(crate) fn footage_problem(folder: &Path) -> Option<String> {
+    let name = folder.display();
+    match crate::index::list_videos(folder) {
+        Err(_) => Some(format!("{name} could not be read.")),
+        Ok(clips) if !clips.is_empty() => None,
+        Ok(_) => Some(match clips_below(folder) {
+            Some((sub, n)) => format!(
+                "{name} has no video clips in it, but {} has {n}. Pick that folder instead.",
+                sub.display()
+            ),
+            None => format!(
+                "{name} has no video clips in it ({}). Pick the folder your clips are in.",
+                crate::index::VIDEO_EXT.join(", ")
+            ),
+        }),
+    }
 }
 
 /// An open night.
@@ -808,6 +873,44 @@ mod tests {
             super::work_dir_for(&work),
             work,
             "an _ave folder is its own work folder"
+        );
+        let library = dir.path().join("Users").join("me").join("Videos");
+        std::fs::create_dir_all(&library)?;
+        assert_eq!(
+            super::work_dir_for(&library),
+            library.join("_ave"),
+            "a folder called Videos keeps its project inside it, not in the folder above"
+        );
+        let plain = dir.path().join("Wedding clips");
+        std::fs::create_dir_all(&plain)?;
+        assert_eq!(
+            super::work_dir_for(&plain),
+            plain.join("_ave"),
+            "any folder of clips"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn an_empty_footage_folder_is_refused_and_points_at_the_clips() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let card = dir.path().join("card");
+        let clips = card.join("DCIM").join("100CANON");
+        std::fs::create_dir_all(&clips)?;
+        let Some(why) = super::footage_problem(&card) else {
+            anyhow::bail!("an empty folder was accepted");
+        };
+        assert!(why.contains("no video clips"), "{why}");
+        assert!(!why.contains("100CANON"), "no clips anywhere yet: {why}");
+        std::fs::write(clips.join("MVI_0001.MP4"), b"")?;
+        let Some(why) = super::footage_problem(&card) else {
+            anyhow::bail!("a folder whose clips are two levels down was accepted");
+        };
+        assert!(why.contains("100CANON") && why.contains("has 1"), "{why}");
+        assert_eq!(
+            super::footage_problem(&clips),
+            None,
+            "the folder holding the clips is fine"
         );
         Ok(())
     }

@@ -341,6 +341,15 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Picking a footage folder named `Videos` (such as Windows' own Videos library) put the
+  project's `_ave` folder in the folder above it, such as your home folder. Only the
+  `<project>/originals/video` layout climbs a level now; any other folder keeps its
+  project inside it.
+- A footage folder with no video clips in it was accepted, so analysis then had nothing
+  to work on. It is refused now with the reason, and when a subfolder up to two levels
+  down holds clips (a camera card's `DCIM/100CANON`, say) the message names it and the
+  setup's footage step offers *Use that folder*. Continue stays off until the folder
+  has clips.
 - Delete / Backspace in the inspector's Shot list only lifted the selected shot while
   the timeline was open; it now lifts it whenever the list has a selection, through the
   timeline's undoable lift, saved at once as a new plan version.

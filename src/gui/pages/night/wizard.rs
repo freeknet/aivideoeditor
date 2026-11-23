@@ -472,10 +472,26 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
                                 }
                             }
                             None => {
-                                if let Some(next) = Step::ALL.get(i + 1)
-                                    && widgets::primary_button(ui, theme, "Continue").clicked()
-                                {
-                                    state.step = *next;
+                                // Nothing after the footage step works
+                                // without clips, so it is the one gate.
+                                let has_clips = state.step != Step::Footage
+                                    || state
+                                        .scan
+                                        .for_work(&state.work)
+                                        .is_some_and(|s| !s.clips.is_empty());
+                                if let Some(next) = Step::ALL.get(i + 1) {
+                                    let go = ui
+                                        .add_enabled_ui(has_clips, |ui| {
+                                            widgets::primary_button(ui, theme, "Continue")
+                                        })
+                                        .inner
+                                        .on_disabled_hover_text(
+                                            "Pick a folder with video clips in it first",
+                                        )
+                                        .clicked();
+                                    if go {
+                                        state.step = *next;
+                                    }
                                 }
                             }
                         }
@@ -717,6 +733,24 @@ fn footage_step(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
             );
         }
     });
+    let empty = scanned
+        .as_ref()
+        .is_some_and(|s| s.error.is_none() && s.clips.is_empty())
+        && !busy;
+    if empty && let Some(folder) = footage.as_deref() {
+        let why = project::footage_problem(folder)
+            .unwrap_or_else(|| format!("{} has no video clips in it.", folder.display()));
+        ui.add_space(theme::SPACE_XS);
+        parts::status_line(ui, theme, parts::Kind::Warning, &why);
+        if let Some((sub, _)) = project::clips_below(folder)
+            && widgets::outline_button(ui, theme, "Use that folder").clicked()
+            && let Some(p) = ctx.project.as_mut()
+        {
+            p.settings.footage = Some(sub);
+            let _ = p.save_settings();
+            state.generation += 1;
+        }
+    }
     if let Some(s) = scanned.filter(|s| !s.clips.is_empty()) {
         ui.add_space(theme::SPACE_MD);
         let gap = theme::SPACE_XS + 2.0;

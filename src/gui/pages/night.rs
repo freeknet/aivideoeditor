@@ -197,6 +197,15 @@ fn start_page(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
 
 /// Sets a night up for `footage` from the last one and opens the wizard.
 fn new_night(ctx: &mut PageCtx<'_>, state: &mut State, footage: &std::path::Path) {
+    // A folder already holding a project opens as it is; a new one must
+    // have clips in it, or everything after this step has nothing to do.
+    let existing = crate::project::work_dir_for(footage)
+        .join("ave.toml")
+        .is_file();
+    if !existing && let Some(why) = crate::project::footage_problem(footage) {
+        state.notice = Some(format!("Could not start a project: {why}"));
+        return;
+    }
     match recent::set_up(ctx, &state.recent, footage) {
         Ok(made) => {
             let from = made

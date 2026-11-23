@@ -464,6 +464,13 @@ impl App {
     /// opens its night's `_ave` work folder beside it, creating it.
     pub(crate) fn open_project(&mut self, path: &std::path::Path) {
         let work = crate::project::work_dir_for(path);
+        if work != path
+            && !work.join("ave.toml").is_file()
+            && let Some(why) = crate::project::footage_problem(path)
+        {
+            self.notice = Some(format!("Could not open {}: {why}", path.display()));
+            return;
+        }
         match crate::project::Project::open(&work) {
             Ok(mut project) => {
                 if project.settings.footage.is_none() && work != path {
