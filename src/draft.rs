@@ -753,6 +753,11 @@ pub(crate) fn draft(
     Err(last.unwrap_or_else(|| anyhow::anyhow!("no draft")))
 }
 
+/// The fit a shot of the wrong kind gets in a slot no shot of the right
+/// kind can fill (a hero without fire): low enough that any right-kind
+/// shot beats it, above zero so the slot is filled.
+const STAND_IN_FIT: f32 = 0.05;
+
 /// One drafting attempt at pacing ease `ease`.
 fn draft_paced(
     index: &Index,
@@ -763,11 +768,27 @@ fn draft_paced(
     memory: &Memory,
     ease: usize,
 ) -> Result<Plan> {
-    let Some(drop) = map.drops.first() else {
-        bail!("the music map has no drop; pick bars by hand in the plan file");
+    let lead = if spec.seconds <= 20.0 { 2 } else { 4 };
+    let stand_in;
+    let drop = match map.drops.first() {
+        Some(drop) => drop,
+        None => {
+            let Some(found) = stand_in_drop(map, lead, 4 + spec.card_bars) else {
+                bail!(
+                    "the track has {} bars, too few for a {:.0}-second cut; pick a longer track",
+                    map.bars.len(),
+                    spec.seconds
+                );
+            };
+            log::warn!(
+                "no drop in the music map; the biggest rise (bar {}) stands in for it",
+                found.bar + 1
+            );
+            stand_in = found;
+            &stand_in
+        }
     };
     let bar_len = 240.0 / map.bpm;
-    let lead = if spec.seconds <= 20.0 { 2 } else { 4 };
     // Whole phrases after the drop, as many as fit the target length.
     let mut after = 4;
     while (lead + after + 4 + spec.card_bars) as f32 * bar_len <= spec.seconds + 1.0
@@ -799,21 +820,29 @@ fn draft_paced(
             .checked_sub(1)
             .and_then(|j| placed[j].as_ref())
             .map(|s| s.note.clone());
-        let best = pool
-            .iter()
-            .filter(|c| allowed(c, k, &slots, &placed, (index, people, &rules, beat)))
-            .map(|c| {
-                let mut s = c.score * fit(slot.want, c);
-                if prev_framing
-                    .as_deref()
-                    .is_some_and(|n| !c.framing.is_empty() && n.contains(&c.framing))
-                {
-                    s *= 0.85;
-                }
-                (s, c)
-            })
-            .filter(|(s, _)| *s > 0.0)
-            .max_by(|a, b| a.0.total_cmp(&b.0));
+        // The hero and finale want fire. Footage with none still gets a
+        // cut: a second pass takes the best shot there is, and its note
+        // says the slot went without.
+        let pick = |floor: f32| {
+            pool.iter()
+                .filter(|c| allowed(c, k, &slots, &placed, (index, people, &rules, beat)))
+                .map(|c| {
+                    let mut s = c.score * fit(slot.want, c).max(floor);
+                    if prev_framing
+                        .as_deref()
+                        .is_some_and(|n| !c.framing.is_empty() && n.contains(&c.framing))
+                    {
+                        s *= 0.85;
+                    }
+                    (s, c)
+                })
+                .filter(|(s, _)| *s > 0.0)
+                .max_by(|a, b| a.0.total_cmp(&b.0))
+        };
+        let (best, without) = match pick(0.0) {
+            Some(found) => (Some(found), false),
+            None => (pick(STAND_IN_FIT), true),
+        };
         let Some((score, c)) = best else {
             bail!(
                 "ran out of distinct footage for slot {} ({:?}, {} beats); shorten the edit or loosen the rules",
@@ -830,6 +859,9 @@ fn draft_paced(
         };
         if c.cheer > 0.0 {
             accent.push_str(&format!(" · ends on a cheer {:.2}", c.cheer));
+        }
+        if without {
+            accent.push_str(" · no fire shot left, best shot instead");
         }
         shot.note = format!(
             "{:?} · {} {} · score {score:.2}{accent}",
@@ -887,10 +919,65 @@ pub(crate) fn plan_allows(
     })
 }
 
+/// The bar to cut to as if it were the drop, for a track whose map found
+/// none (plenty of music has no drop): the bar whose loudness and low end
+/// rise most over the two bars before it, among those with `lead` bars
+/// before and `after` bars from it to the end. The earliest wins a tie,
+/// so a flat track starts its cut as soon as it can. `None` when the
+/// track is too short for that.
+fn stand_in_drop(map: &MusicMap, lead: usize, after: usize) -> Option<crate::beats::Drop> {
+    let bars = &map.bars;
+    let last = bars.len().checked_sub(after.max(1))?;
+    if lead > last {
+        return None;
+    }
+    let energy = |i: usize| bars.get(i).map_or(0.0, |b| b.rms + b.low);
+    let rise = |i: usize| {
+        let before: Vec<f32> = (i.saturating_sub(2)..i).map(energy).collect();
+        let base = if before.is_empty() {
+            energy(i)
+        } else {
+            before.iter().sum::<f32>() / before.len() as f32
+        };
+        energy(i) - base
+    };
+    let bar = (lead..=last).fold(lead, |best, i| if rise(i) > rise(best) { i } else { best });
+    Some(crate::beats::Drop {
+        bar,
+        t: bars.get(bar).map_or(0.0, |b| b.t),
+        score: 0.0,
+        user: false,
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Pattern, Want, grid, pace};
+    use super::{Pattern, Want, grid, pace, stand_in_drop};
     use crate::beats::{Bar, MusicMap};
+
+    #[test]
+    fn a_track_without_a_drop_cuts_to_its_biggest_rise() -> anyhow::Result<()> {
+        // Quiet, a jump at bar 10, loud after.
+        let mut low = vec![0.1; 10];
+        low.extend([1.0; 14]);
+        let Some(drop) = stand_in_drop(&map(&low), 4, 8) else {
+            anyhow::bail!("a 24-bar track has room for a stand-in drop");
+        };
+        assert_eq!(drop.bar, 10, "the jump stands in for the drop");
+        let Some(flat) = stand_in_drop(&map(&[0.5; 24]), 4, 8) else {
+            anyhow::bail!("a flat track still gets a stand-in");
+        };
+        assert_eq!(
+            flat.bar, 4,
+            "a flat track starts as soon as the lead allows"
+        );
+        assert_eq!(
+            stand_in_drop(&map(&[0.5; 6]), 4, 8),
+            None,
+            "too short for the lead and the bars after"
+        );
+        Ok(())
+    }
 
     /// A 140 BPM map whose bar energies are `low`.
     fn map(low: &[f32]) -> MusicMap {

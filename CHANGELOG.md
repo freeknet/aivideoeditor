@@ -341,6 +341,13 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Drafting a plan failed outright on a track where no drop was detected ("pick bars
+  by hand in the plan file"). The bar with the biggest rise in loudness and low end now
+  stands in for the drop; only a track too short for the cut is refused, and the message
+  says so.
+- Drafting failed on footage with no fire in it, because the hero shot on the drop and
+  the finale had to be fire. When no fire shot is left, those slots take the best shot
+  there is, and its note says so. The checker's `drop-subject` warning still flags it.
 - Picking a footage folder named `Videos` (such as Windows' own Videos library) put the
   project's `_ave` folder in the folder above it, such as your home folder. Only the
   `<project>/originals/video` layout climbs a level now; any other folder keeps its
