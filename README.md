@@ -4,7 +4,7 @@
 
 **Index footage, plan beat-synced edits, render and export timelines.**
 
-[![CI](https://github.com/lnorton89/aivideoeditor/actions/workflows/ci.yml/badge.svg)](https://github.com/lnorton89/aivideoeditor/actions/workflows/ci.yml)
+[![CI](https://github.com/freeknet/aivideoeditor/actions/workflows/ci.yml/badge.svg)](https://github.com/freeknet/aivideoeditor/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![MSRV](https://img.shields.io/badge/rust-1.98%2B-orange.svg)](Cargo.toml)
 
@@ -75,7 +75,166 @@ A plan is meant to be edited: change a shot's `clip`, `in`, `beats` or `cx`,
 run `ave check`, render. The checker is the guard rail whether the edit came
 from the drafter, a person or an LLM.
 
-## Setup
+## Install and run on Windows
+
+Step by step on a fresh Windows 10 or 11 machine. Run the commands in
+**PowerShell**. Steps 1–6 are all you need to edit footage. Step 7 adds
+captions, which the planner leans on, and step 8 adds the chat assistant.
+
+### 1. Install the build tools
+
+```powershell
+winget install --id Git.Git -e
+winget install --id Rustlang.Rustup -e
+winget install --id Microsoft.VisualStudio.2022.BuildTools -e --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+```
+
+The last one installs the MSVC C++ compiler and the Windows SDK, which Rust
+needs to link on Windows. It is a large download and can take a while.
+**Close and reopen PowerShell** afterwards so the new `PATH` is picked up.
+You do not need to pick a Rust version: the repo's `rust-toolchain.toml`
+pins it, and `rustup` installs that version on the first build.
+
+### 2. Install ffmpeg
+
+```powershell
+winget install --id Gyan.FFmpeg -e
+```
+
+Reopen PowerShell, then check that both tools are found:
+
+```powershell
+ffmpeg -version
+ffprobe -version
+```
+
+If you already have ffmpeg somewhere else, point `ave` at its folder instead:
+`setx AVE_FFMPEG_DIR "C:\tools\ffmpeg\bin"`.
+
+### 3. Get the code
+
+The repository is private, so sign in to GitHub first. Either install the
+GitHub CLI and log in (`winget install --id GitHub.cli -e`, then
+`gh auth login`), or let Git ask for your credentials when you clone.
+
+```powershell
+cd $HOME\Documents
+git clone https://github.com/freeknet/aivideoeditor.git
+cd aivideoeditor
+```
+
+### 4. Build and install `ave`
+
+```powershell
+cargo install --path . --profile release-fast
+```
+
+The first build downloads the pinned toolchain and every dependency, so give
+it several minutes. It puts `ave.exe` in `%USERPROFILE%\.cargo\bin`, which
+rustup has already added to `PATH`. Check it worked:
+
+```powershell
+ave --help
+```
+
+`--profile release-fast` builds a few times faster than the shipped
+`release` profile (no link-time optimisation) and runs at nearly the same
+speed. Leave it off for the smallest, fastest binary.
+
+**Updating later:** `git pull`, then run the same `cargo install` line again.
+
+### 5. Lay out a night
+
+Keep one folder per night with its raw clips inside. `ave` writes everything
+it makes into a `_ave` work folder in the night folder, and never changes
+the clips:
+
+```text
+C:\Users\you\Pictures\Flow Night\2026-11-11\
+    originals\video\     the camera and drone clips
+    _ave\                created by ave: index, shot log, plans, renders
+```
+
+The music can live anywhere; you pick the track in the app.
+
+### 6. Open the app
+
+```powershell
+ave
+```
+
+With no arguments `ave` opens the desktop editor. Open a night by picking
+its footage folder (or the night folder); `ave` creates `_ave` the first
+time. Then run the pipeline from the Home page (index → caption → music →
+people → plans → export). Each step shows its progress and log. To jump
+straight into a night you have already set up:
+
+```powershell
+ave --open "C:\Users\you\Pictures\Flow Night\2026-11-11\_ave"
+```
+
+Or run the same steps from the command line, as in
+[the workflow](#the-workflow-command-line):
+
+```powershell
+$night = "C:\Users\you\Pictures\Flow Night\2026-11-11"
+ave index "$night\originals\video" --work "$night\_ave"
+```
+
+Re-running `index` is cheap: clips already measured come from the cache, so
+it only does the new work.
+
+### 7. Captions (optional, recommended)
+
+Captions come from a vision model running locally on your GPU through
+llama.cpp. You need about 4 GB of free video memory.
+
+1. Download a llama.cpp Windows release from
+   <https://github.com/ggml-org/llama.cpp/releases>. Pick the **Vulkan**
+   build for AMD or Intel graphics, or a **CUDA** build for NVIDIA. Unzip it
+   to, say, `C:\tools\llama.cpp`, the folder that contains `llama-server.exe`.
+2. Download the Qwen3-VL 4B Instruct model and its vision projector from
+   <https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF>:
+   `Qwen3VL-4B-Instruct-Q4_K_M.gguf` and `mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf`.
+   Put both in `C:\tools\models`.
+3. Tell `ave` where they are. `setx` saves the setting for new PowerShell
+   windows, so reopen PowerShell after running these:
+
+   ```powershell
+   setx AVE_LLAMA_DIR  "C:\tools\llama.cpp"
+   setx AVE_VLM_MODEL  "C:\tools\models\Qwen3VL-4B-Instruct-Q4_K_M.gguf"
+   setx AVE_VLM_MMPROJ "C:\tools\models\mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf"
+   ```
+
+`ave caption` (or the Caption step in the app) then starts `llama-server`,
+captions every segment, and stops it again. Expect 7–9 s per segment.
+
+### 8. The chat assistant (optional)
+
+The chat panel can talk to Claude in one of three ways. Pick one in the
+model menu under the chat box:
+
+- **Claude Code:** install [Claude Code](https://docs.claude.com/en/docs/claude-code),
+  run `claude` once in a terminal and sign in. `ave` then uses your Claude
+  subscription, with only `ave`'s own tools available to it.
+- **Claude API key:** `setx ANTHROPIC_API_KEY "sk-ant-..."`, or paste the key
+  into the chat settings.
+- **Local model:** the llama.cpp server from step 7. No account needed.
+
+### Troubleshooting
+
+- **`link.exe` not found, or a linker error on the first build:** the C++
+  build tools from step 1 are missing. Rerun that `winget` line, or open the
+  Visual Studio Installer and add "Desktop development with C++".
+- **`ave` is not recognised:** reopen PowerShell, or check that
+  `%USERPROFILE%\.cargo\bin` is on your `PATH`.
+- **"ffprobe failed" or "ffmpeg not available":** ffmpeg is not on `PATH`.
+  Reopen PowerShell after installing it, or set `AVE_FFMPEG_DIR`.
+- **Captions never start:** run `ave caption --work <work>` in a terminal to
+  see the error. The usual cause is a wrong path in one of the `AVE_*`
+  settings, or a llama.cpp build that does not match your graphics card.
+
+## Setup reference
 
 - **ffmpeg / ffprobe** on `PATH`, or `AVE_FFMPEG_DIR` pointing at their folder.
 - **Vision captions** (optional but the planner uses them): a llama.cpp build
