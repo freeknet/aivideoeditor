@@ -737,21 +737,47 @@ pub(crate) fn parse(text: &str) -> (Recipe, Vec<String>) {
             defaults.deliverables
         }
     };
-    (
-        Recipe {
-            filename,
-            output_dir,
-            encoder,
-            otio,
-            deliverables,
-            rules,
-            template,
-            about,
-            props,
-            metrics,
-        },
-        warnings,
-    )
+    let mut recipe = Recipe {
+        filename,
+        output_dir,
+        encoder,
+        otio,
+        deliverables,
+        rules,
+        template,
+        about,
+        props,
+        metrics,
+    };
+    // A recipe saved before templates existed, listing the Flow Night cuts,
+    // was a Flow Night recipe: what it leaves out comes from that template,
+    // not from General, so an old project keeps cutting the way it did.
+    const FLOW_NIGHT_CUTS: [&str; 6] = [
+        "reel-15", "reel-30", "reel-60", "story-15", "feed-30", "wide-60",
+    ];
+    if recipe.template.is_empty()
+        && recipe
+            .deliverables
+            .iter()
+            .any(|d| FLOW_NIGHT_CUTS.contains(&d.id.as_str()))
+    {
+        let flow = Recipe::flow_night();
+        let missing = |key: &str| !table.contains_key(key);
+        if missing("rules") {
+            recipe.rules = flow.rules;
+        }
+        if missing("about") {
+            recipe.about = flow.about;
+        }
+        if missing("props") {
+            recipe.props = flow.props;
+        }
+        if missing("metrics") {
+            recipe.metrics = flow.metrics;
+        }
+        recipe.template = flow.template;
+    }
+    (recipe, warnings)
 }
 
 /// Audio files a track can be picked from.
@@ -909,6 +935,30 @@ pub(crate) fn new_night(footage: &Path, previous: Option<&Path>) -> Result<NewNi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_old_flow_night_recipe_keeps_cutting_the_way_it_did() -> anyhow::Result<()> {
+        let (old, _) = parse(
+            "[[deliverable]]
+id = \"reel-30\"
+aspect = \"9x16\"
+seconds = 30.0
+",
+        );
+        assert_eq!(old.template, "Flow Night", "recognised by its cuts");
+        assert_eq!(old.rules.drop_subject, "fire", "its rules, not General's");
+        assert_eq!(old.metrics, Recipe::flow_night().metrics, "its measures");
+        let (other, _) = parse(
+            "[[deliverable]]
+id = \"recap\"
+aspect = \"16x9\"
+seconds = 180.0
+",
+        );
+        assert!(other.template.is_empty(), "a recap alone says nothing");
+        assert!(other.rules.drop_subject.is_empty(), "so General's rules");
+        Ok(())
+    }
 
     #[test]
     fn the_rules_are_the_projects_and_a_partial_table_keeps_the_rest() -> anyhow::Result<()> {
