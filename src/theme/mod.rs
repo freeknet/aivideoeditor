@@ -216,6 +216,14 @@ impl Palette {
         // a white card is far heavier than the rest of the chrome.
         let control = hover.lerp(text, 0.34);
         let danger_hover = danger.lerp(forward, 0.12);
+        // Faint text still carries information (times, hints, steps not yet
+        // reached), so it fades towards the panel only as far as it can
+        // while still reading at the secondary contrast on a card.
+        let text_faint = (0..=21)
+            .rev()
+            .map(|step| text_muted.lerp(panel, step as f32 * 0.02))
+            .find(|faint| faint.contrast(raised) >= SECONDARY_CONTRAST)
+            .unwrap_or(text_muted);
 
         Some(Self {
             id: spec.id.clone(),
@@ -229,7 +237,7 @@ impl Palette {
             border_strong: border.lerp(text, 0.28),
             text,
             text_muted,
-            text_faint: text_muted.lerp(panel, 0.42),
+            text_faint,
             text_on_accent: on(accent),
             text_on_danger: on(danger),
             accent,
@@ -291,6 +299,13 @@ impl Palette {
                 self.text_muted.contrast(surface),
                 SECONDARY_CONTRAST,
             );
+            if label != "hover" && label != "selection" {
+                require(
+                    format!("faint text on {label}"),
+                    self.text_faint.contrast(surface),
+                    SECONDARY_CONTRAST,
+                );
+            }
         }
         for (label, color) in [
             ("accent", self.accent),
@@ -432,7 +447,7 @@ fn emergency() -> Palette {
         border_strong: Rgb::new(102, 108, 122),
         text: Rgb::new(233, 237, 245),
         text_muted: Rgb::new(152, 163, 184),
-        text_faint: Rgb::new(95, 103, 120),
+        text_faint: Rgb::new(126, 135, 153),
         text_on_accent: Rgb::new(16, 16, 20),
         text_on_danger: Rgb::new(16, 16, 20),
         accent,

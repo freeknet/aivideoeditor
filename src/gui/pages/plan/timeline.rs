@@ -66,8 +66,9 @@ const CLIP_RADIUS: u8 = 4;
 const NAME_AT: Vec2 = Vec2::new(6.0, 4.0);
 /// A clip's name: Mona Sans 11 px.
 const NAME_SIZE: f32 = 11.0;
-/// A clip's name: white at 70 %.
-const NAME_ALPHA: u8 = 179;
+/// The chip behind a clip's name: black at 70 %, so white text reads
+/// over any footage (a bright frame left a bare or shadowed name unreadable).
+const NAME_CHIP_ALPHA: u8 = 179;
 /// Room a clip's name needs beside its text: 6 px inset each side.
 const NAME_ROOM: f32 = 12.0;
 /// Below this width a clip is a sliver: no thumbnails, waveform or name.
@@ -415,7 +416,7 @@ pub(super) fn paint_clip_border(painter: &egui::Painter, block: Rect, label: Lab
     );
 }
 
-/// A clip's name at its top-left, 11 px white at 70 % over a soft shadow,
+/// A clip's name at its top-left, 11 px white on a dark chip,
 /// clipped to the clip; `left` is where the visible part starts.
 ///
 /// The name is drawn only when it fits: the visible part of the clip must
@@ -447,20 +448,15 @@ pub(super) fn paint_name(
     };
     let clip = painter.with_clip_rect(area.intersect(painter.clip_rect()));
     let at = pos2(area.left() + NAME_AT.x, block.top() + NAME_AT.y);
-    clip.text(
-        at + vec2(0.0, 1.0),
-        Align2::LEFT_TOP,
-        shown,
-        font.clone(),
-        Color32::from_black_alpha(217),
+    let galley = painter.layout_no_wrap(shown.to_owned(), font, Color32::WHITE);
+    let pad = vec2(3.0, 1.0);
+    let chip = Rect::from_min_size(at - pad, galley.size() + pad * 2.0);
+    clip.rect_filled(
+        chip,
+        CornerRadius::same(theme::RADIUS_XS),
+        Color32::from_black_alpha(NAME_CHIP_ALPHA),
     );
-    clip.text(
-        at,
-        Align2::LEFT_TOP,
-        shown,
-        font,
-        Color32::from_white_alpha(NAME_ALPHA),
-    );
+    clip.galley(at, galley, Color32::WHITE);
 }
 
 /// Whether a name `text_w` wide fits a clip whose visible part is

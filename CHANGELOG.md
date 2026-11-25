@@ -360,6 +360,9 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Hard-to-read text: the faint grey used for times, hints and steps not yet reached
+  now reads at 4.5:1 or better on every card (the theme check enforces it), and clip
+  names on the timeline sit on a dark chip instead of straight over the footage.
 - Analysing footage in the app no longer opens a console window for every ffmpeg run.
   Every ffmpeg, ffprobe and llama-server the app starts now runs without one.
 - One deliverable that could not be drafted (too little footage for a 60 s or 180 s
