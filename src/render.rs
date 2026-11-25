@@ -4,7 +4,7 @@
 //               frame-exact trims on the beat grid, crop, per-shot exposure
 //               match, denoise, end card, straight music trim.
 //
-// Dependencies: crate::plan, crate::index, crate::beats, crate::media
+// Dependencies: rayon; crate::plan, crate::index, crate::beats, crate::media
 // ============================================================================
 
 //! Rendering.
@@ -13,6 +13,9 @@
 //! count, with boundaries computed from the cumulative beat times so the
 //! cuts never drift off the music. The music is a straight trim from the
 //! start bar: no speed change, no fades, no compression, no gain.
+//!
+//! It runs in two stages: each shot conformed on its own into a part, then
+//! the parts joined and finished, so memory stays flat with the shot count.
 //! A plan with no music (an empty `music`) keeps each shot's own sound
 //! instead, cut to its frames, with silence for a clip that has none.
 //!
@@ -26,7 +29,8 @@
 //! cut ahead of the beat (`cut_lead_frames = 1`). No zoom, no speed change:
 //! what the camera shot is what plays.
 //!
-//! The encoder is AMD AMF (`h264_amf`) when `--encoder amf`, else x264.
+//! The encoder is x264, or NVIDIA NVENC (`h264_nvenc`, `--encoder nvenc`) or AMD
+//! AMF (`h264_amf`, `--encoder amf`) on the graphics card.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -45,6 +49,8 @@ pub(crate) enum Encoder {
     X264,
     /// AMD AMF on the GPU.
     Amf,
+    /// NVIDIA NVENC on the GPU: several times faster than x264 slow.
+    Nvenc,
 }
 
 /// Samples of `clip` between `t0` and `t1`.
@@ -130,13 +136,48 @@ fn colour_gains(shot: [f32; 3], reference: [f32; 3]) -> [f32; 3] {
 /// a mono one and the silence for a clip without any concatenate cleanly.
 const AUDIO_FORMAT: &str = "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo";
 
-/// Builds the filter graph and input list; returns (args, graph, seconds).
-fn build(
-    plan: &Plan,
-    index: &Index,
-    map: &MusicMap,
-    fps: (u32, u32),
-) -> Result<(Vec<String>, String, f64)> {
+/// One shot of a render: its input arguments (a trimmed source), its video
+/// chain (from the input's video to the conformed frames) and its sound.
+struct ShotPart {
+    /// `-ss … -t … -i <clip>`.
+    input: Vec<String>,
+    /// The video filters, input label and output label left off.
+    video: String,
+    /// With no music: the shot's own sound or, for a clip without any, a
+    /// silence source. `None` with music.
+    audio: Option<Sound>,
+}
+
+/// A shot's sound when the cut has no music.
+enum Sound {
+    /// Filters applied to the input's audio.
+    Own(String),
+    /// A complete silent source of the shot's length.
+    Silence(String),
+}
+
+/// What a render is made of: the shots, the end card, the music.
+struct Parts {
+    /// Every shot, in order.
+    shots: Vec<ShotPart>,
+    /// The end card: input arguments and filters, when it shows.
+    card: Option<(Vec<String>, String)>,
+    /// The music's input arguments, when the cut has music.
+    music: Option<Vec<String>>,
+    /// The cut's length, seconds.
+    total: f64,
+}
+
+/// Shots conformed at once in a render's first stage: each holds one
+/// source decoder (about 400 MB for 4K HEVC), so three stay near 1.5 GB and
+/// keep the cores busy.
+const PARALLEL_SHOTS: usize = 3;
+
+/// The finishing filters applied to the joined shots.
+const FINISH: &str = "unsharp=5:5:0.4:5:5:0,vignette=angle=PI/7";
+
+/// Works out every shot's input and filters, the end card and the music.
+fn parts(plan: &Plan, index: &Index, map: &MusicMap, fps: (u32, u32)) -> Result<Parts> {
     let rate = f64::from(fps.0) / f64::from(fps.1);
     let frames = |sec: f64| (sec * rate).round() as i64;
     let timing = plan.timing(map);
@@ -144,11 +185,6 @@ fn build(
     let (card_t, end_t) = plan.card_span(map);
     let (card_t, end_t) = (f64::from(card_t), f64::from(end_t));
     let (ow, oh) = plan.aspect.size();
-    let mut args: Vec<String> = Vec::new();
-    let mut graph = String::new();
-    let mut labels = String::new();
-    let mut audio = String::new();
-    let mut audio_labels = String::new();
 
     // Cut boundaries in output frames. With a cut lead, every cut after the
     // first (the end card's included) comes that many frames early, and
@@ -174,6 +210,7 @@ fn build(
         beat += shot.beats;
     }
 
+    let mut shots = Vec::new();
     for (i, shot) in plan.shots.iter().enumerate() {
         let clip = index
             .clip(&shot.clip)
@@ -185,33 +222,30 @@ fn build(
         let dur = n as f64 / rate;
         // With no music, the shot keeps its own sound, cut to its frames
         // (silence for a clip recorded without any).
-        if plan.music.is_empty() {
+        let audio = plan.music.is_empty().then(|| {
             if clip.probe.has_audio {
-                let _ = write!(
-                    audio,
-                    "[{i}:a]atrim=end={dur:.6},asetpts=PTS-STARTPTS,{AUDIO_FORMAT}[a{i}];"
-                );
+                Sound::Own(format!(
+                    "atrim=end={dur:.6},asetpts=PTS-STARTPTS,{AUDIO_FORMAT}"
+                ))
             } else {
-                let _ = write!(
-                    audio,
-                    "anullsrc=r=48000:cl=stereo,atrim=end={dur:.6},{AUDIO_FORMAT}[a{i}];"
-                );
+                Sound::Silence(format!(
+                    "anullsrc=r=48000:cl=stereo,atrim=end={dur:.6},{AUDIO_FORMAT}"
+                ))
             }
-            let _ = write!(audio_labels, "[a{i}]");
-        }
+        });
         let t_in = if i == 0 {
             f64::from(shot.t_in)
         } else {
             (f64::from(shot.t_in) - lead as f64 / rate).max(0.0)
         };
-        args.extend([
+        let input = vec![
             "-ss".into(),
             format!("{t_in:.3}"),
             "-t".into(),
             format!("{:.3}", dur + 0.5),
             "-i".into(),
             clip.path.clone(),
-        ]);
+        ];
         let (sw, sh) = (clip.probe.width.max(2), clip.probe.height.max(2));
         let crop = match plan.aspect {
             Aspect::Wide => String::new(),
@@ -241,85 +275,265 @@ fn build(
                 g[0], g[1], g[2]
             )
         });
-        let _ = write!(
-            graph,
-            "[{i}:v]fps={}/{},trim=end_frame={n},setpts=PTS-STARTPTS,{crop}hqdn3d=2:1.5:4:4,\
-             colorlevels=rimax={white:.3}:gimax={white:.3}:bimax={white:.3},{mixer}eq=gamma={gamma:.3}:saturation=1.15:contrast=1.04,\
-             scale={ow}:{oh}:flags=lanczos,setsar=1,format=yuv420p[v{i}];",
+        let video = format!(
+            // Scaled to the output first: denoise and grade at 1080p, not on
+            // the 4K source (four times the pixels for the same picture).
+            "fps={}/{},trim=end_frame={n},setpts=PTS-STARTPTS,{crop}scale={ow}:{oh}:flags=lanczos,setsar=1,\
+             hqdn3d=2:1.5:4:4,colorlevels=rimax={white:.3}:gimax={white:.3}:bimax={white:.3},{mixer}eq=gamma={gamma:.3}:saturation=1.15:contrast=1.04,\
+             format=yuv420p",
             fps.0, fps.1
         );
-        let _ = write!(labels, "[v{i}]");
+        shots.push(ShotPart {
+            input,
+            video,
+            audio,
+        });
     }
-    let n_shots = plan.shots.len();
-    let _ = write!(
-        graph,
-        "{labels}concat=n={n_shots}:v=1:a=0,unsharp=5:5:0.4:5:5:0,vignette=angle=PI/7[cut];"
-    );
 
+    let n_shots = plan.shots.len();
     let card_frames = frames(end_t) - bounds[n_shots];
-    let mut parts = 1;
-    if card_frames > 0 && !plan.end_card.is_empty() {
-        args.extend([
-            "-loop".into(),
-            "1".into(),
-            "-framerate".into(),
-            format!("{}/{}", fps.0, fps.1),
+    let card = (card_frames > 0 && !plan.end_card.is_empty()).then(|| {
+        (
+            vec![
+                "-loop".into(),
+                "1".into(),
+                "-framerate".into(),
+                format!("{}/{}", fps.0, fps.1),
+                "-i".into(),
+                plan.end_card.clone(),
+            ],
+            format!(
+                "scale={ow}:{oh}:flags=lanczos,trim=end_frame={card_frames},setpts=PTS-STARTPTS,setsar=1,format=yuv420p"
+            ),
+        )
+    });
+    let total = frames(if card.is_some() { end_t } else { card_t }) as f64 / rate;
+    let music = (!plan.music.is_empty()).then(|| {
+        vec![
+            "-ss".into(),
+            format!("{origin:.3}"),
+            "-t".into(),
+            format!("{total:.3}"),
             "-i".into(),
-            plan.end_card.clone(),
-        ]);
-        let _ = write!(
-            graph,
-            "[{n_shots}:v]scale={ow}:{oh}:flags=lanczos,trim=end_frame={card_frames},setpts=PTS-STARTPTS,setsar=1,format=yuv420p[card];\
-             [cut][card]concat=n=2:v=1:a=0[v]"
-        );
-        parts += 1;
-    } else {
-        graph.push_str("[cut]null[v]");
+            plan.music.clone(),
+        ]
+    });
+    Ok(Parts {
+        shots,
+        card,
+        music,
+        total,
+    })
+}
+
+/// Builds the whole render as one filter graph over every shot as an input;
+/// returns (args, graph, seconds). What [`render`] runs in two stages, as
+/// one graph to read and test.
+#[cfg(test)]
+fn build(
+    plan: &Plan,
+    index: &Index,
+    map: &MusicMap,
+    fps: (u32, u32),
+) -> Result<(Vec<String>, String, f64)> {
+    let p = parts(plan, index, map, fps)?;
+    let mut args: Vec<String> = Vec::new();
+    let mut graph = String::new();
+    let mut labels = String::new();
+    let mut audio = String::new();
+    let mut audio_labels = String::new();
+    for (i, shot) in p.shots.iter().enumerate() {
+        args.extend(shot.input.iter().cloned());
+        let _ = write!(graph, "[{i}:v]{}[v{i}];", shot.video);
+        let _ = write!(labels, "[v{i}]");
+        match &shot.audio {
+            Some(Sound::Own(f)) => {
+                let _ = write!(audio, "[{i}:a]{f}[a{i}];");
+                let _ = write!(audio_labels, "[a{i}]");
+            }
+            Some(Sound::Silence(f)) => {
+                let _ = write!(audio, "{f}[a{i}];");
+                let _ = write!(audio_labels, "[a{i}]");
+            }
+            None => {}
+        }
     }
-    let total = frames(if parts == 2 { end_t } else { card_t }) as f64 / rate;
-    if plan.music.is_empty() {
-        // The shots' own sound, then silence under the end card.
-        let _ = write!(
-            graph,
-            ";{audio}{audio_labels}concat=n={n_shots}:v=0:a=1,apad,atrim=end={total:.6}[a]"
-        );
-        return Ok((args, graph, total));
+    let n_shots = p.shots.len();
+    let _ = write!(graph, "{labels}concat=n={n_shots}:v=1:a=0,{FINISH}[cut];");
+    match &p.card {
+        Some((input, chain)) => {
+            args.extend(input.iter().cloned());
+            let _ = write!(
+                graph,
+                "[{n_shots}:v]{chain}[card];[cut][card]concat=n=2:v=1:a=0[v]"
+            );
+        }
+        None => graph.push_str("[cut]null[v]"),
     }
-    args.extend([
-        "-ss".into(),
-        format!("{origin:.3}"),
-        "-t".into(),
-        format!("{total:.3}"),
-        "-i".into(),
-        plan.music.clone(),
-    ]);
+    let total = p.total;
+    match &p.music {
+        None => {
+            // The shots' own sound, then silence under the end card.
+            let _ = write!(
+                graph,
+                ";{audio}{audio_labels}concat=n={n_shots}:v=0:a=1,apad,atrim=end={total:.6}[a]"
+            );
+        }
+        Some(input) => args.extend(input.iter().cloned()),
+    }
     Ok((args, graph, total))
 }
 
-/// Renders `plan` to `out`.
+/// Runs one ffmpeg; a failure names `what`.
+fn run_ffmpeg(cmd: &mut std::process::Command, what: &str) -> Result<()> {
+    let status = cmd
+        .status()
+        .with_context(|| format!("running ffmpeg for {what}"))?;
+    if !status.success() {
+        bail!("ffmpeg failed on {what}");
+    }
+    Ok(())
+}
+
+/// A path as a line of an ffmpeg concat list.
+fn concat_line(path: &Path) -> String {
+    let text = path.display().to_string().replace('\\', "/");
+    format!("file '{}'\n", text.replace('\'', "'\\''"))
+}
+
+/// Renders `plan` to `out`, in two stages so memory stays flat however many
+/// shots there are: each shot is conformed on its own (one source decoder
+/// open at a time) into a near-lossless part, then the parts are joined
+/// with the concat demuxer (one input) and finished, with the end card and
+/// the music or the shots' own sound. One graph over every shot as an input
+/// held a 4K HEVC decoder per shot at once: 12 GB for a 69-shot cut.
 pub(crate) fn render(
     plan: &Plan,
     index: &Index,
     map: &MusicMap,
     out: &Path,
     encoder: Encoder,
+    progress: &crate::commands::Progress,
 ) -> Result<f64> {
     let first = plan.shots.first().context("the plan has no shots")?;
     let fps = index
         .clip(&first.clip)
         .map_or((24000, 1001), |c| (c.probe.fps[0], c.probe.fps[1].max(1)));
-    let (inputs, graph, total) = build(plan, index, map, fps)?;
+    let p = parts(plan, index, map, fps)?;
     if let Some(dir) = out.parent() {
         std::fs::create_dir_all(dir)?;
     }
+    let work = out.with_extension("parts");
+    std::fs::create_dir_all(&work)?;
+    let rate = format!("{}/{}", fps.0, fps.1);
+
+    // Stage 1: every shot on its own, a few at a time (each a source
+    // decoder; [`PARALLEL_SHOTS`] of them stay well inside memory).
+    let total_shots = p.shots.len();
+    let gpu_decode = std::sync::atomic::AtomicBool::new(true);
+    let done = std::sync::atomic::AtomicUsize::new(0);
+    let began = std::time::Instant::now();
+    let one = |(i, shot): (usize, &ShotPart)| -> Result<PathBuf> {
+        progress.check()?;
+        let part = work.join(format!("{i:04}.mkv"));
+        let mut graph = format!("[0:v]{}[v]", shot.video);
+        let mut maps = vec!["-map", "[v]"];
+        match &shot.audio {
+            Some(Sound::Own(f)) => {
+                let _ = write!(graph, ";[0:a]{f}[a]");
+                maps.extend(["-map", "[a]"]);
+            }
+            Some(Sound::Silence(f)) => {
+                let _ = write!(graph, ";{f}[a]");
+                maps.extend(["-map", "[a]"]);
+            }
+            None => {}
+        }
+        let conform = |gpu: bool| {
+            let mut cmd = crate::media::command("ffmpeg");
+            cmd.args(["-v", "error", "-nostdin", "-y"]);
+            if gpu {
+                cmd.args(["-hwaccel", "cuda"]);
+            }
+            cmd.args(&shot.input)
+                .arg("-filter_complex")
+                .arg(&graph)
+                .args(&maps)
+                .args(["-c:v", "libx264", "-preset", "veryfast", "-crf", "10"])
+                .args(["-r", &rate, "-pix_fmt", "yuv420p", "-c:a", "pcm_s16le"])
+                .arg(&part);
+            run_ffmpeg(&mut cmd, &format!("shot {}", i + 1))
+        };
+        // The source decoded on the graphics card when it can (4K HEVC in
+        // about two thirds of the time); a failure there retries on the
+        // CPU, and the rest of the render stays on it.
+        let gpu = gpu_decode.load(std::sync::atomic::Ordering::Relaxed);
+        if !gpu || conform(true).is_err() {
+            if gpu {
+                gpu_decode.store(false, std::sync::atomic::Ordering::Relaxed);
+                log::info!("decoding on the GPU failed; the render goes on decoding on the CPU");
+            }
+            conform(false)?;
+        }
+        let n = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        let per = began.elapsed().as_secs_f32() / n as f32;
+        progress.report(
+            &crate::commands::Report::item(
+                "render",
+                n,
+                total_shots,
+                format!("shot {}", i + 1),
+                crate::commands::ItemState::Done,
+            )
+            .remaining(Some(per * total_shots.saturating_sub(n) as f32)),
+        );
+        Ok(part)
+    };
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(PARALLEL_SHOTS)
+        .build()?;
+    let made: Vec<Result<PathBuf>> = pool.install(|| {
+        use rayon::prelude::*;
+        p.shots.par_iter().enumerate().map(one).collect()
+    });
+    let mut list = String::new();
+    for part in made {
+        list.push_str(&concat_line(&part?));
+    }
+    let list_file = work.join("parts.txt");
+    std::fs::write(&list_file, &list)?;
+
+    progress.stage("render", "joining the shots and encoding");
+    // Stage 2: join, finish, card, sound.
+    let mut args: Vec<String> = vec![
+        "-f".into(),
+        "concat".into(),
+        "-safe".into(),
+        "0".into(),
+        "-i".into(),
+        list_file.display().to_string(),
+    ];
+    let mut graph = format!("[0:v]{FINISH}[cut];");
+    match &p.card {
+        Some((input, chain)) => {
+            args.extend(input.iter().cloned());
+            let _ = write!(graph, "[1:v]{chain}[card];[cut][card]concat=n=2:v=1:a=0[v]");
+        }
+        None => graph.push_str("[cut]null[v]"),
+    }
+    let total = p.total;
+    let audio_map = match &p.music {
+        None => {
+            let _ = write!(graph, ";[0:a]apad,atrim=end={total:.6}[a]");
+            "[a]".to_owned()
+        }
+        Some(input) => {
+            args.extend(input.iter().cloned());
+            format!("{}:a", args.iter().filter(|a| *a == "-i").count() - 1)
+        }
+    };
     let script = out.with_extension("filter.txt");
     std::fs::write(&script, &graph)?;
-    // The music is the last input; with no music the graph builds `[a]`.
-    let audio_map = if plan.music.is_empty() {
-        "[a]".to_owned()
-    } else {
-        format!("{}:a", inputs.iter().filter(|a| *a == "-i").count() - 1)
-    };
     let codec: Vec<&str> = match encoder {
         Encoder::X264 => vec![
             "-c:v", "libx264", "-preset", "slow", "-crf", "18", "-tune", "film",
@@ -327,15 +541,29 @@ pub(crate) fn render(
         Encoder::Amf => vec![
             "-c:v", "h264_amf", "-quality", "quality", "-rc", "cqp", "-qp_i", "18", "-qp_p", "20",
         ],
+        Encoder::Nvenc => vec![
+            "-c:v",
+            "h264_nvenc",
+            "-preset",
+            "p6",
+            "-tune",
+            "hq",
+            "-rc",
+            "vbr",
+            "-cq",
+            "19",
+            "-b:v",
+            "0",
+        ],
     };
     let mut cmd = crate::media::command("ffmpeg");
     cmd.args(["-v", "error", "-nostdin", "-y"])
-        .args(&inputs)
+        .args(&args)
         .arg("-/filter_complex")
         .arg(&script)
         .args(["-map", "[v]", "-map", &audio_map])
         .args(&codec)
-        .args(["-r", &format!("{}/{}", fps.0, fps.1), "-pix_fmt", "yuv420p"])
+        .args(["-r", &rate, "-pix_fmt", "yuv420p"])
         .args([
             "-color_primaries",
             "bt709",
@@ -355,19 +583,16 @@ pub(crate) fn render(
             "+faststart",
         ])
         .arg(out);
-    let status = cmd.status().context("running ffmpeg")?;
-    if !status.success() {
-        bail!(
-            "ffmpeg failed rendering {} (filter graph in {})",
-            out.display(),
-            script.display()
-        );
-    }
+    run_ffmpeg(
+        &mut cmd,
+        &format!("{} (filter graph in {})", out.display(), script.display()),
+    )?;
+    let _ = std::fs::remove_dir_all(&work);
     Ok(total)
 }
 
 /// Writes a 720p preview of `video` next to it and returns its path.
-pub(crate) fn preview(video: &Path, aspect: Aspect) -> Result<PathBuf> {
+pub(crate) fn preview(video: &Path, aspect: Aspect, encoder: Encoder) -> Result<PathBuf> {
     let stem = video
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
@@ -380,20 +605,14 @@ pub(crate) fn preview(video: &Path, aspect: Aspect) -> Result<PathBuf> {
     let status = crate::media::command("ffmpeg")
         .args(["-v", "error", "-nostdin", "-y", "-i"])
         .arg(video)
-        .args([
-            "-vf",
-            scale,
-            "-c:v",
-            "libx264",
-            "-crf",
-            "21",
-            "-preset",
-            "medium",
-            "-c:a",
-            "copy",
-            "-movflags",
-            "+faststart",
-        ])
+        .args(["-vf", scale])
+        // On the same encoder as the render: a GPU render previews on it too.
+        .args(match encoder {
+            Encoder::X264 => ["-c:v", "libx264", "-crf", "21", "-preset", "medium"],
+            Encoder::Nvenc => ["-c:v", "h264_nvenc", "-cq", "23", "-preset", "p5"],
+            Encoder::Amf => ["-c:v", "h264_amf", "-rc", "cqp", "-qp_i", "23"],
+        })
+        .args(["-c:a", "copy", "-movflags", "+faststart"])
         .arg(&out)
         .status()?;
     if !status.success() {

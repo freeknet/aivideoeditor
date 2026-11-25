@@ -60,17 +60,20 @@ pub(crate) enum EncoderChoice {
     X264,
     /// AMD AMF on the GPU.
     Amf,
+    /// NVIDIA NVENC on the GPU.
+    Nvenc,
 }
 
 impl EncoderChoice {
     /// Every choice, in the order a picker shows them.
-    pub(crate) const ALL: [Self; 2] = [Self::X264, Self::Amf];
+    pub(crate) const ALL: [Self; 3] = [Self::X264, Self::Nvenc, Self::Amf];
 
     /// The render encoder this choice selects.
     pub(crate) fn encoder(self) -> crate::render::Encoder {
         match self {
             Self::X264 => crate::render::Encoder::X264,
             Self::Amf => crate::render::Encoder::Amf,
+            Self::Nvenc => crate::render::Encoder::Nvenc,
         }
     }
 
@@ -79,6 +82,7 @@ impl EncoderChoice {
         match self {
             Self::X264 => "x264 (CPU)",
             Self::Amf => "AMF (AMD GPU)",
+            Self::Nvenc => "NVENC (NVIDIA GPU)",
         }
     }
 }
@@ -675,7 +679,7 @@ pub(crate) fn parse(text: &str) -> (Recipe, Vec<String>) {
         .filter(|s| !s.trim().is_empty());
     let encoder = match field("encoder") {
         Some(v) => v.try_into::<EncoderChoice>().unwrap_or_else(|_| {
-            warnings.push("recipe: encoder must be \"x264\" or \"amf\"".to_owned());
+            warnings.push("recipe: encoder must be \"x264\", \"nvenc\" or \"amf\"".to_owned());
             defaults.encoder
         }),
         None => defaults.encoder,
@@ -1090,7 +1094,7 @@ person_gap = \"lots\"
     fn one_bad_deliverable_costs_only_that_row() {
         let text = r#"
             filename = "{id}.mp4"
-            encoder = "nvenc"
+            encoder = "quicksync"
             [[deliverable]]
             id = "reel-30"
             aspect = "9x16"

@@ -767,10 +767,10 @@ fn run(command: Cmd, out: &mut impl Write, progress: &Progress) -> anyhow::Resul
             let video = work.join("renders").join(format!("{}.mp4", plan.name));
             progress.check()?;
             progress.stage("render", format!("encoding {}", plan.name));
-            let secs = crate::render::render(&plan, &index, &map, &video, encoder)?;
+            let secs = crate::render::render(&plan, &index, &map, &video, encoder, progress)?;
             progress.check()?;
             progress.stage("render", "writing the 720p preview");
-            let small = crate::render::preview(&video, plan.aspect)?;
+            let small = crate::render::preview(&video, plan.aspect, encoder)?;
             progress.stage("render", "done");
             writeln!(
                 out,

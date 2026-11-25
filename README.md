@@ -263,7 +263,7 @@ ave proxy --work <work>                  # playback copies of 4K/HEVC clips, so 
 ave people --work <work>                 # draft people.toml (who is in which clip)
 ave plan reel-30 --work <work> --aspect 9x16 --seconds 30 --end-card card.png
 ave check  <work>/plans/reel-30.toml --work <work>
-ave render <work>/plans/reel-30.toml --work <work>      # mp4 + 720p preview
+ave render <work>/plans/reel-30.toml --work <work>      # mp4 + 720p preview (--encoder nvenc or amf: on the GPU)
 ave otio   <work>/plans/reel-30.toml --work <work>      # timeline for Resolve / Kdenlive
 ave --open <footage-dir or work>        # open the app on a project
 ```
@@ -276,7 +276,7 @@ ave --open <footage-dir or work>        # open the app on a project
 | `people` | `people.toml` draft | groups clips whose performer descriptions share identifying words |
 | `plan` | `plans/<name>.toml` | beat grid (breakdown → build 2+1+1 → hero on the drop → 2-beat cuts, 1-beat stutters → fire finale → end card), filled most-important-slot first under the rules; with no drop detected, the biggest rise stands in |
 | `check` | pass / list of problems | no repeated stretch of a clip (30 s), no performer within 8 shots, no rejected flags or captions, drop on fire, crop inside frame, action fits the crop |
-| `render` | `renders/<name>.mp4` + `-720p.mp4` | one ffmpeg graph: frame-exact trims on the beat grid, crop, per-shot exposure match, light denoise, end card, straight music trim (no fades, no gain) |
+| `render` | `renders/<name>.mp4` + `-720p.mp4` | each shot conformed on its own, three at a time (frame-exact trim on the beat grid, crop, scale, light denoise, per-shot exposure and colour match), then joined, sharpened and finished with the end card and a straight music trim (no fades, no gain) or the clips' own sound; x264, NVENC or AMF |
 | `otio` | `renders/<name>.otio` | OpenTimelineIO JSON: source clips at frame accuracy, end card, music, a marker on the drop |
 
 A plan is a TOML storyboard: every shot carries a `note` saying why it is

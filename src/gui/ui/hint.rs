@@ -160,6 +160,7 @@ pub fn describe(label: &str) -> Option<&'static str> {
         "Back to the template's rules" => "Put every drafting rule back to what the template sets",
         "x264 (CPU)" => "Encode on the processor: slower, the most compatible",
         "AMF (AMD GPU)" => "Encode on an AMD graphics card: faster",
+        "NVENC (NVIDIA GPU)" => "Encode on an NVIDIA graphics card: several times faster",
         "Any shot" => "Any shot may land on the drop",
         "Fire" => "The drop must land on a fire shot",
         "LED" => "The drop must land on an LED shot",

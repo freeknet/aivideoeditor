@@ -57,6 +57,8 @@ const COMPARE: &str = "plan-compare";
 const SHOT_LIST: &str = "plan-shot-list";
 /// The shot of the timeline's markers: pins on the ruler and the list.
 const MARKERS: &str = "plan-markers";
+/// Two shots flagged into the chat.
+const FLAGGED: &str = "plan-flagged";
 
 /// The shot of the Shots browser grouped by act.
 const ACTS: &str = "review-acts";
@@ -371,6 +373,36 @@ fn main() -> anyhow::Result<()> {
             Vec::new(),
         ));
         shots.push((MARKERS.to_owned(), vec![Action::Go(Page::Plan)], Vec::new()));
+        // Two shots of the first cut pointed at in the chat: their @ flags on
+        // the timeline, the message's references and the inspector's summary.
+        let first_plan = night.as_ref().and_then(|n| {
+            let mut names: Vec<String> = std::fs::read_dir(n.join("plans"))
+                .ok()?
+                .flatten()
+                .filter_map(|e| {
+                    let p = e.path();
+                    (p.extension()? == "toml")
+                        .then(|| p.file_stem().map(|s| s.to_string_lossy().into_owned()))?
+                })
+                .collect();
+            names.sort();
+            names.into_iter().next()
+        });
+        if let Some(plan) = first_plan {
+            let shot = |index: usize| {
+                Action::AddRef(aivideoeditor::refs::Reference::new(
+                    aivideoeditor::refs::Target::Shot {
+                        plan: plan.clone(),
+                        index,
+                    },
+                ))
+            };
+            shots.push((
+                FLAGGED.to_owned(),
+                vec![Action::Go(Page::Plan), shot(2), shot(5)],
+                Vec::new(),
+            ));
+        }
         shots.push((
             ACTS.to_owned(),
             vec![Action::Go(Page::Review)],

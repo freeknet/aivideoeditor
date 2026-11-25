@@ -12,6 +12,8 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- NVENC (NVIDIA GPU) is an encoder choice for renders, beside x264 and AMF, and the 720p
+  preview is made on the same encoder as the render.
 - With nothing selected, the Inspector shows the open cut: shape, length and shot count,
   the shots the chat message points at (with *Clear them*), and the rules it keeps, saying
   when the drafter loosened the project's to fit the footage.
@@ -419,6 +421,13 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Rendering a long cut of 4K footage needed about 12 GB of memory (one 4K decoder per shot,
+  all open at once) and took 19 minutes for a 3-minute, 69-shot cut. Renders now run in two
+  stages: each shot is conformed on its own, three at a time, into a near-lossless part
+  (scaled to the output before denoising and grading, and decoded on an NVIDIA GPU when
+  there is one), then the parts are joined, finished and encoded. That cut now renders in
+  about 6 minutes with memory near 3 GB, the render reports its progress shot by shot (with
+  time left), and it can be cancelled between shots.
 - Closing the app (or a crash, or Ctrl+C on a command) left its ffmpeg processes running,
   still decoding 4K for nobody. The app now runs in a Windows job object that ends every
   process it started when it ends.
