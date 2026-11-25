@@ -191,7 +191,7 @@ fn pane(
         width - room,
     );
     let caption = s.caption.as_ref().map_or_else(
-        || format!("{} · {}", s.subject, s.seg.camera.label()),
+        || super::kind_line(paint.night, s),
         |c| c.summary.clone(),
     );
     ui.add(
