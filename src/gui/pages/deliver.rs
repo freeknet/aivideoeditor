@@ -709,7 +709,7 @@ fn options(ctx: &PageCtx<'_>, state: &mut State, ui: &mut egui::Ui, out: &Path) 
             }
             ui.add_space(theme::SPACE_XS);
             let width = ui.available_width();
-            parts::path_box(ui, theme, icons::FOLDER, Some(out), "", width);
+            parts::output_box(ui, theme, out, width);
         });
     });
     row(ui, "Encoder", &mut |ui| {

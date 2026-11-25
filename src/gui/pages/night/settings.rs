@@ -596,7 +596,7 @@ fn recipe_table(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
                 }
                 ui.add_space(theme::SPACE_XS);
                 let width = ui.available_width();
-                parts::path_box(ui, theme, icons::FOLDER, Some(&out), "", width);
+                parts::output_box(ui, theme, &out, width);
             });
         });
         ui.add_space(theme::SPACE_XS + 2.0);

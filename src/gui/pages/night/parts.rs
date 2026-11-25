@@ -152,6 +152,33 @@ pub(crate) fn path_box(
     placeholder: &str,
     width: f32,
 ) -> Response {
+    path_box_as(ui, theme, glyph, path, placeholder, width, false)
+}
+
+/// [`path_box`] for a folder the app makes itself (the output folder): not
+/// existing yet is normal, said plainly rather than in amber.
+pub(crate) fn output_box(ui: &mut Ui, theme: &Palette, path: &Path, width: f32) -> Response {
+    path_box_as(
+        ui,
+        theme,
+        crate::gui::ui::icons::FOLDER,
+        Some(path),
+        "",
+        width,
+        true,
+    )
+}
+
+/// [`path_box`], with `made_later` when a missing path is one a render makes.
+fn path_box_as(
+    ui: &mut Ui,
+    theme: &Palette,
+    glyph: char,
+    path: Option<&Path>,
+    placeholder: &str,
+    width: f32,
+    made_later: bool,
+) -> Response {
     let (rect, response) =
         ui.allocate_exact_size(Vec2::new(width, theme::CONTROL_HEIGHT), Sense::hover());
     let painter = ui.painter();
@@ -169,7 +196,8 @@ pub(crate) fn path_box(
         ),
         Vec2::splat(icons::SMALL),
     );
-    let missing = path.is_some_and(|p| !p.exists());
+    let absent = path.is_some_and(|p| !p.exists());
+    let missing = absent && !made_later;
     let ink = if missing {
         theme::rgb(theme.warning)
     } else {
@@ -183,6 +211,8 @@ pub(crate) fn path_box(
             let shown = p.display().to_string();
             let shown = if missing {
                 format!("{shown} (missing)")
+            } else if absent {
+                format!("{shown} (made by the first render)")
             } else {
                 shown
             };
