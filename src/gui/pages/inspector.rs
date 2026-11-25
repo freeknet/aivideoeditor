@@ -33,6 +33,7 @@
 //! open plan's shots in order under their song sections, each with its
 //! caption and note ([`shot_list`]).
 
+mod cut;
 mod details;
 mod rows;
 mod shot_list;
@@ -63,6 +64,8 @@ pub(crate) struct State {
     plans: usage::Plans,
     tab: Tab,
     shots: shot_list::State,
+    /// The open cut, for the summary shown with nothing selected.
+    cut: cut::Cache,
 }
 
 /// Draws the inspector into its panel.
@@ -100,6 +103,9 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
         return;
     }
     if ctx.selection.is_empty() {
+        if cut::draw(ctx, &mut state.cut, ui) {
+            return;
+        }
         widgets::empty_state(
             ui,
             ctx.theme,

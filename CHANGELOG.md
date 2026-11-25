@@ -12,6 +12,9 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- With nothing selected, the Inspector shows the open cut: shape, length and shot count,
+  the shots the chat message points at (with *Clear them*), and the rules it keeps, saying
+  when the drafter loosened the project's to fit the footage.
 - Pointing the chat at shots is in plain sight: selected timeline shots get an *Ask the
   chat* button (R) with *as…* (keep, avoid, replace, more like, feature) and *Comment*;
   every shot card in the browser shows an @ on hover that adds it to the message in one
