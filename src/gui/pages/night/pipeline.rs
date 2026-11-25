@@ -546,10 +546,16 @@ fn views(ctx: &PageCtx<'_>, state: &State, recipe: &Recipe) -> Vec<View> {
     // Index.
     let (standing, summary) = match (&p.index, f.videos) {
         (Some(i), videos) => {
-            let flagged = i.segments.iter().filter(|s| !s.flags.is_empty()).count();
+            // Segments the rules will avoid, not every note the analysis made.
+            let avoid = &recipe.rules.reject_flags;
+            let flagged = i
+                .segments
+                .iter()
+                .filter(|s| s.flags.iter().any(|f| avoid.contains(f)))
+                .count();
             let new = videos.filter(|v| *v > i.clips.len());
             let text = format!(
-                "{} clips · {} segments · {flagged} flagged",
+                "{} clips · {} segments · {flagged} to avoid",
                 i.clips.len(),
                 i.segments.len()
             );

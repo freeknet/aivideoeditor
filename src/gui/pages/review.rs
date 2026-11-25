@@ -524,7 +524,9 @@ fn body(
             return None;
         };
         let mut night = Night::new(index, &project.people, marks);
-        night.bars = search::Metric::bars(&crate::recipe::Recipe::cached(&project.work).metrics);
+        let recipe = crate::recipe::Recipe::cached(&project.work);
+        night.bars = search::Metric::bars(&recipe.metrics);
+        night.avoid = recipe.rules.reject_flags;
         refresh(state, &night, ctx.search);
         let query = Query::parse(ctx.search);
         opts_changed |= header(

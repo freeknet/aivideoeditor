@@ -394,6 +394,9 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- Warnings mean something: a shot card shows its warning only for a flag the rules avoid
+  (too dark, whip pan, out of focus by default), and the Index card counts the segments
+  to avoid rather than every note the analysis made (short, no action…).
 - The People tab with nobody named yet says where people come from (captions, then
   People) instead of "Nobody matches" with a *Clear search* button for a search that was
   never made; the Index card says how many clips still need playback copies in full.

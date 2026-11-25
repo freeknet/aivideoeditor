@@ -567,6 +567,8 @@ pub(crate) struct Night<'a> {
     sets: std::collections::HashMap<&'a str, usize>,
     /// The four measures the shot browser shows as bars (the recipe's).
     pub(crate) bars: [Metric; 4],
+    /// Flags the project's rules avoid: the ones worth a warning.
+    pub(crate) avoid: Vec<String>,
 }
 
 impl<'a> Night<'a> {
@@ -583,6 +585,7 @@ impl<'a> Night<'a> {
                 .flat_map(|set| set.clips.iter().map(move |c| (c.as_str(), set.n)))
                 .collect(),
             bars: Metric::bars(&[]),
+            avoid: crate::plan::Rules::default().reject_flags,
         }
     }
 

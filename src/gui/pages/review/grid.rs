@@ -441,7 +441,9 @@ fn badges(
         None,
         &super::duration(s.seg.end - s.seg.start),
     );
-    if !s.flags.is_empty() {
+    // A warning only for a flag the rules avoid (dark, shaky…), not every
+    // note the analysis made.
+    if s.flags.iter().any(|f| paint.night.avoid.contains(f)) {
         super::glass_badge(
             painter,
             theme,
