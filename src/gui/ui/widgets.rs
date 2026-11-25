@@ -1523,9 +1523,161 @@ pub fn bar_divider(ui: &mut Ui, theme: &Palette) {
         .vline(x, rect.y_range().shrink(SPACE_XS), theme::ink_line(theme));
 }
 
+/// The side of a [`checkbox`] box.
+pub const CHECKBOX_SIZE: f32 = 16.0;
+
+/// Paints a tick box into `rect`: ticked is the primary fill with a check in
+/// its text colour, unticked a 1.5 px outline in muted text (4.5:1 on any
+/// surface), and either is knocked back when `enabled` is false. One
+/// painter for every tick box, so a ticked box can never again read as an
+/// unticked one (egui's own drew a grey check on a grey box).
+pub fn paint_tick_box(
+    painter: &egui::Painter,
+    theme: &Palette,
+    rect: Rect,
+    on: bool,
+    enabled: bool,
+) {
+    let fade = |c: Color32| if enabled { c } else { c.gamma_multiply(0.45) };
+    let corners = CornerRadius::same(theme::RADIUS_XS + 2);
+    if on {
+        painter.rect_filled(rect, corners, fade(theme::rgb(theme::primary_fill(theme))));
+        icons::paint(
+            painter,
+            rect,
+            icons::CHECK,
+            rect.height() - 4.0,
+            fade(theme::primary_text(theme)),
+        );
+    } else {
+        painter.rect_stroke(
+            rect,
+            corners,
+            Stroke::new(1.5, fade(theme::rgb(theme.text_muted))),
+            egui::StrokeKind::Inside,
+        );
+    }
+}
+
+/// A checkbox with a label, a drop-in for `ui.checkbox` that is readable:
+/// see [`paint_tick_box`]. Clicking the box or the label toggles `on` and
+/// marks the response changed; `label` may be empty.
+pub fn checkbox(ui: &mut Ui, theme: &Palette, on: &mut bool, label: &str) -> Response {
+    let enabled = ui.is_enabled();
+    let galley = (!label.is_empty()).then(|| {
+        ui.painter().layout_no_wrap(
+            label.to_owned(),
+            theme::font(theme::BODY_SIZE),
+            theme::rgb(theme.text),
+        )
+    });
+    let text_w = galley.as_ref().map_or(0.0, |g| g.size().x + SPACE_SM);
+    let height = CHECKBOX_SIZE.max(galley.as_ref().map_or(0.0, |g| g.size().y));
+    let (rect, mut response) =
+        ui.allocate_exact_size(Vec2::new(CHECKBOX_SIZE + text_w, height), Sense::click());
+    if response.clicked() {
+        *on = !*on;
+        response.mark_changed();
+    }
+    let checked = *on;
+    response
+        .widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, enabled, checked, label));
+    let painter = ui.painter();
+    let tick = Rect::from_min_size(
+        egui::pos2(rect.left(), rect.center().y - CHECKBOX_SIZE / 2.0),
+        Vec2::splat(CHECKBOX_SIZE),
+    );
+    if response.hovered() && enabled {
+        painter.rect_filled(
+            tick.expand(2.0),
+            CornerRadius::same(theme::RADIUS),
+            theme::ink_hover(theme),
+        );
+    }
+    paint_tick_box(painter, theme, tick, checked, enabled);
+    if let Some(galley) = galley {
+        let ink = if enabled {
+            theme::rgb(theme.text)
+        } else {
+            theme::rgb(theme.text_faint)
+        };
+        painter.galley(
+            egui::pos2(
+                tick.right() + SPACE_SM,
+                rect.center().y - galley.size().y / 2.0,
+            ),
+            galley,
+            ink,
+        );
+    }
+    response
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tick_boxes_read_in_every_built_in_theme() -> anyhow::Result<()> {
+        for theme in crate::theme::Catalog::built_in().themes() {
+            // The check is painted in the panel colour on the primary fill.
+            let fill = theme::primary_fill(theme);
+            let tick = fill.contrast(theme.panel);
+            assert!(
+                tick >= crate::theme::SECONDARY_CONTRAST,
+                "{}: the tick is {tick:.2}:1 on its box",
+                theme.id
+            );
+            for surface in theme.surfaces() {
+                let outline = theme.text_muted.contrast(surface);
+                assert!(
+                    outline >= crate::theme::INDICATOR_CONTRAST,
+                    "{}: an unticked box is {outline:.2}:1 on its surface",
+                    theme.id
+                );
+                let filled = fill.contrast(surface);
+                assert!(
+                    filled >= crate::theme::INDICATOR_CONTRAST,
+                    "{}: a ticked box is {filled:.2}:1 on its surface",
+                    theme.id
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// egui's own checkbox paints a grey check on a grey box, so a ticked
+    /// box reads as unticked; every checkbox goes through [`checkbox`].
+    #[test]
+    fn no_screen_uses_egui_s_unreadable_checkbox() -> anyhow::Result<()> {
+        fn walk(dir: &std::path::Path, hits: &mut Vec<String>) -> anyhow::Result<()> {
+            for entry in std::fs::read_dir(dir)? {
+                let path = entry?.path();
+                if path.is_dir() {
+                    walk(&path, hits)?;
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let text = std::fs::read_to_string(&path)?;
+                    let banned = [concat!("ui.", "checkbox("), concat!("egui::", "Checkbox")];
+                    for (n, line) in text.lines().enumerate() {
+                        if banned.iter().any(|b| line.contains(b)) {
+                            hits.push(format!("{}:{}", path.display(), n + 1));
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
+        let mut hits = Vec::new();
+        walk(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &mut hits,
+        )?;
+        assert!(
+            hits.is_empty(),
+            "use widgets::checkbox instead at: {hits:?}"
+        );
+        Ok(())
+    }
 
     #[test]
     fn a_mention_keeps_the_reference_and_takes_the_intent() {

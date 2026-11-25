@@ -4038,7 +4038,7 @@ fn proposal_card(
                 card_rule(ui, theme);
                 ui.horizontal(|ui| {
                     if pending {
-                        ui.checkbox(&mut picked[k], "")
+                        widgets::checkbox(ui, theme, &mut picked[k], "")
                             .on_hover_text("Include this change");
                     }
                     ui.label(

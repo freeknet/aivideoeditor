@@ -926,7 +926,7 @@ fn deliverables_step(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui
             let mut on = !state.skip.contains(&d.id);
             ui.horizontal(|ui| {
                 ui.set_min_height(ROW);
-                if ui.checkbox(&mut on, &d.id).changed() {
+                if widgets::checkbox(ui, theme, &mut on, &d.id).changed() {
                     if on {
                         state.skip.remove(&d.id);
                     } else {
@@ -986,7 +986,7 @@ fn approve_step(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) -> 
                             egui::Layout::left_to_right(egui::Align::Center),
                             |ui| {
                                 ui.set_min_width(132.0);
-                                ui.checkbox(&mut on, row.title)
+                                widgets::checkbox(ui, theme, &mut on, row.title)
                             },
                         )
                         .inner

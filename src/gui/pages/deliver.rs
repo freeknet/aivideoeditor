@@ -599,27 +599,7 @@ fn cell_chip(ui: &mut egui::Ui, theme: &crate::theme::Palette, state: &mut State
         egui::pos2(x, rect.center().y - box_size / 2.0),
         egui::Vec2::splat(box_size),
     );
-    if on {
-        painter.rect_filled(
-            tick,
-            egui::CornerRadius::same(4),
-            theme::rgb(theme::primary_fill(theme)),
-        );
-        icons::paint(
-            painter,
-            tick,
-            icons::CHECK,
-            icons::SMALL - 3.0,
-            theme::primary_text(theme),
-        );
-    } else {
-        painter.rect_stroke(
-            tick,
-            egui::CornerRadius::same(4),
-            theme::input_line(theme),
-            egui::StrokeKind::Inside,
-        );
-    }
+    widgets::paint_tick_box(painter, theme, tick, on, true);
     x = tick.right() + gap;
     let name_w = name.size().x;
     painter.galley(

@@ -360,6 +360,9 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Checkboxes were hard to read: a ticked box in set-up drew a grey tick on a grey box
+  and looked unticked, and the export page's unticked box was a faint outline. Every
+  checkbox now ticks as a solid box with a dark tick and outlines clearly when empty.
 - A crash in the app no longer just closes the window: the error is shown in a dialog
   and saved to `crash.log` in the settings folder, so it can be reported.
 - Hard-to-read text: the faint grey used for times, hints and steps not yet reached
