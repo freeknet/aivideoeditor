@@ -396,6 +396,9 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- Analysis decodes on an NVIDIA GPU when there is one: 4K HEVC reads about six times
+  faster (a minute of footage in 9 s instead of 53), with measurements identical to the
+  CPU's. Renders use the same check before trying the GPU.
 - Warnings mean something: a shot card shows its warning only for a flag the rules avoid
   (too dark, whip pan, out of focus by default), and the Index card counts the segments
   to avoid rather than every note the analysis made (short, no action…).

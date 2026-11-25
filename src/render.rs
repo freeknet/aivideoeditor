@@ -430,7 +430,7 @@ pub(crate) fn render(
     // Stage 1: every shot on its own, a few at a time (each a source
     // decoder; [`PARALLEL_SHOTS`] of them stay well inside memory).
     let total_shots = p.shots.len();
-    let gpu_decode = std::sync::atomic::AtomicBool::new(true);
+    let gpu_decode = std::sync::atomic::AtomicBool::new(crate::media::gpu_decode());
     let done = std::sync::atomic::AtomicUsize::new(0);
     let began = std::time::Instant::now();
     let one = |(i, shot): (usize, &ShotPart)| -> Result<PathBuf> {
