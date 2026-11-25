@@ -196,6 +196,24 @@ fn card(
     let focused = paint.cursor == Some(s.id.as_str());
     let hovered = response.hovered();
     let mark = paint.night.marks.get(&s.id);
+    if hovered {
+        let flags = if s.flags.is_empty() {
+            String::new()
+        } else {
+            format!(" · flagged: {}", s.flags.join(", "))
+        };
+        crate::gui::ui::hint::set(
+            ui.ctx(),
+            &format!(
+                "{} · {:.1} s from {:.1} s · quality {:.2} (focus, exposure, steadiness){flags} · move across it to scrub, double-click to play, right-click for more",
+                s.id,
+                s.seg.end - s.seg.start,
+                s.seg.start,
+                s.q
+            ),
+            "",
+        );
+    }
     let painter = ui.painter_at(rect.expand(OUTLINE_ROOM + 2.0));
     let thumb = Rect::from_min_size(rect.min, vec2(rect.width(), thumb_h));
     let radius = CornerRadius::same(theme::RADIUS_XS);
