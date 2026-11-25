@@ -397,7 +397,7 @@ fn recipe_table(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
     let mut remove: Option<usize> = None;
     let recipe_view = loaded.recipe.clone();
     egui::Grid::new("night-recipe")
-        .num_columns(7)
+        .num_columns(8)
         .spacing([theme::SPACE_SM, theme::SPACE_XS + 2.0])
         .min_row_height(theme::CONTROL_HEIGHT)
         .show(ui, |ui| {
@@ -406,6 +406,7 @@ fn recipe_table(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
                 "Shape",
                 "Length",
                 "End card",
+                "Card holds",
                 "File name template",
                 "Delivers as",
                 "",
@@ -820,6 +821,16 @@ fn deliverable_row(
         })
         .response
         .accessible_name(format!("Deliverable {} end card", i + 1));
+    changed |= ui
+        .add(
+            egui::DragValue::new(&mut d.card_bars)
+                .range(0..=8)
+                .speed(0.05)
+                .suffix(" bars"),
+        )
+        .on_hover_text("How long the end card holds, in bars (two seconds each with no music)")
+        .accessible_name(format!("Deliverable {} card length", i + 1))
+        .changed();
     let mut template = d.filename.clone().unwrap_or_default();
     let response = ui
         .allocate_ui(egui::vec2(160.0, theme::CONTROL_HEIGHT), |ui| {

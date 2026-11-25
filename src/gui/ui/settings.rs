@@ -178,6 +178,22 @@ fn behaviour(app: &App, ui: &mut Ui, actions: &mut Vec<Action>) {
     if widgets::switch(ui, &app.theme, &mut reduce, "Reduce motion").changed() {
         actions.push(Action::ToggleMotion);
     }
+    ui.add_space(SPACE_SM);
+    ui.horizontal(|ui| {
+        let mut jobs = crate::gui::pages::night::pipeline::analysis_jobs();
+        if ui
+            .add(egui::DragValue::new(&mut jobs).range(1..=32).speed(0.05))
+            .accessible_name("Clips analysed at once")
+            .changed()
+        {
+            actions.push(Action::SetAnalysisJobs(jobs));
+        }
+        widgets::muted(
+            ui,
+            &app.theme,
+            "clips analysed at once (each runs its own ffmpeg; more is faster on a strong machine)",
+        );
+    });
     ui.add_space(super::theme::SPACE_MD);
     if let Some(path) = crate::config::config_path() {
         widgets::muted(

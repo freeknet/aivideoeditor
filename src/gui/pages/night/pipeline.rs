@@ -419,6 +419,9 @@ struct View {
     when: Option<SystemTime>,
     /// What its button does.
     run: Run,
+    /// A second, rarer action beside the button: its icon, its tooltip and
+    /// what it does (re-analyse everything, caption again).
+    more: Option<(char, &'static str, Run)>,
 }
 
 /// What a step's button does.
@@ -433,6 +436,24 @@ enum Run {
     None,
 }
 
+/// Clips analysis reads at once unless Settings says otherwise.
+pub(crate) const DEFAULT_ANALYSIS_JOBS: usize = 4;
+
+/// Clips analysis reads at once: a machine setting (Settings → Analysis),
+/// held here so every place that queues an index run uses it.
+static ANALYSIS_JOBS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(DEFAULT_ANALYSIS_JOBS);
+
+/// Sets how many clips analysis reads at once (at least one).
+pub(crate) fn set_analysis_jobs(n: usize) {
+    ANALYSIS_JOBS.store(n.max(1), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// How many clips analysis reads at once.
+pub(crate) fn analysis_jobs() -> usize {
+    ANALYSIS_JOBS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// The index step.
 pub(crate) fn index_cmd(work: &Path, footage: &Path, force: bool) -> (String, Cmd) {
     (
@@ -440,11 +461,17 @@ pub(crate) fn index_cmd(work: &Path, footage: &Path, force: bool) -> (String, Cm
         Cmd::Index {
             footage: footage.to_path_buf(),
             work: work.to_path_buf(),
-            jobs: 4,
+            jobs: analysis_jobs(),
             force,
         },
     )
 }
+
+/// Segments scoring below this are not worth a caption.
+const CAPTION_MIN_Q: f32 = 0.15;
+
+/// Caption requests in flight at once.
+const CAPTION_PARALLEL: usize = 3;
 
 /// The caption step.
 pub(crate) fn caption_cmd(work: &Path) -> (String, Cmd) {
@@ -452,9 +479,22 @@ pub(crate) fn caption_cmd(work: &Path) -> (String, Cmd) {
         "caption".to_owned(),
         Cmd::Caption {
             work: work.to_path_buf(),
-            min_q: 0.15,
+            min_q: CAPTION_MIN_Q,
             redo: false,
-            parallel: 3,
+            parallel: CAPTION_PARALLEL,
+        },
+    )
+}
+
+/// The caption step over every segment, replacing captions there are.
+fn recaption_cmd(work: &Path) -> (String, Cmd) {
+    (
+        "caption".to_owned(),
+        Cmd::Caption {
+            work: work.to_path_buf(),
+            min_q: CAPTION_MIN_Q,
+            redo: true,
+            parallel: CAPTION_PARALLEL,
         },
     )
 }
@@ -514,12 +554,24 @@ fn views(ctx: &PageCtx<'_>, state: &State, recipe: &Recipe) -> Vec<View> {
         Some(footage) => Run::Jobs("Run", vec![index_cmd(&work, footage, false)]),
         None => Run::None,
     };
+    let more = p.settings.footage.as_ref().filter(|_| p.index.is_some()).map(|footage| {
+        (
+            icons::ROTATE_CCW,
+            "Analyse every clip again from scratch",
+            Run::Confirm(
+                "Re-analyse all",
+                "Analyse every clip again from scratch? This takes as long as the first time. Captions, people and cuts are kept.".to_owned(),
+                vec![index_cmd(&work, footage, true)],
+            ),
+        )
+    });
     out.push(View {
         step: Step::Index,
         standing,
         summary,
         when: f.index,
         run,
+        more,
     });
 
     // Caption.
@@ -542,12 +594,24 @@ fn views(ctx: &PageCtx<'_>, state: &State, recipe: &Recipe) -> Vec<View> {
         ),
         None => (Standing::Blocked, "Index first".to_owned(), Run::None),
     };
+    let more = captioned.filter(|(c, _)| *c > 0).map(|_| {
+        (
+            icons::ROTATE_CCW,
+            "Caption every segment again, replacing the captions there are",
+            Run::Confirm(
+                "Caption again",
+                "Caption every segment again? The captions there are now are replaced.".to_owned(),
+                vec![recaption_cmd(&work)],
+            ),
+        )
+    });
     out.push(View {
         step: Step::Caption,
         standing,
         summary,
         when: captioned.filter(|(c, _)| *c > 0).and(f.index),
         run,
+        more,
     });
 
     // Music.
@@ -612,6 +676,7 @@ fn views(ctx: &PageCtx<'_>, state: &State, recipe: &Recipe) -> Vec<View> {
         summary,
         when: f.music,
         run,
+        more: None,
     });
 
     // People.
@@ -649,6 +714,7 @@ fn views(ctx: &PageCtx<'_>, state: &State, recipe: &Recipe) -> Vec<View> {
         summary,
         when: f.people,
         run,
+        more: None,
     });
 
     // Plans.
@@ -704,6 +770,7 @@ fn views(ctx: &PageCtx<'_>, state: &State, recipe: &Recipe) -> Vec<View> {
         summary,
         when: f.plans,
         run,
+        more: None,
     });
 
     // Export.
@@ -725,6 +792,7 @@ fn views(ctx: &PageCtx<'_>, state: &State, recipe: &Recipe) -> Vec<View> {
         summary,
         when: f.export.filter(|_| f.delivered > 0),
         run: Run::Export,
+        more: None,
     });
 
     for view in &mut out {
@@ -992,7 +1060,16 @@ fn bar(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui, views: Vec<V
                     .add_enabled_ui(!busy, |ui| widgets::outline_button(ui, theme, label))
                     .inner
                     .clicked();
-                if pressed {
+                let more_pressed = view.more.as_ref().is_some_and(|(glyph, tip, _)| {
+                    child
+                        .add_enabled_ui(!busy, |ui| widgets::icon_btn(ui, theme, *glyph, tip, ""))
+                        .inner
+                        .clicked()
+                });
+                if more_pressed && let Some((_, _, more)) = view.more {
+                    clicked_run = Some(more);
+                    state.selected = Some(view.step);
+                } else if pressed {
                     clicked_run = Some(view.run);
                     state.selected = Some(view.step);
                 }

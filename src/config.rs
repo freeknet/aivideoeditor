@@ -77,6 +77,9 @@ pub struct Config {
     /// The top bar's recent searches, newest first.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recent_searches: Option<Vec<String>>,
+    /// How many clips analysis reads at once (each runs its own ffmpeg).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis_jobs: Option<usize>,
 }
 
 /// The workspace's splits, each a fraction of the region it divides.
@@ -147,6 +150,7 @@ pub fn parse(text: &str) -> Config {
         keymap: field(&table, "keymap"),
         panel_sizes: field::<PanelSizes>(&table, "panel_sizes").filter(PanelSizes::is_valid),
         folded_panels: field(&table, "folded_panels"),
+        analysis_jobs: field::<usize>(&table, "analysis_jobs").filter(|n| (1..=32).contains(n)),
         recent_searches: field(&table, "recent_searches"),
     }
 }
@@ -227,6 +231,7 @@ mod tests {
                 timeline: 0.4,
             }),
             folded_panels: Some(vec!["browser".to_string()]),
+            analysis_jobs: Some(6),
             recent_searches: Some(vec!["fire>0.3".to_string()]),
         };
         let text = toml::to_string_pretty(&original)?;

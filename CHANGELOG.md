@@ -12,6 +12,10 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Everything the command line does can be done in the app: *Re-analyse all* (the ↻
+  beside *Update* on the Index card) and *Caption again* (beside the Caption card's button)
+  redo those steps from scratch, each deliverable sets how long its end card holds, and
+  Settings sets how many clips analysis reads at once.
 - The drafting rules are the project's to edit: a *Rules* section in the Home screen's
   project settings sets how far apart one clip's shots and one person's shots must be,
   look-alikes, reused moments, which footage and moments to avoid, and what goes on the

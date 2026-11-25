@@ -166,6 +166,8 @@ pub enum Action {
     SetTheme(String),
     /// Switch animation off or back on.
     ToggleMotion,
+    /// Set how many clips analysis reads at once.
+    SetAnalysisJobs(usize),
     /// Ask for a folder and open it as a night.
     PickProject,
     /// Open this folder as a night (a footage folder or an `_ave` work folder).
@@ -296,6 +298,11 @@ impl App {
         let _ = crate::gui::font::setup(ctx, config.font.as_deref());
         let catalog = crate::theme::Catalog::load();
         let theme = catalog.get(config.theme.as_deref());
+        crate::gui::pages::night::pipeline::set_analysis_jobs(
+            config
+                .analysis_jobs
+                .unwrap_or(crate::gui::pages::night::pipeline::DEFAULT_ANALYSIS_JOBS),
+        );
         let layout = ui::layout::Layout::from_config(&config);
         let keymap = config
             .keymap
@@ -447,6 +454,10 @@ impl App {
             Action::ToggleSidebar => self.sidebar_collapsed = !self.sidebar_collapsed,
             Action::SetTheme(id) => self.theme = self.catalog.get(Some(&id)),
             Action::ToggleMotion => self.reduce_motion = !self.reduce_motion,
+            Action::SetAnalysisJobs(n) => {
+                self.config.analysis_jobs = Some(n);
+                crate::gui::pages::night::pipeline::set_analysis_jobs(n);
+            }
             Action::Focus => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
