@@ -28,14 +28,12 @@
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
 use crate::analyze::segments::median;
 use crate::beats::MusicMap;
 use crate::index::Index;
-use crate::media;
 use crate::plan::{Aspect, Plan};
 
 /// Video encoder.
@@ -293,7 +291,7 @@ pub(crate) fn render(
             "-c:v", "h264_amf", "-quality", "quality", "-rc", "cqp", "-qp_i", "18", "-qp_p", "20",
         ],
     };
-    let mut cmd = Command::new(media::tool("ffmpeg"));
+    let mut cmd = crate::media::command("ffmpeg");
     cmd.args(["-v", "error", "-nostdin", "-y"])
         .args(&inputs)
         .arg("-/filter_complex")
@@ -342,7 +340,7 @@ pub(crate) fn preview(video: &Path, aspect: Aspect) -> Result<PathBuf> {
         Aspect::Wide => "scale=-2:720:flags=lanczos",
         Aspect::Vertical | Aspect::Feed => "scale=720:-2:flags=lanczos",
     };
-    let status = Command::new(media::tool("ffmpeg"))
+    let status = crate::media::command("ffmpeg")
         .args(["-v", "error", "-nostdin", "-y", "-i"])
         .arg(video)
         .args([

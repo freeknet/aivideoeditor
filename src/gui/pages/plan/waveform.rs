@@ -24,7 +24,7 @@
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, bail};
@@ -202,7 +202,7 @@ impl Peaks {
 
 /// The first audio stream's sample rate and channel count.
 fn audio_format(path: &Path) -> Result<(u32, usize)> {
-    let output = Command::new(crate::media::tool("ffprobe"))
+    let output = crate::media::command("ffprobe")
         .args(["-v", "error", "-select_streams", "a:0"])
         .args(["-show_entries", "stream=sample_rate,channels"])
         .args(["-of", "csv=p=0"])
@@ -233,7 +233,7 @@ fn parse_format(text: &str) -> Option<(u32, usize)> {
 fn decode(path: &Path) -> Result<Peaks> {
     let (rate, channels) = audio_format(path)?;
     let bucket = (rate / BUCKETS_PER_SECOND).max(1) as usize;
-    let mut child = Command::new(crate::media::tool("ffmpeg"))
+    let mut child = crate::media::command("ffmpeg")
         .args(["-v", "error", "-nostdin", "-i"])
         .arg(path)
         .args(["-vn", "-f", "f32le", "-"])

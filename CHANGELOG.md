@@ -360,6 +360,8 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Analysing footage in the app no longer opens a console window for every ffmpeg run.
+  Every ffmpeg, ffprobe and llama-server the app starts now runs without one.
 - One deliverable that could not be drafted (too little footage for a 60 s or 180 s
   cut, say) stopped the analysis queue, so the deliverables after it were never drafted
   and the editor never opened on the first cut. A failed draft is now noted and the rest

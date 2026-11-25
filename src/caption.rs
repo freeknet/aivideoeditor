@@ -210,7 +210,9 @@ fn start_server(agent: &ureq::Agent, url: &str) -> Result<Server> {
         .to_owned();
     let exe = dir.join(format!("llama-server{}", std::env::consts::EXE_SUFFIX));
     log::info!("starting {} on port {port}", exe.display());
-    let child = Command::new(&exe)
+    let mut cmd = Command::new(&exe);
+    crate::media::quiet(&mut cmd);
+    let child = cmd
         .args([
             "-m", &model, "--mmproj", &mmproj, "-ngl", "99", "-c", "16384", "-np", "4",
         ])

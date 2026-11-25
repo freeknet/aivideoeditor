@@ -24,7 +24,7 @@
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 
 use super::ring::{Frame, Ring};
@@ -130,7 +130,7 @@ impl Job {
         let (w, h) = frame_size(probe.width, probe.height, self.width);
         let len = (self.end - self.start).max(0.05);
         let filter = format!("fps={fps:.6},scale={w}:{h}:flags=bilinear");
-        let mut cmd = Command::new(crate::media::tool("ffmpeg"));
+        let mut cmd = crate::media::command("ffmpeg");
         cmd.args(["-v", "error", "-nostdin", "-threads", "0"])
             .args(["-ss", &format!("{:.3}", self.start), "-i"])
             .arg(&self.path)
@@ -139,7 +139,6 @@ impl Job {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
-        quiet(&mut cmd);
         let mut child = cmd.spawn()?;
         let Some(mut out) = child.stdout.take() else {
             let _ = child.kill();
@@ -195,32 +194,16 @@ pub(crate) fn frame_size(src_w: u32, src_h: u32, want: u32) -> (u32, u32) {
     (w, h.max(2) & !1)
 }
 
-/// Keeps a console window from flashing up for a child process when the
-/// app runs without one (release builds on Windows).
-pub(crate) fn quiet(cmd: &mut Command) {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt as _;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = cmd;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{Probes, VideoStream, frame_size};
     use crate::gui::player::ring::Pick;
-    use std::process::Command;
     use std::time::{Duration, Instant};
 
     /// Writes a 3 s 24 fps test clip, or `None` when ffmpeg is missing.
     fn test_clip(dir: &std::path::Path) -> Option<std::path::PathBuf> {
         let out = dir.join("clip.mp4");
-        let status = Command::new(crate::media::tool("ffmpeg"))
+        let status = crate::media::command("ffmpeg")
             .args(["-v", "error", "-nostdin", "-y", "-f", "lavfi", "-i"])
             .arg("testsrc=size=320x180:rate=24:duration=3")
             .args(["-pix_fmt", "yuv420p"])

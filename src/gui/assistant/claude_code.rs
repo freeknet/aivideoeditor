@@ -64,7 +64,7 @@ fn auth_status(exe: &Path) -> Option<bool> {
     cmd.args(["auth", "status", "--json"])
         .stdin(Stdio::null())
         .stderr(Stdio::null());
-    crate::gui::player::video::quiet(&mut cmd);
+    crate::media::quiet(&mut cmd);
     // Signed out may exit non-zero and still print the JSON.
     let out = cmd.output().ok()?;
     signed_in(&String::from_utf8_lossy(&out.stdout))
@@ -690,7 +690,7 @@ impl Session {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        crate::gui::player::video::quiet(&mut cmd);
+        crate::media::quiet(&mut cmd);
         let mut child = cmd
             .spawn()
             .map_err(|e| format!("could not start Claude Code ({}): {e}", cfg.exe.display()))?;

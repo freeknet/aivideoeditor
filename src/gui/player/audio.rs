@@ -25,7 +25,7 @@
 use std::collections::VecDeque;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -354,7 +354,7 @@ impl Decode {
         let Some(rate) = self.wait_for_rate() else {
             return Ok(());
         };
-        let mut cmd = Command::new(crate::media::tool("ffmpeg"));
+        let mut cmd = crate::media::command("ffmpeg");
         cmd.args(["-v", "error", "-nostdin"])
             .args(["-ss", &format!("{:.3}", self.t), "-i"])
             .arg(&self.path)
@@ -363,7 +363,6 @@ impl Decode {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
-        super::video::quiet(&mut cmd);
         let mut child = cmd.spawn()?;
         let Some(mut out) = child.stdout.take() else {
             let _ = child.kill();

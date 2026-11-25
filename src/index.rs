@@ -1117,7 +1117,7 @@ min_lit = 0
     /// Writes a 2 s test clip, or `None` when ffmpeg is missing.
     fn test_clip(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
         let out = dir.join(name);
-        let status = std::process::Command::new(crate::media::tool("ffmpeg"))
+        let status = crate::media::command("ffmpeg")
             .args(["-v", "error", "-nostdin", "-y", "-f", "lavfi", "-i"])
             .arg("testsrc=size=320x180:rate=24:duration=2")
             .args(["-pix_fmt", "yuv420p"])

@@ -29,6 +29,31 @@ pub(crate) fn tool(name: &str) -> PathBuf {
     }
 }
 
+/// A command for an ffmpeg-suite tool, already [`quiet`]: every ffmpeg and
+/// ffprobe the program runs is built here, so none can open a window.
+pub(crate) fn command(name: &str) -> Command {
+    let mut cmd = Command::new(tool(name));
+    quiet(&mut cmd);
+    cmd
+}
+
+/// Keeps a console window from opening for a child process. The app has no
+/// console of its own, so without this Windows gives every child process one
+/// (a window per ffmpeg run during analysis). Output piped or inherited by
+/// the command still arrives: the handles are passed explicitly.
+pub(crate) fn quiet(cmd: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = cmd;
+    }
+}
+
 /// What ffprobe reports about one media file.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Probe {
@@ -65,7 +90,7 @@ impl Probe {
 
 /// Runs ffprobe on `path`.
 pub(crate) fn probe(path: &Path) -> Result<Probe> {
-    let output = Command::new(tool("ffprobe"))
+    let output = command("ffprobe")
         .args([
             "-v",
             "error",
@@ -452,7 +477,7 @@ impl FrameReader {
             ((h / 2.0).round() as usize).max(1) * 2
         };
         let filter = format!("fps={fps},scale={width}:{height}:flags=area,format=rgb24");
-        let mut child = Command::new(tool("ffmpeg"))
+        let mut child = command("ffmpeg")
             .args(["-v", "error", "-nostdin", "-threads", "4", "-i"])
             .arg(path)
             .args(["-an", "-sn", "-vf", &filter, "-f", "rawvideo", "-"])
@@ -501,7 +526,7 @@ impl Drop for FrameReader {
 
 /// Decodes the audio of `path` to mono f32 samples at `rate` Hz.
 pub(crate) fn audio_mono(path: &Path, rate: u32) -> Result<Vec<f32>> {
-    let output = Command::new(tool("ffmpeg"))
+    let output = command("ffmpeg")
         .args(["-v", "error", "-nostdin", "-i"])
         .arg(path)
         .args([
@@ -536,7 +561,7 @@ pub(crate) fn audio_mono(path: &Path, rate: u32) -> Result<Vec<f32>> {
 /// `width` pixels wide (height follows the aspect, kept even). Used for
 /// thumbnails: seeking is input-side, so it costs one GOP, not the clip.
 pub(crate) fn frame_rgb(path: &Path, t: f64, width: u32) -> Result<Frame> {
-    let output = Command::new(tool("ffmpeg"))
+    let output = command("ffmpeg")
         .args(["-v", "error", "-nostdin", "-ss", &format!("{t:.3}"), "-i"])
         .arg(path)
         .args(["-frames:v", "1", "-an", "-sn"])
@@ -566,7 +591,7 @@ pub(crate) fn still(path: &Path, t: f64, width: u32, crop: Option<&str>, out: &P
         filter.push(',');
     }
     filter.push_str(&format!("scale={width}:-2:flags=lanczos"));
-    let status = Command::new(tool("ffmpeg"))
+    let status = command("ffmpeg")
         .args([
             "-v",
             "error",
