@@ -375,6 +375,9 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- A project with no music no longer offers the drop: the chat's "Before the drop" and
+  "From the drop" scopes and its fire-on-the-drop suggestion, and the drop rule in
+  *Rules*, only appear for a cut to music. "Which performers repeat" is now "Who repeats".
 - When footage runs out under the repeat rules (a few long takes for a long cut), the
   drafter loosens the person and same-clip gaps a step at a time instead of refusing,
   records the rules it kept in the cut, and says so on the guide strip.

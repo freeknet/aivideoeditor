@@ -1925,12 +1925,20 @@ fn scope_row(
         .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = Vec2::splat(SPACE_XS);
+                // With no music there is no drop to split the cut at.
+                let no_music = ctx
+                    .project
+                    .as_ref()
+                    .is_some_and(crate::project::Project::no_music);
                 for choice in [
                     ScopeChoice::Whole,
                     ScopeChoice::Selected,
                     ScopeChoice::Build,
                     ScopeChoice::FromDrop,
-                ] {
+                ]
+                .into_iter()
+                .filter(|c| !(no_music && matches!(c, ScopeChoice::Build | ScopeChoice::FromDrop)))
+                {
                     let on = scope == choice;
                     let label = match choice {
                         ScopeChoice::Selected => format!("{} ({})", choice.label(), change.len()),
@@ -3702,6 +3710,10 @@ fn empty_state(
     {
         *first_cut = true;
     }
+    let no_music = ctx
+        .project
+        .as_ref()
+        .is_some_and(crate::project::Project::no_music);
     for (label, prompt) in [
         (
             "Fix what the check flags",
@@ -3716,10 +3728,13 @@ fn empty_state(
             "The opening is weak: find a better first shot.",
         ),
         (
-            "Which performers repeat too soon?",
-            "Which shots repeat a performer too soon?",
+            "Who repeats too soon?",
+            "Which shots repeat the same person too soon?",
         ),
-    ] {
+    ]
+    .into_iter()
+    .filter(|(label, _)| !(no_music && label.contains("drop")))
+    {
         if widgets::tip(
             look::suggestion(&mut child, theme, label),
             theme,

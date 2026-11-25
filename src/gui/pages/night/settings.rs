@@ -603,7 +603,11 @@ fn recipe_table(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
         });
     });
     ui.add_space(theme::SPACE_XL);
-    changed |= rules_section(ui, theme, &mut loaded.recipe.rules);
+    let no_music = ctx
+        .project
+        .as_ref()
+        .is_some_and(crate::project::Project::no_music);
+    changed |= rules_section(ui, theme, &mut loaded.recipe.rules, no_music);
     if changed {
         state.dirty = true;
     }
@@ -630,7 +634,12 @@ const MOMENTS: [(&str, &str); 3] = [
 
 /// The rules every draft of this project keeps, editable; returns whether
 /// any changed. They live in the recipe, so a new project starts from them.
-fn rules_section(ui: &mut egui::Ui, theme: &crate::theme::Palette, rules: &mut Rules) -> bool {
+fn rules_section(
+    ui: &mut egui::Ui,
+    theme: &crate::theme::Palette,
+    rules: &mut Rules,
+    no_music: bool,
+) -> bool {
     let mut changed = false;
     parts::section(
         ui,
@@ -713,6 +722,8 @@ fn rules_section(ui: &mut egui::Ui, theme: &crate::theme::Palette, rules: &mut R
             });
         });
         ui.add_space(theme::SPACE_XS + 2.0);
+        // Only a cut to music has a drop.
+        if !no_music {
         parts::form_row(ui, theme, "On the drop", |ui| {
             let items = [("", "Any shot"), ("fire", "Fire"), ("led", "LED")];
             let mut current = items
@@ -726,6 +737,7 @@ fn rules_section(ui: &mut egui::Ui, theme: &crate::theme::Palette, rules: &mut R
                 changed = true;
             }
         });
+        }
         ui.add_space(theme::SPACE_XS + 2.0);
         parts::form_row(ui, theme, "", |ui| {
             let defaults = Rules::default();
