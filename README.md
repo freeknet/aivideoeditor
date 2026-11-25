@@ -141,7 +141,12 @@ is done:
 4. **Review the cut.** The editor opens on the timeline. Play the cut,
    reorder, trim and slip shots, press `A` on a shot for ranked
    alternatives, or ask the chat for a change ("a stronger opening shot",
-   "no shot of the DJ before the drop"). Every change keeps the old version,
+   "no shot of the DJ before the drop"). To point the chat at shots, select
+   them and press **Ask the chat** in the bar under the timeline (or `R`;
+   **as…** says keep, avoid, replace, more like this or feature), or click
+   the **@** on any shot card in the browser; flagged shots carry an @ on
+   the timeline, and with nothing selected the Inspector lists them beside
+   the rules the cut keeps. Every change keeps the old version,
    and a live rule check under the timeline flags anything that breaks the
    rules (a repeated clip, a performer twice in a row, a crop outside the
    frame).
@@ -150,6 +155,7 @@ is done:
    Resolve** to also get an OpenTimelineIO timeline to finish the edit in
    Resolve or Kdenlive.
 
+Hover any control and the status bar says what it does (and its shortcut).
 Click any stage on the strip to go to the screen for it. If you start a
 step from somewhere else (an empty timeline offers **Map the music**, an
 empty shot browser offers **Analyse footage**), it runs through the same
