@@ -271,7 +271,10 @@ fn load_or_decode(key: &Key, cache: Option<&Path>) -> Option<([usize; 2], Vec<u8
             return Some(([w, h], bytes[8..].to_vec()));
         }
     }
-    let frame = crate::media::frame_rgb(&key.path, key.ms as f64 / 1000.0, key.width).ok()?;
+    // A heavy original's frames come from its playback copy: a scrub reads
+    // dozens of them, and each from 4K HEVC costs a GOP of 4K decoding.
+    let source = crate::proxy::for_playback(&key.path);
+    let frame = crate::media::frame_rgb(&source, key.ms as f64 / 1000.0, key.width).ok()?;
     if let Some(f) = &file {
         let mut bytes = Vec::with_capacity(frame.rgb.len() + 8);
         bytes.extend_from_slice(&(frame.width as u32).to_le_bytes());

@@ -16,7 +16,8 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   same frames) of 4K and HEVC clips, on the NVIDIA GPU when there is one (about eight
   times real time on an RTX 4080), else the CPU. The editor's player uses them; renders
   still use the originals. A project analysed before this gets *Prepare smooth playback*
-  as its next step, and `ave proxy --work <work>` does it from the command line.
+  as its next step, and `ave proxy --work <work>` does it from the command line. Opening
+  such a project starts them on their own, and scrubbing reads its preview frames from them.
 - Everything the command line does can be done in the app: *Re-analyse all* (the ↻
   beside *Update* on the Index card) and *Caption again* (beside the Caption card's button)
   redo those steps from scratch, each deliverable sets how long its end card holds, and

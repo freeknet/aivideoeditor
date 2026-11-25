@@ -219,6 +219,9 @@ pub(crate) struct State {
     notice: Option<String>,
     /// The facts, and when and for which project they were read.
     cached: Option<(std::path::PathBuf, std::time::Instant, Facts)>,
+    /// The project whose missing playback copies were queued on their own,
+    /// so they are queued once, not again every frame.
+    auto_proxy: Option<std::path::PathBuf>,
 }
 
 /// Re-reads the facts at most every second (the output folder is a few
@@ -257,6 +260,19 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, home: &mut super::State, ui: &mut egui
         run(ctx, home, &recipe, &f, stage);
     }
     hand_over(ctx, home, &f, &work);
+    // Heavy clips without playback copies get them without being asked:
+    // playback stutters until they exist, and nobody should need to know
+    // that to fix it. Once per project, and only when nothing else runs.
+    if f.indexed.is_some()
+        && f.proxies_missing > 0
+        && home.guide.auto_proxy.as_ref() != Some(&work)
+        && !home.pipeline.active()
+        && ctx.jobs.running().next().is_none()
+    {
+        home.guide.auto_proxy = Some(work.clone());
+        home.pipeline
+            .enqueue(ctx.jobs, vec![pipeline::proxy_cmd(&work, false)]);
+    }
 
     let busy_stage = |stage: Stage| {
         home.pipeline.queued().any(|l| stage.owns(l))
