@@ -62,11 +62,11 @@ impl Step {
     /// The step's name.
     fn title(self) -> &'static str {
         match self {
-            Self::Index => "Index",
-            Self::Caption => "Caption",
+            Self::Index => "Analyse",
+            Self::Caption => "Captions",
             Self::Music => "Music",
             Self::People => "People",
-            Self::Plans => "Plans",
+            Self::Plans => "Cuts",
             Self::Export => "Export",
         }
     }

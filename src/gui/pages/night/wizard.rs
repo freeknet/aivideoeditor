@@ -201,7 +201,7 @@ fn rows(ctx: &PageCtx<'_>, state: &mut State, scanned: Option<&scan::Scanned>) -
     };
     out.push(Row {
         key: "index",
-        title: "Index",
+        title: "Analysis",
         estimate,
         blocked,
         jobs,
