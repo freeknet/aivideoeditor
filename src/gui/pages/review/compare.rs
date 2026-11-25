@@ -182,7 +182,7 @@ fn pane(
     }
     let line = Rect::from_min_size(ui.cursor().min, vec2(width, 16.0));
     ui.allocate_rect(line, Sense::hover());
-    super::text_in(
+    super::name_in(
         ui.painter(),
         line.left_center() + vec2(room, 0.0),
         &s.id,

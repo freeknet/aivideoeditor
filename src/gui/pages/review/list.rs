@@ -390,11 +390,11 @@ fn row(
                     );
                     x0 += icons::SMALL + SPACE_XS;
                 }
-                let tw = super::text_line(
+                let tw = super::name_in(
                     &painter,
                     pos2(x0, cy),
                     &s.id,
-                    theme::LARGE_SIZE,
+                    theme::font(theme::LARGE_SIZE),
                     ink,
                     cell.right() - x0 - 2.0,
                 );

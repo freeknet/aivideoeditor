@@ -457,7 +457,7 @@ fn short(text: &str) -> String {
 }
 
 /// What a job label reads as on the strip.
-fn job_title(label: &str) -> String {
+pub(crate) fn job_title(label: &str) -> String {
     match label {
         "index" => "Analysing footage".to_owned(),
         "proxy" => "Preparing smooth playback".to_owned(),

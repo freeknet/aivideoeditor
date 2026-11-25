@@ -274,7 +274,7 @@ fn tile(
         theme::rgb(theme.text_faint),
         30.0,
     );
-    super::text_in(
+    super::name_in(
         &painter,
         pos2(rect.left() + 2.0, y),
         &s.id,

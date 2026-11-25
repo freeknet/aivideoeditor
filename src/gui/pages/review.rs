@@ -2304,6 +2304,43 @@ pub(super) fn text_in(
     w
 }
 
+/// Like [`text_in`], but a name too long for `max_w` loses its middle, not its
+/// end: camera files share a long prefix (`DJI_20261122…`) and differ at the
+/// end (`0124_D/3`), so the end is what tells them apart.
+pub(super) fn name_in(
+    painter: &egui::Painter,
+    pos: egui::Pos2,
+    text: &str,
+    font: egui::FontId,
+    color: egui::Color32,
+    max_w: f32,
+) -> f32 {
+    let width = |s: &str| {
+        painter
+            .layout_no_wrap(s.to_owned(), font.clone(), egui::Color32::PLACEHOLDER)
+            .size()
+            .x
+    };
+    if width(text) <= max_w {
+        return text_in(painter, pos, text, font, color, max_w);
+    }
+    let chars: Vec<char> = text.chars().collect();
+    // Keep a fifth from the front and the rest from the end, shrinking
+    // until it fits.
+    let fitted = (2..chars.len())
+        .rev()
+        .map(|keep| {
+            let head = (keep / 5).max(1);
+            let tail = keep - head;
+            let start: String = chars.iter().take(head).collect();
+            let end: String = chars.iter().skip(chars.len() - tail).collect();
+            format!("{start}\u{2026}{end}")
+        })
+        .find(|s| width(s) <= max_w)
+        .unwrap_or_else(|| text.to_owned());
+    text_in(painter, pos, &fitted, font, color, max_w)
+}
+
 /// The colours of the metric bars: fire, LED, moving light, focus.
 pub(super) fn metric_colors(theme: &Palette) -> [egui::Color32; 4] {
     [

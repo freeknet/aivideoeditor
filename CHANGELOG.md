@@ -375,6 +375,9 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- Long clip names (camera files like `DJI_20261122150730_0124_D`) are cut in the
+  middle in the shot browser, so the part that tells them apart stays visible, and the
+  status bar names running work in words ("Preparing smooth playback", not `proxy`).
 - A project with no music no longer offers the drop: the chat's "Before the drop" and
   "From the drop" scopes and its fire-on-the-drop suggestion, and the drop rule in
   *Rules*, only appear for a cut to music. "Which performers repeat" is now "Who repeats".

@@ -306,7 +306,7 @@ fn card(
         2.0
     };
     let rejected = mark.verdict == Some(Verdict::Reject);
-    super::text_in(
+    super::name_in(
         &painter,
         pos2(rect.left() + indent, name_y),
         &s.id,

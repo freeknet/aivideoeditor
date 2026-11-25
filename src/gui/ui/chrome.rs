@@ -41,7 +41,11 @@ pub fn status_bar(app: &App, ui: &mut Ui) {
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = SPACE_XS + 2.0;
-                let running: Vec<&str> = app.jobs.running().map(|j| j.label.as_str()).collect();
+                let running: Vec<String> = app
+                    .jobs
+                    .running()
+                    .map(|j| crate::gui::pages::night::guide::job_title(&j.label))
+                    .collect();
                 let (glyph, color, text) = if let Some(notice) = &app.notice {
                     (icons::CIRCLE_ALERT, theme.danger, notice.clone())
                 } else if running.is_empty() {
@@ -51,11 +55,7 @@ pub fn status_bar(app: &App, ui: &mut Ui) {
                     );
                     (icons::CIRCLE_CHECK, theme.success, night)
                 } else {
-                    (
-                        icons::LOADER,
-                        theme.warning,
-                        format!("Running: {}", running.join(", ")),
-                    )
+                    (icons::LOADER, theme.warning, running.join(", "))
                 };
                 icons::icon(ui, glyph, icons::SMALL - 2.0, theme::rgb(color));
                 // The status keeps to its share, so the hint has room.
