@@ -66,6 +66,8 @@ pub(crate) struct PageCtx<'a> {
     /// The keyboard preset in force: regions read their keys with
     /// `keymap::chord(id, ctx.keymap)` (or `keymap::pressed`).
     pub(crate) keymap: crate::gui::ui::keymap::Preset,
+    /// The page on show (the guide offers a different next step in the editor).
+    pub(crate) page: crate::gui::app::Page,
 }
 
 impl PageCtx<'_> {

@@ -21,7 +21,7 @@
 //! Each step clicks a button by its accessible name, as a screen reader
 //! would, and fails loudly when the button is not there, so a broken step
 //! in the guided path shows up as an error naming it. The run ends when the
-//! guide offers "Review the cut" with the editor open on the timeline.
+//! guide offers the next step (Export the cut…) with the editor open on the timeline.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -163,7 +163,9 @@ fn main() -> anyhow::Result<()> {
     loop {
         settle(&mut harness, 500);
         let page = harness.state().as_ref().map(|a| a.page);
-        if harness.query_by_label("Review the cut").is_some() && page == Some(Page::Plan) {
+        let next_on_offer = harness.query_by_label("Review the cut").is_some()
+            || harness.query_by_label("Export the cut\u{2026}").is_some();
+        if next_on_offer && page == Some(Page::Plan) {
             break;
         }
         if last.elapsed() > Duration::from_secs(30) {

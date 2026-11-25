@@ -73,6 +73,7 @@ macro_rules! page_ctx {
             actions: $actions,
             blocked: $blocked,
             keymap: $app.keymap,
+            page: $app.page,
         }
     };
 }

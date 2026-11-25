@@ -397,6 +397,9 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- In the editor, the guide's *Next* offers *Export the cut…* instead of re-opening the
+  editor it is already in: reviewing has no end the app can see, so the next step on offer
+  is delivering what is there.
 - An output folder that does not exist yet reads "(made by the first render)" in plain
   text instead of an amber "(missing)"; a missing footage folder, track or end card still
   shows amber.

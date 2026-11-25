@@ -125,6 +125,7 @@ pub fn describe(label: &str) -> Option<&'static str> {
         "Prepare smooth playback" => "Make light playback copies of 4K and HEVC clips",
         "Draft the first cut" => "Draft every deliverable that has no cut yet",
         "Review the cut" => "Open the editor on the first cut",
+        "Export the cut" => "Done reviewing? Render the cuts and deliver them",
         "Progress" => "What each step and clip has been through",
         "Details" => "The full story of what was skipped or failed",
         "Dismiss" => "Hide this note",

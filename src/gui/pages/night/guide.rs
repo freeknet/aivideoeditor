@@ -329,8 +329,21 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, home: &mut super::State, ui: &mut egui
                     ui.allocate_exact_size(egui::Vec2::splat(icons::SMALL), egui::Sense::hover());
                 parts::mark(ui, theme, rect, parts::Mark::Running);
             } else if let Some(stage) = current(&f) {
-                let label = next_label(&f, stage);
-                let tip = next_tip(&f, stage);
+                // Reviewing has no end the app can see: once in the editor,
+                // the next step on offer is exporting what is there.
+                let in_editor = stage == Stage::Review && ctx.page == Page::Plan;
+                let stage = if in_editor { Stage::Export } else { stage };
+                let label = if in_editor {
+                    "Export the cut\u{2026}"
+                } else {
+                    next_label(&f, stage)
+                };
+                let tip = if in_editor {
+                    "Done reviewing? Render the cuts and deliver them to the output folder."
+                        .to_owned()
+                } else {
+                    next_tip(&f, stage)
+                };
                 if widgets::button_with(
                     ui,
                     theme,
