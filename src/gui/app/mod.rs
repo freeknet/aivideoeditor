@@ -303,6 +303,14 @@ impl App {
         let _ = crate::gui::font::setup(ctx, config.font.as_deref());
         let catalog = crate::theme::Catalog::load();
         let theme = catalog.get(config.theme.as_deref());
+        // The ffmpeg and GPU checks each run ffmpeg once; done off the UI
+        // thread now so the first screen to ask does not stall.
+        let _ = std::thread::Builder::new()
+            .name("ave-tool-checks".into())
+            .spawn(|| {
+                let _ = crate::media::ffmpeg_status();
+                let _ = crate::media::gpu_decode();
+            });
         crate::gui::pages::night::pipeline::set_analysis_jobs(
             config
                 .analysis_jobs
