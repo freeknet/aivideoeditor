@@ -338,10 +338,9 @@ fn card(
     );
     let caption_y = name_y + NAME_H / 2.0 + 2.0 + CAPTION_H / 2.0;
     let text = if item.reason.is_empty() {
-        s.caption.as_ref().map_or_else(
-            || super::kind_line(paint.night, s),
-            |c| c.summary.clone(),
-        )
+        s.caption
+            .as_ref()
+            .map_or_else(|| super::kind_line(paint.night, s), |c| c.summary.clone())
     } else {
         item.reason.clone()
     };

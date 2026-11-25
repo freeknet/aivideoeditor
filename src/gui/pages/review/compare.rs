@@ -190,10 +190,10 @@ fn pane(
         theme::rgb(theme.text),
         width - room,
     );
-    let caption = s.caption.as_ref().map_or_else(
-        || super::kind_line(paint.night, s),
-        |c| c.summary.clone(),
-    );
+    let caption = s
+        .caption
+        .as_ref()
+        .map_or_else(|| super::kind_line(paint.night, s), |c| c.summary.clone());
     ui.add(
         egui::Label::new(
             egui::RichText::new(caption)

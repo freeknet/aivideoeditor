@@ -26,6 +26,10 @@
 use aivideoeditor::cli::Cli;
 
 fn main() -> std::process::ExitCode {
+    // Every process the app starts (ffmpeg, mostly) ends when the app does,
+    // closed, killed or crashed; held for the whole run.
+    #[cfg(windows)]
+    let _children = aivideoeditor::win::job::kill_children_on_exit();
     // A release build has no console of its own; join the terminal we were
     // started from so subcommands, --help and argument errors can print.
     #[cfg(windows)]

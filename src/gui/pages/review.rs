@@ -2345,10 +2345,12 @@ pub(super) fn name_in(
 /// A shot's short description without a caption: its subject (fire, LED,
 /// light) when the template measures those, and its camera move.
 pub(super) fn kind_line(night: &Night<'_>, s: &crate::index::Scored) -> String {
-    let lit = night
-        .bars
-        .iter()
-        .any(|m| matches!(m, search::Metric::Fire | search::Metric::Led | search::Metric::Light));
+    let lit = night.bars.iter().any(|m| {
+        matches!(
+            m,
+            search::Metric::Fire | search::Metric::Led | search::Metric::Light
+        )
+    });
     if lit {
         format!("{} · {}", s.subject, s.seg.camera.label())
     } else {

@@ -28,6 +28,7 @@
 
 pub mod console;
 pub mod dialog;
+pub mod job;
 pub mod single_instance;
 pub mod strings;
 pub mod window;

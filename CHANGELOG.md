@@ -409,6 +409,9 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Closing the app (or a crash, or Ctrl+C on a command) left its ffmpeg processes running,
+  still decoding 4K for nobody. The app now runs in a Windows job object that ends every
+  process it started when it ends.
 - Checkboxes were hard to read: a ticked box in set-up drew a grey tick on a grey box
   and looked unticked, and the export page's unticked box was a faint outline. Every
   checkbox now ticks as a solid box with a dark tick and outlines clearly when empty.
