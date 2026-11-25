@@ -141,7 +141,8 @@ fn fixtures(work: &Path, shot: &str) -> anyhow::Result<Fixtures> {
             .is_some_and(|a| a.iter().any(|c| c["plan"] == stem))
     };
     let mut changed = false;
-    for entry in std::fs::read_dir(work.join("plans"))? {
+    // A project with no cut yet has no plans folder: nothing to do then.
+    for entry in std::fs::read_dir(work.join("plans")).into_iter().flatten() {
         let path = entry?.path();
         if path.extension().is_none_or(|e| e != "toml") {
             continue;
@@ -215,7 +216,8 @@ fn fixtures(work: &Path, shot: &str) -> anyhow::Result<Fixtures> {
 /// Writes three markers into every plan of `work` and turns the timeline's
 /// marker list on in `ave.toml`, remembering each file to put back.
 fn markers(work: &Path, fixtures: &mut Fixtures) -> anyhow::Result<()> {
-    for entry in std::fs::read_dir(work.join("plans"))? {
+    // A project with no cut yet has no plans folder: nothing to do then.
+    for entry in std::fs::read_dir(work.join("plans")).into_iter().flatten() {
         let path = entry?.path();
         if path.extension().is_none_or(|e| e != "toml") {
             continue;

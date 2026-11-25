@@ -124,6 +124,7 @@ pub fn describe(label: &str) -> Option<&'static str> {
         "Set up and analyse" => "Choose footage, music and what to make, then start the analysis",
         "Prepare smooth playback" => "Make light playback copies of 4K and HEVC clips",
         "Draft the first cut" => "Draft every deliverable that has no cut yet",
+        "A cut of my own" => "Draft one cut with the length, shape and pacing you choose",
         "Review the cut" => "Open the editor on the first cut",
         "Export the cut" => "Done reviewing? Render the cuts and deliver them",
         "Progress" => "What each step and clip has been through",

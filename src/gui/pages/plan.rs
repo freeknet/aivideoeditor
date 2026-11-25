@@ -776,17 +776,32 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
                     ui,
                     palette,
                     icons::FILM,
-                    "No plans yet",
-                    "Draft one on the beat grid from the shot log.",
+                    "No cut yet",
+                    "Draft the project's deliverables from the analysed footage, or a cut of your own (length, shape, pacing).",
                     |ui| {
-                        draft = widgets::button_with(
-                            ui,
-                            palette,
-                            widgets::ButtonKind::Secondary,
-                            Some(icons::PLUS),
-                            "Draft new plan",
-                        )
-                        .clicked();
+                        ui.horizontal(|ui| {
+                            if widgets::button_with(
+                                ui,
+                                palette,
+                                widgets::ButtonKind::Outline,
+                                Some(icons::SPARKLES),
+                                "Draft the first cut",
+                            )
+                            .clicked()
+                            {
+                                actions.push(crate::gui::app::Action::RunStep(
+                                    crate::gui::app::Stage::FirstCut,
+                                ));
+                            }
+                            draft = widgets::button_with(
+                                ui,
+                                palette,
+                                widgets::ButtonKind::Ghost,
+                                Some(icons::PLUS),
+                                "A cut of my own\u{2026}",
+                            )
+                            .clicked();
+                        });
                     },
                 ),
                 (None, false) => widgets::empty_state(
