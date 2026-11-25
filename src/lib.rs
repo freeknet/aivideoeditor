@@ -93,6 +93,12 @@ pub fn init_logging() {
     logging::init();
 }
 
+/// Makes a panic in the window app visible: written to a crash log next to
+/// the config and shown in a dialog, before the abort closes the window.
+pub fn install_crash_report() {
+    logging::install_crash_report();
+}
+
 /// Runs the headless subcommand in `cli`, writing its report to `out`.
 ///
 /// # Errors

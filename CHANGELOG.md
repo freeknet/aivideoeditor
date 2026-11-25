@@ -360,6 +360,8 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- A crash in the app no longer just closes the window: the error is shown in a dialog
+  and saved to `crash.log` in the settings folder, so it can be reported.
 - Hard-to-read text: the faint grey used for times, hints and steps not yet reached
   now reads at 4.5:1 or better on every card (the theme check enforces it), and clip
   names on the timeline sit on a dark chip instead of straight over the footage.
