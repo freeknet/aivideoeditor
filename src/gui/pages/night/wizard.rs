@@ -195,7 +195,7 @@ fn rows(ctx: &PageCtx<'_>, state: &mut State, scanned: Option<&scan::Scanned>) -
         (Some(footage), Some(speeds)) => (
             project::estimate_index(clips, speeds),
             None,
-            vec![pipeline::index_cmd(&work, footage, false)],
+            pipeline::index_jobs(&work, footage, false),
         ),
     };
     out.push(Row {

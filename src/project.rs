@@ -259,6 +259,7 @@ impl Project {
         } else {
             None
         };
+        crate::proxy::register(&self.work, self.index.as_ref());
         if self.settings.footage.is_none()
             && let Some(index) = &self.index
         {

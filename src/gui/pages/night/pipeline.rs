@@ -467,6 +467,22 @@ pub(crate) fn index_cmd(work: &Path, footage: &Path, force: bool) -> (String, Cm
     )
 }
 
+/// The playback-copy step (see [`crate::proxy`]).
+pub(crate) fn proxy_cmd(work: &Path, force: bool) -> (String, Cmd) {
+    (
+        "proxy".to_owned(),
+        Cmd::Proxy {
+            work: work.to_path_buf(),
+            force,
+        },
+    )
+}
+
+/// Analysis as one run: the index, then playback copies of heavy clips.
+pub(crate) fn index_jobs(work: &Path, footage: &Path, force: bool) -> Vec<(String, Cmd)> {
+    vec![index_cmd(work, footage, force), proxy_cmd(work, false)]
+}
+
 /// Segments scoring below this are not worth a caption.
 const CAPTION_MIN_Q: f32 = 0.15;
 
@@ -541,7 +557,13 @@ fn views(ctx: &PageCtx<'_>, state: &State, recipe: &Recipe) -> Vec<View> {
                     Standing::Partial,
                     format!("{text} · {} new in the folder", v - i.clips.len()),
                 ),
-                None => (Standing::Done, text),
+                None => match crate::proxy::missing(&p.work, i).len() {
+                    0 => (Standing::Done, text),
+                    n => (
+                        Standing::Partial,
+                        format!("{text} · {n} need playback copies"),
+                    ),
+                },
             }
         }
         (None, Some(v)) => (Standing::Ready, format!("{v} clips to analyse")),
@@ -549,9 +571,9 @@ fn views(ctx: &PageCtx<'_>, state: &State, recipe: &Recipe) -> Vec<View> {
     };
     let run = match &p.settings.footage {
         Some(footage) if p.index.is_some() => {
-            Run::Jobs("Update", vec![index_cmd(&work, footage, false)])
+            Run::Jobs("Update", index_jobs(&work, footage, false))
         }
-        Some(footage) => Run::Jobs("Run", vec![index_cmd(&work, footage, false)]),
+        Some(footage) => Run::Jobs("Run", index_jobs(&work, footage, false)),
         None => Run::None,
     };
     let more = p.settings.footage.as_ref().filter(|_| p.index.is_some()).map(|footage| {
@@ -561,7 +583,7 @@ fn views(ctx: &PageCtx<'_>, state: &State, recipe: &Recipe) -> Vec<View> {
             Run::Confirm(
                 "Re-analyse all",
                 "Analyse every clip again from scratch? This takes as long as the first time. Captions, people and cuts are kept.".to_owned(),
-                vec![index_cmd(&work, footage, true)],
+                index_jobs(&work, footage, true),
             ),
         )
     });
@@ -824,7 +846,7 @@ fn everything(
                 .zip(p.index.as_ref().map(|i| i.clips.len()))
                 .is_some_and(|(v, c)| v > c);
             if !indexed || new {
-                jobs.push(index_cmd(work, footage, false));
+                jobs.extend(index_jobs(work, footage, false));
             }
         }
         None if !indexed => skipped.push("index: set the footage folder".to_owned()),

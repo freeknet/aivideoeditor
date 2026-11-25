@@ -257,6 +257,7 @@ ave index  <footage-dir> --work <work>   # ~40 s for 20 min of 1080p: index.json
 ave caption --work <work>                # Qwen3-VL captions per segment (local GPU)
 ave beats  <track.wav>  --work <work>    # tempo, beat grid on the kicks, bars, drops
 ave beats --none --work <work>           # or no music: a steady 2 s pace, the clips' own sound
+ave proxy --work <work>                  # playback copies of 4K/HEVC clips, so the editor plays smoothly
 ave people --work <work>                 # draft people.toml (who is in which clip)
 ave plan reel-30 --work <work> --aspect 9x16 --seconds 30 --end-card card.png
 ave check  <work>/plans/reel-30.toml --work <work>

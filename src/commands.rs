@@ -486,6 +486,16 @@ pub(crate) enum Cmd {
         #[arg(long)]
         work: PathBuf,
     },
+    /// Make playback copies of heavy clips (4K, HEVC) -> <work>/proxies/, so the
+    /// editor plays smoothly; renders still use the originals.
+    Proxy {
+        /// Work folder.
+        #[arg(long)]
+        work: PathBuf,
+        /// Make every proxy again, even the up-to-date ones.
+        #[arg(long)]
+        force: bool,
+    },
     /// Draft <work>/people.toml (who is in which clip) from the captions.
     People {
         /// Work folder.
@@ -586,6 +596,7 @@ pub(crate) fn execute_with(
     let recorder = match &command {
         Cmd::Index { work, .. } | Cmd::Caption { work, .. } => Some(Arc::new(Recorder::new(work))),
         Cmd::Beats { .. }
+        | Cmd::Proxy { .. }
         | Cmd::People { .. }
         | Cmd::Plan { .. }
         | Cmd::Check { .. }
@@ -638,6 +649,14 @@ fn run(command: Cmd, out: &mut impl Write, progress: &Progress) -> anyhow::Resul
                 out,
                 "{n} segments captioned -> {}",
                 work.join("shotlog.md").display()
+            )?;
+        }
+        Cmd::Proxy { work, force } => {
+            let n = crate::proxy::run(&work, force, progress)?;
+            writeln!(
+                out,
+                "{n} playback copies -> {}",
+                work.join("proxies").display()
             )?;
         }
         Cmd::Beats { track, none, work } => {

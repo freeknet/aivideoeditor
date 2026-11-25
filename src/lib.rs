@@ -59,6 +59,7 @@ mod otio;
 mod people;
 mod plan;
 mod project;
+mod proxy;
 mod recipe;
 pub mod refs;
 mod render;

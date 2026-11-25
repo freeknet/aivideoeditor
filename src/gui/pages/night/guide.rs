@@ -70,7 +70,7 @@ impl Stage {
     fn owns(self, label: &str) -> bool {
         match self {
             Self::Footage | Self::Review => false,
-            Self::Analyse => matches!(label, "index" | "caption" | "people"),
+            Self::Analyse => matches!(label, "index" | "proxy" | "caption" | "people"),
             Self::Music => label == "beats",
             Self::FirstCut => label.starts_with("plan "),
             Self::Export => label.starts_with("render ") || label.starts_with("otio "),
@@ -110,6 +110,8 @@ pub(crate) struct Facts {
     pub(crate) deliverables: usize,
     /// Of those, how many are in the output folder.
     pub(crate) delivered: usize,
+    /// Heavy clips (4K, HEVC) still without a playback copy.
+    pub(crate) proxies_missing: usize,
 }
 
 /// Reads [`Facts`] from `project`, with `recipe` for the deliverables.
@@ -145,6 +147,10 @@ pub(crate) fn facts(project: &Project, recipe: &Recipe) -> Facts {
         plans: project.plans.len(),
         deliverables: recipe.deliverables.len(),
         delivered,
+        proxies_missing: project
+            .index
+            .as_ref()
+            .map_or(0, |i| crate::proxy::missing(&project.work, i).len()),
     }
 }
 
@@ -152,7 +158,7 @@ pub(crate) fn facts(project: &Project, recipe: &Recipe) -> Facts {
 fn done(f: &Facts, stage: Stage) -> bool {
     match stage {
         Stage::Footage => f.footage,
-        Stage::Analyse => f.indexed.is_some(),
+        Stage::Analyse => f.indexed.is_some() && f.proxies_missing == 0,
         Stage::Music => f.mapped,
         Stage::FirstCut => f.plans > 0,
         Stage::Review => f.delivered > 0,
@@ -194,6 +200,7 @@ pub(crate) fn current(f: &Facts) -> Option<Stage> {
 pub(crate) fn next_label(f: &Facts, stage: Stage) -> &'static str {
     match stage {
         Stage::Footage => "Choose footage\u{2026}",
+        Stage::Analyse if f.indexed.is_some() => "Prepare smooth playback",
         Stage::Analyse => "Set up and analyse",
         Stage::Music if f.track => "Map the music",
         Stage::Music => "Choose music\u{2026}",
@@ -436,6 +443,7 @@ fn short(text: &str) -> String {
 fn job_title(label: &str) -> String {
     match label {
         "index" => "Analysing footage".to_owned(),
+        "proxy" => "Preparing smooth playback".to_owned(),
         "caption" => "Captioning".to_owned(),
         "people" => "Finding who's who".to_owned(),
         "beats" => "Mapping the music".to_owned(),
@@ -452,6 +460,10 @@ fn job_title(label: &str) -> String {
 fn next_tip(f: &Facts, stage: Stage) -> String {
     match stage {
         Stage::Footage => "Pick the folder your clips are in.".to_owned(),
+        Stage::Analyse if f.indexed.is_some() => format!(
+            "Make light playback copies of the {} heavy clip(s) (4K or HEVC), so the timeline plays smoothly. Renders still use the originals.",
+            f.proxies_missing
+        ),
         Stage::Analyse => {
             "Footage, music and what to make, then approve what runs. Everything after it runs on its own."
                 .to_owned()
@@ -597,12 +609,15 @@ fn run(ctx: &mut PageCtx<'_>, home: &mut super::State, recipe: &Recipe, f: &Fact
                 let previous = home.recent.last_night(Some(&work));
                 home.start_wizard(work, previous, Vec::new());
                 ctx.actions.push(Action::Go(Page::Night));
+            } else if f.proxies_missing > 0 {
+                home.pipeline
+                    .enqueue(ctx.jobs, vec![pipeline::proxy_cmd(&work, false)]);
             } else if let Some(footage) = ctx
                 .project
                 .as_ref()
                 .and_then(|p| p.settings.footage.clone())
             {
-                let mut jobs = vec![pipeline::index_cmd(&work, &footage, false)];
+                let mut jobs = pipeline::index_jobs(&work, &footage, false);
                 if f.captioned.0 < f.captioned.1 {
                     jobs.push(pipeline::caption_cmd(&work));
                 }
@@ -717,6 +732,17 @@ mod tests {
             deliverables: 2,
             ..Facts::default()
         }
+    }
+
+    #[test]
+    fn heavy_clips_without_playback_copies_keep_analysis_open() {
+        let mut f = fresh();
+        f.indexed = Some(4);
+        f.proxies_missing = 2;
+        assert_eq!(current(&f), Some(Stage::Analyse), "copies still to make");
+        assert_eq!(next_label(&f, Stage::Analyse), "Prepare smooth playback");
+        f.proxies_missing = 0;
+        assert_ne!(current(&f), Some(Stage::Analyse), "made: analysis is done");
     }
 
     #[test]

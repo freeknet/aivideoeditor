@@ -66,7 +66,8 @@ impl VideoStream {
         let job = Job {
             ctx: ctx.clone(),
             probes: probes.clone(),
-            path: path.to_path_buf(),
+            // A heavy original plays from its proxy (same frames, far lighter).
+            path: crate::proxy::for_playback(path),
             start: start.max(0.0),
             end,
             width,
