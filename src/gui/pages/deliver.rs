@@ -74,6 +74,9 @@ pub(crate) struct State {
     checked: Option<(Instant, usize)>,
     /// Ticked cells, by plan path.
     ticked: BTreeSet<PathBuf>,
+    /// Whether this project's passing, undelivered cuts were ticked on
+    /// their own (once, when nothing was ticked).
+    auto_ticked: bool,
     /// A render of failing plans waiting for "render anyway".
     confirm: Option<Vec<PathBuf>>,
     /// The render queue.
@@ -109,6 +112,7 @@ impl State {
         if stale {
             if self.loaded.as_ref().is_some_and(|l| l.work != p.work) {
                 self.ticked.clear();
+                self.auto_ticked = false;
                 self.checks.clear();
             }
             let (recipe, _, _) = Recipe::load(&p.work);
@@ -325,6 +329,22 @@ fn summary(ctx: &PageCtx<'_>, state: &mut State, ui: &mut egui::Ui, rows: &[Row]
         })
         .map(|c| c.path.clone())
         .collect();
+    // Opened with nothing ticked: the cuts that pass and are not delivered
+    // yet are ticked, once per project, so Render is ready to press.
+    if !state.auto_ticked && !passing.is_empty() {
+        state.auto_ticked = true;
+        if state.ticked.is_empty() {
+            let out = state.loaded.as_ref().map(|l| {
+                l.recipe
+                    .output_dir(&l.work, &crate::recipe::Names::for_work(&l.work))
+            });
+            let undelivered = rows.iter().filter_map(|r| r.cells.first()).filter(|c| {
+                passing.contains(&c.path)
+                    && out.as_ref().is_none_or(|o| !o.join(&c.filename).is_file())
+            });
+            state.ticked.extend(undelivered.map(|c| c.path.clone()));
+        }
+    }
     let mut text = format!("{} deliverables \u{b7} {plans} plans", rows.len());
     if failing > 0 {
         text.push_str(&format!(" \u{b7} {failing} failing"));
