@@ -1189,14 +1189,22 @@ fn header(
         stats: match (state.plan.as_ref(), project.music.as_ref()) {
             (Some(plan), Some(map)) => {
                 let len = map.beat_time(plan.end_bar, 0) - map.beat_time(plan.start_bar, 0);
-                Some(format!(
-                    "{} shots · {} · {:.0} bpm · bars {}–{}",
-                    plan.shots.len(),
-                    timeline::timecode(len, false),
-                    map.bpm,
-                    plan.start_bar,
-                    plan.end_bar
-                ))
+                Some(if map.no_music() {
+                    format!(
+                        "{} shots · {} · no music",
+                        plan.shots.len(),
+                        timeline::timecode(len, false)
+                    )
+                } else {
+                    format!(
+                        "{} shots · {} · {:.0} bpm · bars {}–{}",
+                        plan.shots.len(),
+                        timeline::timecode(len, false),
+                        map.bpm,
+                        plan.start_bar,
+                        plan.end_bar
+                    )
+                })
             }
             (Some(_) | None, _) => None,
         },

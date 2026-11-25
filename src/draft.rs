@@ -780,10 +780,12 @@ fn draft_paced(
                     spec.seconds
                 );
             };
-            log::warn!(
-                "no drop in the music map; the biggest rise (bar {}) stands in for it",
-                found.bar + 1
-            );
+            if !map.no_music() {
+                log::warn!(
+                    "no drop in the music map; the biggest rise (bar {}) stands in for it",
+                    found.bar + 1
+                );
+            }
             stand_in = found;
             &stand_in
         }

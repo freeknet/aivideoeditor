@@ -235,7 +235,15 @@ fn settings_rows(ctx: &mut PageCtx<'_>, state: &State, ui: &mut egui::Ui) {
             "Music track",
             icons::MUSIC,
             track.as_deref(),
-            "Not set: pick the approved track",
+            if ctx
+                .project
+                .as_ref()
+                .is_some_and(crate::project::Project::no_music)
+            {
+                super::wizard::NO_MUSIC_NOTE
+            } else {
+                "Not set: pick the approved track"
+            },
             true,
         ) {
             change = Some(("track".to_owned(), a));

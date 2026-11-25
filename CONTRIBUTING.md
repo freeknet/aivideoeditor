@@ -78,6 +78,7 @@ Two examples drive the real app headlessly and render it to PNGs:
 ```bash
 cargo run --example screenshot                           # every screen, to target/screenshots
 cargo run --example walkthrough -- <clips> <track.wav>   # a whole project, clicked through
+cargo run --example walkthrough -- <clips> none          # the same, with No music
 ```
 
 The walkthrough starts a project from a fresh folder of clips (no `_ave`

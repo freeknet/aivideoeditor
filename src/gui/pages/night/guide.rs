@@ -134,7 +134,14 @@ pub(crate) fn facts(project: &Project, recipe: &Recipe) -> Facts {
             )
         }),
         track: project.settings.track.is_some(),
-        mapped: project.music.is_some(),
+        // Mapped means mapped for *this* track (a track changed since is
+        // not), or going without music.
+        mapped: project.no_music()
+            || project
+                .music
+                .as_ref()
+                .zip(project.settings.track.as_ref())
+                .is_some_and(|(m, t)| std::path::Path::new(&m.path) == t.as_path()),
         plans: project.plans.len(),
         deliverables: recipe.deliverables.len(),
         delivered,
@@ -262,6 +269,7 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, home: &mut super::State, ui: &mut egui
     let mut clicked_stage = None;
     let mut next = None;
     let mut progress = false;
+    let mut go_silent = false;
     ui.horizontal(|ui| {
         ui.set_min_height(theme::CONTROL_HEIGHT);
         ui.spacing_mut().item_spacing.x = theme::SPACE_XS;
@@ -300,6 +308,20 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, home: &mut super::State, ui: &mut egui
             } else if let Some(stage) = current(&f) {
                 let label = next_label(&f, stage);
                 let tip = next_tip(&f, stage);
+                // Music is optional: going without is the other way on.
+                if stage == Stage::Music && !f.track {
+                    if widgets::outline_button(ui, theme, "No music")
+                        .on_hover_text(super::wizard::NO_MUSIC_NOTE)
+                        .clicked()
+                    {
+                        go_silent = true;
+                    }
+                    ui.label(
+                        egui::RichText::new("or")
+                            .font(theme::font(theme::BODY_SIZE))
+                            .color(theme::rgb(theme.text_muted)),
+                    );
+                }
                 if widgets::button_with(
                     ui,
                     theme,
@@ -363,6 +385,14 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, home: &mut super::State, ui: &mut egui
     }
     if let Some(stage) = next {
         run(ctx, home, &recipe, &f, stage);
+    }
+    if go_silent && let Some(p) = ctx.project.as_mut() {
+        match crate::beats::write_no_music(&p.work) {
+            Ok(_) => home.guide.notice = None,
+            Err(e) => home.guide.notice = Some(format!("Could not go without music: {e:#}")),
+        }
+        p.reload_music();
+        home.guide.cached = None;
     }
 }
 
@@ -435,7 +465,7 @@ fn next_tip(f: &Facts, stage: Stage) -> String {
                 .to_owned()
         }
         Stage::Music if f.track => "Find the track's beats, bars and drops, so cuts land on them.".to_owned(),
-        Stage::Music => "Pick the track the cut is timed to.".to_owned(),
+        Stage::Music => "Pick the track the cut is timed to, or press No music to cut without one.".to_owned(),
         Stage::FirstCut => format!(
             "Draft {} on the beat grid from the shot log.",
             match f.deliverables {
@@ -612,7 +642,8 @@ fn run(ctx: &mut PageCtx<'_>, home: &mut super::State, recipe: &Recipe, f: &Fact
                 vec![(
                     "beats".to_owned(),
                     crate::commands::Cmd::Beats {
-                        track,
+                        track: Some(track),
+                        none: false,
                         work: work.clone(),
                     },
                 )],
@@ -621,7 +652,7 @@ fn run(ctx: &mut PageCtx<'_>, home: &mut super::State, recipe: &Recipe, f: &Fact
         Stage::FirstCut => {
             if f.indexed.is_none() || !f.mapped {
                 home.guide.notice = Some(
-                    "The first cut needs the footage analysed and the music mapped first."
+                    "The first cut needs the footage analysed, and the music mapped or No music chosen."
                         .to_owned(),
                 );
                 return;

@@ -13,6 +13,8 @@
 //! count, with boundaries computed from the cumulative beat times so the
 //! cuts never drift off the music. The music is a straight trim from the
 //! start bar: no speed change, no fades, no compression, no gain.
+//! A plan with no music (an empty `music`) keeps each shot's own sound
+//! instead, cut to its frames, with silence for a clip that has none.
 //!
 //! Exposure is matched per shot from the index (the lit region's highlight
 //! level and mean luma), which keeps a dark clip next to a bright one from
@@ -124,6 +126,10 @@ fn colour_gains(shot: [f32; 3], reference: [f32; 3]) -> [f32; 3] {
     wb.map(|g| (g * norm * level).clamp(0.8, 1.25))
 }
 
+/// Every shot's sound in one shape before they are joined, so a stereo clip,
+/// a mono one and the silence for a clip without any concatenate cleanly.
+const AUDIO_FORMAT: &str = "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo";
+
 /// Builds the filter graph and input list; returns (args, graph, seconds).
 fn build(
     plan: &Plan,
@@ -141,6 +147,8 @@ fn build(
     let mut args: Vec<String> = Vec::new();
     let mut graph = String::new();
     let mut labels = String::new();
+    let mut audio = String::new();
+    let mut audio_labels = String::new();
 
     // Cut boundaries in output frames. With a cut lead, every cut after the
     // first (the end card's included) comes that many frames early, and
@@ -175,6 +183,22 @@ fn build(
             bail!("shot {} has no frames", i + 1);
         }
         let dur = n as f64 / rate;
+        // With no music, the shot keeps its own sound, cut to its frames
+        // (silence for a clip recorded without any).
+        if plan.music.is_empty() {
+            if clip.probe.has_audio {
+                let _ = write!(
+                    audio,
+                    "[{i}:a]atrim=end={dur:.6},asetpts=PTS-STARTPTS,{AUDIO_FORMAT}[a{i}];"
+                );
+            } else {
+                let _ = write!(
+                    audio,
+                    "anullsrc=r=48000:cl=stereo,atrim=end={dur:.6},{AUDIO_FORMAT}[a{i}];"
+                );
+            }
+            let _ = write!(audio_labels, "[a{i}]");
+        }
         let t_in = if i == 0 {
             f64::from(shot.t_in)
         } else {
@@ -253,6 +277,14 @@ fn build(
         graph.push_str("[cut]null[v]");
     }
     let total = frames(if parts == 2 { end_t } else { card_t }) as f64 / rate;
+    if plan.music.is_empty() {
+        // The shots' own sound, then silence under the end card.
+        let _ = write!(
+            graph,
+            ";{audio}{audio_labels}concat=n={n_shots}:v=0:a=1,apad,atrim=end={total:.6}[a]"
+        );
+        return Ok((args, graph, total));
+    }
     args.extend([
         "-ss".into(),
         format!("{origin:.3}"),
@@ -282,7 +314,12 @@ pub(crate) fn render(
     }
     let script = out.with_extension("filter.txt");
     std::fs::write(&script, &graph)?;
-    let audio_input = inputs.iter().filter(|a| *a == "-i").count() - 1;
+    // The music is the last input; with no music the graph builds `[a]`.
+    let audio_map = if plan.music.is_empty() {
+        "[a]".to_owned()
+    } else {
+        format!("{}:a", inputs.iter().filter(|a| *a == "-i").count() - 1)
+    };
     let codec: Vec<&str> = match encoder {
         Encoder::X264 => vec![
             "-c:v", "libx264", "-preset", "slow", "-crf", "18", "-tune", "film",
@@ -296,7 +333,7 @@ pub(crate) fn render(
         .args(&inputs)
         .arg("-/filter_complex")
         .arg(&script)
-        .args(["-map", "[v]", "-map", &format!("{audio_input}:a")])
+        .args(["-map", "[v]", "-map", &audio_map])
         .args(&codec)
         .args(["-r", &format!("{}/{}", fps.0, fps.1), "-pix_fmt", "yuv420p"])
         .args([
@@ -534,6 +571,36 @@ mod tests {
         assert!(
             args.contains(&"9.958".to_owned()),
             "the incoming shot starts a frame earlier in its source: {args:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn with_no_music_each_shot_keeps_its_own_sound() -> anyhow::Result<()> {
+        let mut index = index();
+        if let Some(a) = index.clips.first_mut() {
+            a.probe.has_audio = true;
+        }
+        let mut silent = plan(Finish::default());
+        silent.music = String::new();
+        let (args, graph, total) =
+            build(&silent, &index, &crate::beats::MusicMap::paced(), (24, 1))?;
+        assert_eq!(
+            args.iter().filter(|a| *a == "-i").count(),
+            2,
+            "the two shots and no music input: {args:?}"
+        );
+        assert!(
+            graph.contains("[0:a]atrim=end=2.000000,"),
+            "the clip with sound is cut to its 2 s shot: {graph}"
+        );
+        assert!(
+            graph.contains("anullsrc=r=48000:cl=stereo,atrim=end=2.000000,"),
+            "the clip without sound gets 2 s of silence: {graph}"
+        );
+        assert!(
+            graph.ends_with(&format!("concat=n=2:v=0:a=1,apad,atrim=end={total:.6}[a]")),
+            "joined and padded to the whole cut: {graph}"
         );
         Ok(())
     }

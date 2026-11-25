@@ -246,6 +246,12 @@ impl Project {
         }
     }
 
+    /// Whether this project is cut without music: no track, and the paced
+    /// stand-in ([`MusicMap::paced`]) in place of a beat map.
+    pub(crate) fn no_music(&self) -> bool {
+        self.settings.track.is_none() && self.music.as_ref().is_some_and(MusicMap::no_music)
+    }
+
     /// Re-reads `music.json`.
     pub(crate) fn reload_music(&mut self) {
         self.music = if self.work.join("music.json").exists() {
@@ -258,6 +264,7 @@ impl Project {
         // A night mapped from the command line has its track only in the map.
         if self.settings.track.is_none()
             && let Some(music) = &self.music
+            && !music.no_music()
         {
             self.settings.track = Some(PathBuf::from(&music.path));
         }

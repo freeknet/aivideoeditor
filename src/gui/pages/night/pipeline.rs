@@ -544,13 +544,19 @@ fn views(ctx: &PageCtx<'_>, state: &State, recipe: &Recipe) -> Vec<View> {
         (
             "beats".to_owned(),
             Cmd::Beats {
-                track: t.clone(),
+                track: Some(t.clone()),
+                none: false,
                 work: work.clone(),
             },
         )
     };
     let track = p.settings.track.as_ref();
     let (standing, summary, run) = match (&p.music, track) {
+        _ if p.no_music() => (
+            Standing::Done,
+            "No music: paced every 2 s, the clips' own sound".to_owned(),
+            Run::None,
+        ),
         (Some(m), Some(t)) => (
             Standing::Done,
             format!(
@@ -574,9 +580,19 @@ fn views(ctx: &PageCtx<'_>, state: &State, recipe: &Recipe) -> Vec<View> {
             Run::Jobs("Run", vec![beats(t)]),
         ),
         (None, None) => (
-            Standing::Blocked,
-            "Set the music track".to_owned(),
-            Run::None,
+            Standing::Ready,
+            "Set the track in the settings below, or go without".to_owned(),
+            Run::Jobs(
+                "No music",
+                vec![(
+                    "beats".to_owned(),
+                    Cmd::Beats {
+                        track: None,
+                        none: true,
+                        work: work.clone(),
+                    },
+                )],
+            ),
         ),
     };
     out.push(View {
@@ -638,7 +654,7 @@ fn views(ctx: &PageCtx<'_>, state: &State, recipe: &Recipe) -> Vec<View> {
     } else if !ready {
         (
             Standing::Blocked,
-            "Needs the shot log and the music map".to_owned(),
+            "Needs the shot log, and music (or No music)".to_owned(),
             Run::None,
         )
     } else if have == 0 {
@@ -747,11 +763,12 @@ fn everything(
         Some(track) if !mapped => jobs.push((
             "beats".to_owned(),
             Cmd::Beats {
-                track: track.clone(),
+                track: Some(track.clone()),
+                none: false,
                 work: work.clone(),
             },
         )),
-        None if !mapped => skipped.push("music: set the track".to_owned()),
+        None if !mapped => skipped.push("music: choose a track, or No music".to_owned()),
         Some(_) | None => {}
     }
     let can_index = indexed || jobs.iter().any(|(l, _)| l == "index");

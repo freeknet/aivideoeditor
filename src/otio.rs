@@ -177,14 +177,20 @@ pub(crate) fn timeline(plan: &Plan, index: &Index, map: &MusicMap) -> Result<Val
         json!({"bpm": map.bpm, "start_bar": plan.start_bar, "drop_bar": plan.drop_bar}),
     );
     let drop_at = f64::from(map.beat_time(plan.drop_bar, 0) - origin);
-    let mut markers = vec![
-        json!({"OTIO_SCHEMA": "Marker.2", "name": "drop", "color": "RED",
+    // With no music there is no track to lay and no drop to mark: the
+    // clips carry their own sound.
+    let no_music = plan.music.is_empty();
+    let mut markers = Vec::new();
+    if !no_music {
+        markers.push(
+            json!({"OTIO_SCHEMA": "Marker.2", "name": "drop", "color": "RED",
         "comment": "", "marked_range": range(frames(drop_at), 0.0, rate), "metadata": {}}),
-    ];
+        );
+    }
     markers.extend(plan_markers(plan, rate));
     let mut stack = json!({
         "OTIO_SCHEMA": "Stack.1", "name": "tracks",
-        "children": [track("V1", "Video", video), track("A1", "Audio", vec![music])],
+        "children": [track("V1", "Video", video), track("A1", "Audio", if no_music { Vec::new() } else { vec![music] })],
         "source_range": Value::Null, "effects": [], "enabled": true, "metadata": {},
         "markers": markers,
     });

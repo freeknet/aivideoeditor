@@ -11,10 +11,11 @@
 </div>
 
 `ave` is a desktop video editor that cuts a first edit for you. You give it
-a folder of raw clips and a music track. It analyses the footage (exposure,
+a folder of raw clips and, if you want one, a music track. It analyses the footage (exposure,
 focus, fire and LED light, camera moves, shot boundaries, plus captions from
 a local vision model), finds the track's beats, bars and drops, and drafts a
-cut on the beat grid. Then you review it, change it by hand or by asking the
+cut on the beat grid (or, with no music, paced every two seconds over the
+clips' own sound). Then you review it, change it by hand or by asking the
 chat, and export the video or a timeline for Resolve or Kdenlive.
 
 It was built for the weekly JaJa Flow Night promo edits, so its default rules
@@ -129,7 +130,9 @@ is done:
    works out who's who and drafts the first cut. You can open the editor
    as soon as indexing finishes; the rest carries on in the background.
 2. **Music.** If you skipped the track in set-up, **Choose music…** picks it
-   and maps its beats, bars and drops.
+   and maps its beats, bars and drops. Music is optional: **No music**
+   (in set-up, or beside **Choose music…**) cuts every two seconds instead
+   and keeps each clip's own sound in the video.
 3. **First cut.** **Draft the first cut** drafts every deliverable that has
    no cut yet. It never redrafts one you have already edited.
 4. **Review the cut.** The editor opens on the timeline. Play the cut,
@@ -252,6 +255,7 @@ picks up whatever the commands write.
 ave index  <footage-dir> --work <work>   # ~40 s for 20 min of 1080p: index.json + shotlog.md
 ave caption --work <work>                # Qwen3-VL captions per segment (local GPU)
 ave beats  <track.wav>  --work <work>    # tempo, beat grid on the kicks, bars, drops
+ave beats --none --work <work>           # or no music: a steady 2 s pace, the clips' own sound
 ave people --work <work>                 # draft people.toml (who is in which clip)
 ave plan reel-30 --work <work> --aspect 9x16 --seconds 30 --end-card card.png
 ave check  <work>/plans/reel-30.toml --work <work>

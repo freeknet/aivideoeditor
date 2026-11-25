@@ -4485,8 +4485,10 @@ fn load_sequence(ctx: &mut PageCtx<'_>, plan: &Plan) -> bool {
         })
         .collect();
     let start = f64::from(music.beat_time(plan.start_bar, 0));
-    ctx.player
-        .open_sequence(shots, Some((plan.music.clone().into(), start)));
+    ctx.player.open_sequence(
+        shots,
+        (!plan.music.is_empty()).then(|| (plan.music.clone().into(), start)),
+    );
     true
 }
 

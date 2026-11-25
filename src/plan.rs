@@ -812,7 +812,8 @@ pub(crate) fn check_with(
                 .find(|g| g.clip == shot.clip && g.seg.start <= shot.t_in && shot.t_in < g.seg.end)
                 .map(|g| g.subject.clone())
                 .unwrap_or_default();
-            if !r.drop_subject.is_empty() && subject != r.drop_subject {
+            // With no music there is no drop to land a subject on.
+            if !map.no_music() && !r.drop_subject.is_empty() && subject != r.drop_subject {
                 push(
                     "drop-subject",
                     n,
@@ -977,7 +978,7 @@ pub(crate) fn check_with(
             );
         }
     }
-    if !hit_drop {
+    if !hit_drop && !map.no_music() {
         push(
             "off-drop",
             0,
@@ -1251,6 +1252,50 @@ beats = 4
                 .collect(),
             ..crate::beats::MusicMap::default()
         }
+    }
+
+    #[test]
+    fn with_no_music_there_is_no_drop_to_miss() -> anyhow::Result<()> {
+        let shot = |beats: usize| super::Shot {
+            clip: "A".into(),
+            t_in: 10.0,
+            beats,
+            cx: 0.5,
+            who: String::new(),
+            seg: String::new(),
+            note: String::new(),
+        };
+        // Shots start on beats 0, 3 and 8: none on the drop (bar 1, beat 4).
+        let mut plan = Plan {
+            name: "t".into(),
+            aspect: Aspect::Vertical,
+            music: "m.wav".into(),
+            start_bar: 0,
+            drop_bar: 1,
+            card_bar: 3,
+            end_bar: 4,
+            end_card: String::new(),
+            rules: Rules::default(),
+            finish: super::Finish::default(),
+            shots: vec![shot(3), shot(5), shot(4)],
+            comments: Vec::new(),
+        };
+        let people = crate::people::People::default();
+        let problems = super::check(&plan, &tiny_index(), &tiny_map(), &people);
+        assert!(
+            problems.iter().any(|p| p.id == "off-drop"),
+            "with music, a cut that misses the drop is flagged: {problems:?}"
+        );
+        plan.music = String::new();
+        let paced = crate::beats::MusicMap::paced();
+        let problems = super::check(&plan, &tiny_index(), &paced, &people);
+        assert!(
+            !problems
+                .iter()
+                .any(|p| p.id == "off-drop" || p.id == "drop-subject"),
+            "with no music there is no drop: {problems:?}"
+        );
+        Ok(())
     }
 
     #[test]

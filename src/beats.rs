@@ -912,9 +912,86 @@ pub(crate) fn reanalyze(track: &Path, work: &Path) -> Result<MusicMap> {
     Ok(map)
 }
 
+/// The pace of a cut with no music: 120 BPM, so a bar (the planner's unit
+/// of a shot) is two seconds.
+pub(crate) const NO_MUSIC_BPM: f32 = 120.0;
+
+/// How long the stand-in grid of a cut with no music runs: longer than any
+/// deliverable.
+const NO_MUSIC_SECONDS: f32 = 1800.0;
+
+impl MusicMap {
+    /// A map with no track behind it: a steady grid at [`NO_MUSIC_BPM`],
+    /// flat loudness, no drops and no sections, so the planner paces the
+    /// cut evenly and the render plays the clips' own sound. Its `path` is
+    /// empty, which is what [`MusicMap::no_music`] reads.
+    pub(crate) fn paced() -> Self {
+        let period = 60.0 / NO_MUSIC_BPM;
+        let count = (NO_MUSIC_SECONDS / period) as usize;
+        let beats: Vec<f32> = (0..count).map(|i| i as f32 * period).collect();
+        let bars = beats
+            .iter()
+            .step_by(4)
+            .map(|&t| Bar {
+                t,
+                rms: 0.0,
+                low: 0.0,
+            })
+            .collect();
+        let mut map = Self {
+            path: String::new(),
+            duration: NO_MUSIC_SECONDS,
+            bpm: NO_MUSIC_BPM,
+            beats,
+            bars,
+            drops: Vec::new(),
+            sections: Vec::new(),
+            envelope: None,
+            grid_offset: 0.0,
+            bpm_override: None,
+            downbeat_shift: 0,
+            drops_user: Vec::new(),
+            sections_user: Vec::new(),
+            ranges: Vec::new(),
+            raw: None,
+        };
+        map.apply();
+        map
+    }
+
+    /// Whether this is the stand-in for a cut with no music ([`MusicMap::paced`]).
+    pub(crate) fn no_music(&self) -> bool {
+        self.path.is_empty()
+    }
+}
+
+/// Writes the no-music stand-in ([`MusicMap::paced`]) as `<work>/music.json`.
+pub(crate) fn write_no_music(work: &Path) -> Result<MusicMap> {
+    let map = MusicMap::paced();
+    map.save(work)?;
+    Ok(map)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Bar, DropMark, Envelope, MusicMap, Section, tempo, track};
+
+    #[test]
+    fn no_music_is_a_steady_two_second_grid_that_survives_a_save() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        super::write_no_music(dir.path())?;
+        let map = MusicMap::load(dir.path())?;
+        assert!(map.no_music(), "an empty path marks no music");
+        assert!(map.drops.is_empty(), "no drops: {:?}", map.drops);
+        let bar = map.beat_time(1, 0) - map.beat_time(0, 0);
+        assert!((bar - 2.0).abs() < 1e-4, "a bar is two seconds: {bar}");
+        assert!(
+            map.bars.len() >= 400,
+            "long enough for any cut: {}",
+            map.bars.len()
+        );
+        Ok(())
+    }
 
     #[test]
     fn a_click_track_is_found() -> anyhow::Result<()> {

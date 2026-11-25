@@ -9,12 +9,14 @@
 //               aivideoeditor::gui::app
 // ============================================================================
 
-//! `cargo run --example walkthrough -- <footage dir> <track> [<out dir>]`
+//! `cargo run --example walkthrough -- <footage dir> <track or none> [<out dir>]`
 //!
 //! The footage folder should be a fresh copy with no `_ave` in it: the walk
 //! starts a project from it. The track is written into the new project's
 //! settings before it opens, as if carried over from the last project,
 //! because a native file dialog cannot be clicked headlessly.
+//! Pass `none` for the track to walk the no-music path instead: set-up's
+//! "No music" is clicked in place of a track.
 //!
 //! Each step clicks a button by its accessible name, as a screen reader
 //! would, and fails loudly when the button is not there, so a broken step
@@ -72,7 +74,7 @@ fn shoot(harness: &mut Harness<'_>, out: &Path, name: &str) -> anyhow::Result<()
 fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
     let (Some(footage), Some(track)) = (args.next(), args.next()) else {
-        anyhow::bail!("usage: walkthrough <footage dir> <track> [<out dir>]");
+        anyhow::bail!("usage: walkthrough <footage dir> <track or none> [<out dir>]");
     };
     let footage = PathBuf::from(footage);
     let out = args.next().map_or_else(
@@ -91,9 +93,16 @@ fn main() -> anyhow::Result<()> {
         work.display()
     );
     std::fs::create_dir_all(&work)?;
+    // `none` walks the no-music path: set-up's "No music" instead of a track.
+    let no_music = track == "none";
+    let track_line = if no_music {
+        String::new()
+    } else {
+        format!("track = '{track}'\n")
+    };
     std::fs::write(
         work.join("ave.toml"),
-        format!("footage = '{}'\ntrack = '{track}'\n", footage.display()),
+        format!("footage = '{}'\n{track_line}", footage.display()),
     )?;
 
     let open = footage.clone();
@@ -119,6 +128,11 @@ fn main() -> anyhow::Result<()> {
     shoot(&mut harness, &out, "02-setup-footage")?;
     click(&mut harness, "Continue", 30)?;
     shoot(&mut harness, &out, "03-setup-music")?;
+    if no_music {
+        click(&mut harness, "No music", 10)?;
+        settle(&mut harness, 500);
+        shoot(&mut harness, &out, "03b-setup-no-music")?;
+    }
     click(&mut harness, "Continue", 10)?;
     shoot(&mut harness, &out, "04-setup-deliverables")?;
     click(&mut harness, "Continue", 10)?;

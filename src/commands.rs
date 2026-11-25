@@ -473,10 +473,15 @@ pub(crate) enum Cmd {
         #[arg(long, default_value_t = 3)]
         parallel: usize,
     },
-    /// Map a music track: tempo, beats, bars, drops -> <work>/music.json.
+    /// Map a music track: tempo, beats, bars, drops -> <work>/music.json
+    /// (or, with --none, cut without music).
     Beats {
         /// The track.
-        track: PathBuf,
+        #[arg(required_unless_present = "none")]
+        track: Option<PathBuf>,
+        /// No music: cuts paced every two seconds, with the clips' own sound.
+        #[arg(long, conflicts_with = "track")]
+        none: bool,
         /// Work folder.
         #[arg(long)]
         work: PathBuf,
@@ -635,7 +640,16 @@ fn run(command: Cmd, out: &mut impl Write, progress: &Progress) -> anyhow::Resul
                 work.join("shotlog.md").display()
             )?;
         }
-        Cmd::Beats { track, work } => {
+        Cmd::Beats { track, none, work } => {
+            let Some(track) = track.filter(|_| !none) else {
+                crate::beats::write_no_music(&work)?;
+                writeln!(
+                    out,
+                    "no music: cuts paced at {} BPM, with the clips' own sound",
+                    crate::beats::NO_MUSIC_BPM
+                )?;
+                return Ok(());
+            };
             let name = track
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())

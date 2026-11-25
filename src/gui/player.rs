@@ -134,6 +134,19 @@ pub(crate) struct Here {
     pub(crate) segs: usize,
 }
 
+/// The shot of a cut at timeline second `pos`, with the second it starts
+/// at; `None` past the last shot (on the end card).
+fn shot_at(shots: &[SeqShot], pos: f64) -> Option<(usize, f64)> {
+    let mut start = 0.0;
+    for (i, shot) in shots.iter().enumerate() {
+        if pos < start + shot.dur {
+            return Some((i, start));
+        }
+        start += shot.dur;
+    }
+    None
+}
+
 /// The audio session playing now.
 struct Session {
     started: Instant,
@@ -198,6 +211,8 @@ pub(crate) struct Player {
     session: Option<Session>,
     /// The audio must restart at the playhead (seek, wrap, source change).
     audio_dirty: bool,
+    /// The shot whose own sound is playing, in a cut with no music.
+    audio_shot: Option<usize>,
     /// The clock may run: the frame under the playhead has been shown since
     /// the last play / seek (or the wait timed out).
     primed: bool,
@@ -236,6 +251,7 @@ impl Default for Player {
             audio: None,
             session: None,
             audio_dirty: true,
+            audio_shot: None,
             primed: false,
             prime_since: None,
             frame_ok: false,
@@ -611,9 +627,30 @@ impl Player {
                 (!known_silent).then(|| (path.clone(), t0 + pos, rest))
             }
             Source::Audio { path, t0, .. } => Some((path.clone(), t0 + pos, rest)),
-            Source::Sequence { music, .. } => music
-                .as_ref()
-                .map(|(m, offset)| (m.clone(), offset + pos, rest)),
+            Source::Sequence {
+                music: Some((m, offset)),
+                ..
+            } => Some((m.clone(), offset + pos, rest)),
+            // No music: the shot under the playhead plays its own sound,
+            // up to its cut (a clip known to be silent plays nothing).
+            Source::Sequence { shots, music: None } => {
+                let (i, start) = shot_at(shots, pos)?;
+                let shot = shots.get(i)?;
+                let silent = self
+                    .probes
+                    .lock()
+                    .ok()
+                    .and_then(|m| m.get(&shot.path).map(|p| !p.has_audio))
+                    .unwrap_or(false);
+                let into = pos - start;
+                (!silent).then(|| {
+                    (
+                        shot.path.clone(),
+                        shot.t_in + into,
+                        (shot.dur - into).max(0.05),
+                    )
+                })
+            }
         }
     }
 
@@ -651,6 +688,12 @@ impl Player {
             self.prime_since = None;
         }
         let wants_sound = (self.rate - 1.0).abs() < 1e-9;
+        // A cut with no music changes sound at every cut.
+        if let Source::Sequence { shots, music: None } = &self.source
+            && shot_at(shots, self.pos).map(|(i, _)| i) != self.audio_shot
+        {
+            self.audio_dirty = true;
+        }
         if !wants_sound && self.session.is_some() {
             self.end_audio();
         }
@@ -688,6 +731,17 @@ impl Player {
     /// Starts sound at the playhead, if the source has any.
     fn start_audio(&mut self, now: Instant) {
         self.audio_dirty = false;
+        // The shots' own sound follows the picture's clock rather than
+        // driving it: it restarts at every cut, and holding the picture for
+        // each restart would stutter.
+        let follows = matches!(self.source, Source::Sequence { music: None, .. });
+        self.audio_shot = match &self.source {
+            Source::Sequence { shots, music: None } => shot_at(shots, self.pos).map(|(i, _)| i),
+            Source::Empty
+            | Source::Clip { .. }
+            | Source::Sequence { .. }
+            | Source::Audio { .. } => None,
+        };
         let Some((file, t, len)) = self.audio_source(self.pos) else {
             self.end_audio();
             self.audio_dirty = false;
@@ -702,7 +756,7 @@ impl Player {
         audio.start(&file, t, len, self.pos);
         self.session = Some(Session {
             started: now,
-            dead: false,
+            dead: follows,
         });
     }
 
@@ -1160,7 +1214,30 @@ fn paint_picture(
 
 #[cfg(test)]
 mod tests {
-    use super::{Player, fit};
+    use super::{Player, SeqShot, fit, shot_at};
+
+    #[test]
+    fn a_cut_finds_the_shot_under_the_playhead() -> anyhow::Result<()> {
+        let shot = |dur: f64| SeqShot {
+            path: "a.mp4".into(),
+            t_in: 0.0,
+            dur,
+            cx: 0.5,
+        };
+        let shots = [shot(2.0), shot(1.5)];
+        assert_eq!(shot_at(&shots, 0.0), Some((0, 0.0)), "the first shot");
+        assert_eq!(
+            shot_at(&shots, 2.0),
+            Some((1, 2.0)),
+            "a cut belongs to the next shot"
+        );
+        assert_eq!(
+            shot_at(&shots, 3.6),
+            None,
+            "past the last shot, on the card"
+        );
+        Ok(())
+    }
 
     fn shot(dur: f64) -> super::SeqShot {
         super::SeqShot {

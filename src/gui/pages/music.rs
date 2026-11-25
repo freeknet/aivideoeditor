@@ -182,6 +182,26 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
     };
     let work = project.work.clone();
     let track = project.settings.track.clone();
+    if project.no_music() {
+        let theme = ctx.theme;
+        let mut choose = false;
+        widgets::empty_state(
+            ui,
+            theme,
+            icons::MUSIC,
+            "No music",
+            "Cuts are paced every two seconds and keep the clips' own sound. Choose a track to cut to its beat instead.",
+            |ui| {
+                choose = widgets::outline_button(ui, theme, "Choose music\u{2026}").clicked();
+            },
+        );
+        if choose {
+            ctx.actions.push(crate::gui::app::Action::RunStep(
+                crate::gui::app::Stage::Music,
+            ));
+        }
+        return;
+    }
     let Some(map) = project.music.take() else {
         no_music(ctx, state, ui, track, &work);
         return;
@@ -268,7 +288,8 @@ fn no_music(
                 state.job = Some(ctx.jobs.spawn(
                     "Map the music",
                     Cmd::Beats {
-                        track,
+                        track: Some(track),
+                        none: false,
                         work: work.to_path_buf(),
                     },
                 ));
@@ -523,11 +544,13 @@ fn toolbar(
             }
         },
     );
-    if analyse {
+    // No music has no file to re-analyse.
+    if analyse && !map.no_music() {
         state.job = Some(ctx.jobs.spawn(
             "Map the music",
             Cmd::Beats {
-                track: std::path::PathBuf::from(&map.path),
+                track: Some(std::path::PathBuf::from(&map.path)),
+                none: false,
                 work: work.to_path_buf(),
             },
         ));

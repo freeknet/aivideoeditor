@@ -12,6 +12,10 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- You can make a video without music. Choose **No music** in set-up, or beside
+  **Choose music…** on the guide strip (`ave beats --none` on the command line): cuts are
+  paced every two seconds, the video keeps each clip's own sound (silence for clips without
+  any), and the editor's player plays it too. Choosing a track later replaces it.
 - A guide strip under the top bar on every screen of an open project: *Footage → Analyse
   → Music → First cut → Review → Export*. It shows which stages are done (read from what
   is on disk, so work done from the command line or by the chat counts too) and has one

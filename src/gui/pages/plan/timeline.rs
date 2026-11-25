@@ -1427,6 +1427,10 @@ fn audio(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut Ui, lay: &L
                 .request_repaint_after(std::time::Duration::from_millis(250));
         }
         Some(Wave::Failed(e)) => note(&format!("No waveform: {e}"), theme::rgb(t.danger)),
+        None if s.plan.music.is_empty() => note(
+            "No music: each shot plays its own sound",
+            theme::rgb(t.text_muted),
+        ),
         None => note("The plan names no music file", theme::rgb(t.text_muted)),
     }
     let file = std::path::Path::new(&s.plan.music)
@@ -1540,7 +1544,9 @@ fn ruler(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut Ui, lay: &L
         );
     };
     let (drop, _) = marker("yellow");
-    for d in &s.map.drops {
+    // No music, no drop to mark.
+    let no_music = s.plan.music.is_empty();
+    for d in s.map.drops.iter().filter(|_| !no_music) {
         if d.bar != s.plan.drop_bar && d.bar >= s.plan.start_bar && d.bar <= s.plan.end_bar {
             flag(
                 m.x(s.map.beat_time(d.bar, 0) - origin),
@@ -1550,12 +1556,14 @@ fn ruler(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut Ui, lay: &L
             );
         }
     }
-    flag(
-        m.x(s.map.beat_time(s.plan.drop_bar, 0) - origin),
-        drop,
-        false,
-        "Drop",
-    );
+    if !no_music {
+        flag(
+            m.x(s.map.beat_time(s.plan.drop_bar, 0) - origin),
+            drop,
+            false,
+            "Drop",
+        );
+    }
     flag(m.x(s.card), theme::rgb(t.text_muted), false, "Card");
 
     // Comment pins.

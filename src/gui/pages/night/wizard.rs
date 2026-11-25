@@ -253,9 +253,14 @@ fn rows(ctx: &PageCtx<'_>, state: &mut State, scanned: Option<&scan::Scanned>) -
         .zip(p.settings.track.as_ref())
         .is_some_and(|(m, t)| Path::new(&m.path) == t.as_path());
     let (estimate, blocked, jobs) = match &p.settings.track {
+        None if p.no_music() => (
+            pending(NO_MUSIC_NOTE),
+            Some("No music".to_owned()),
+            Vec::new(),
+        ),
         None => (
             pending("no track"),
-            Some("Choose the track in step 2".to_owned()),
+            Some("Choose a track, or No music, in step 2".to_owned()),
             Vec::new(),
         ),
         Some(_) if mapped => (
@@ -276,7 +281,8 @@ fn rows(ctx: &PageCtx<'_>, state: &mut State, scanned: Option<&scan::Scanned>) -
             vec![(
                 "beats".to_owned(),
                 Cmd::Beats {
-                    track: track.clone(),
+                    track: Some(track.clone()),
+                    none: false,
                     work: work.clone(),
                 },
             )],
@@ -344,7 +350,7 @@ fn rows(ctx: &PageCtx<'_>, state: &mut State, scanned: Option<&scan::Scanned>) -
         blocked: if ids.is_empty() {
             Some("No deliverables to draft".to_owned())
         } else if !music {
-            Some("Needs the track".to_owned())
+            Some("Needs a track, or No music".to_owned())
         } else {
             None
         },
@@ -777,6 +783,10 @@ fn footage_step(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
     }
 }
 
+/// What a cut without music is, in the words set-up and the guide use.
+pub(crate) const NO_MUSIC_NOTE: &str =
+    "No music: cuts paced every two seconds, with the clips' own sound";
+
 /// Step 2: track and end cards, last week's carried over.
 fn music_step(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
     let theme = ctx.theme;
@@ -784,7 +794,7 @@ fn music_step(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
         ui,
         theme,
         "Music and end cards",
-        "The approved track every cut is timed to, and the card each aspect closes on.",
+        "The track every cut is timed to (or none), and the card each aspect closes on.",
     );
     let keys: BTreeSet<String> = state
         .recipe()
@@ -795,15 +805,37 @@ fn music_step(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
     let Some(settings) = ctx.project.as_ref().map(|p| p.settings.clone()) else {
         return;
     };
+    let silent = ctx.project.as_ref().is_some_and(project::Project::no_music);
     let pick_track = choose_row(
         ui,
         theme,
         "Track",
         icons::MUSIC,
         settings.track.as_deref(),
-        "No track yet",
+        if silent {
+            NO_MUSIC_NOTE
+        } else {
+            "No track yet"
+        },
         "Choose\u{2026}",
     );
+    if settings.track.is_none() && !silent {
+        parts::form_row(ui, theme, "", |ui| {
+            if widgets::ghost_button(ui, theme, "No music")
+                .on_hover_text(NO_MUSIC_NOTE)
+                .clicked()
+                && let Some(p) = ctx.project.as_mut()
+            {
+                if let Err(e) = crate::beats::write_no_music(&p.work) {
+                    state
+                        .notes
+                        .push(format!("could not go without music: {e:#}"));
+                }
+                p.reload_music();
+            }
+        });
+        ui.add_space(theme::SPACE_XS + 2.0);
+    }
     let mut pick_card = None;
     for key in &keys {
         if choose_row(
