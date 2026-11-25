@@ -148,7 +148,8 @@ fn main() -> anyhow::Result<()> {
     settle(&mut harness, 300);
     let hint = aivideoeditor::gui::ui::hint::current(&harness.ctx);
     anyhow::ensure!(
-        hint.as_ref().is_some_and(|(text, _)| text.contains("ticked steps")),
+        hint.as_ref()
+            .is_some_and(|(text, _)| text.contains("ticked steps")),
         "hovering Start analysis should describe it in the status bar, got {hint:?}"
     );
     shoot(&mut harness, &out, "05b-hover-hint")?;
