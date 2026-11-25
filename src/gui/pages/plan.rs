@@ -290,6 +290,9 @@ pub(crate) struct State {
 struct Shown<'a> {
     /// The palette.
     theme: &'a Palette,
+    /// Shots (0-based) the chat message being written points at, marked on
+    /// the timeline so it is plain what has been flagged.
+    flagged: BTreeSet<usize>,
     /// The night.
     project: &'a Project,
     /// The music map.
@@ -707,6 +710,7 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
         player,
         selection,
         actions,
+        refs,
         ..
     } = ctx;
     let palette: &Palette = palette;
@@ -820,8 +824,22 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
     let cut = sequence(&shown_plan, project, map);
     let ours = cut.is_loaded(player);
     let (card, total) = shown_plan.card_span(map);
+    let flagged: BTreeSet<usize> = refs
+        .iter()
+        .filter_map(|r| match &r.target {
+            Target::Shot { plan, index } if *plan == name => index.checked_sub(1),
+            Target::Shot { .. }
+            | Target::Segment { .. }
+            | Target::Range { .. }
+            | Target::Frame { .. }
+            | Target::Bars { .. }
+            | Target::Person { .. }
+            | Target::Plan { .. } => None,
+        })
+        .collect();
     let s = Shown {
         theme: palette,
+        flagged,
         project,
         map,
         timing: shown_plan.timing(map),

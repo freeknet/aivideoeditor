@@ -12,6 +12,10 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Pointing the chat at shots is in plain sight: selected timeline shots get an *Ask the
+  chat* button (R) with *as…* (keep, avoid, replace, more like, feature) and *Comment*;
+  every shot card in the browser shows an @ on hover that adds it to the message in one
+  click; and shots already in the message carry an @ flag on the timeline.
 - A project can have a name of its own (*Name* in the Home screen's project settings),
   shown in the top bar and the projects list in place of its folder's name.
 - Templates: what was built in for Flow Night is now one template of two. *General* (the

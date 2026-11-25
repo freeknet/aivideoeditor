@@ -106,7 +106,7 @@ pub(super) fn selection_bar(
     top_line(ui, s, rect);
     let inner = rect.shrink2(vec2(theme::SPACE_SM, theme::SPACE_XS));
     let muted = theme::rgb(t.text_muted);
-    let actions_w = theme::CONTROL_HEIGHT * 2.0 + 2.0 + theme::SPACE_SM;
+    let actions_w = 300.0;
     let actions = Rect::from_min_max(pos2(inner.right() - actions_w, inner.top()), inner.max);
     // Reference in chat and lift, for one shot or many.
     row(ui, actions, |ui| {
@@ -126,16 +126,48 @@ pub(super) fn selection_bar(
             if lift.clicked() {
                 super::lift_selected(state, s, io);
             }
-            if widgets::icon_btn(ui, t, icons::AT_SIGN, "Reference in chat", "").clicked() {
+            let mention = |io: &mut Io<'_>, modifier: crate::refs::Modifier| {
                 for &k in &s.sel {
-                    io.actions
-                        .push(crate::gui::app::Action::AddRef(Reference::new(
-                            Target::Shot {
-                                plan: s.name.clone(),
-                                index: k + 1,
-                            },
-                        )));
+                    io.actions.push(crate::gui::app::Action::AddRef(
+                        Reference::new(Target::Shot {
+                            plan: s.name.clone(),
+                            index: k + 1,
+                        })
+                        .with(modifier),
+                    ));
                 }
+            };
+            if widgets::icon_btn(ui, t, icons::MESSAGE_SQUARE, "Comment at this shot", "")
+                .clicked()
+                && let Some(&k) = s.sel.iter().next()
+            {
+                let at = s.timing.get(k).map_or(0.0, |&(a, _)| a);
+                super::comments::add_at(state, at);
+            }
+            // How the chat should take them: keep, avoid, replace, more like.
+            ui.menu_button("as{2026}", |ui| {
+                for modifier in crate::refs::Modifier::ALL {
+                    if widgets::menu_item(ui, t, None, modifier.label(), modifier.prefix(), false)
+                        .clicked()
+                    {
+                        mention(io, modifier);
+                        ui.close();
+                    }
+                }
+            })
+            .response
+            .hint("Point the chat at them as keep, avoid, replace, more like this or feature (Shift+R)");
+            if widgets::button_with(
+                ui,
+                t,
+                widgets::ButtonKind::Outline,
+                Some(icons::AT_SIGN),
+                "Ask the chat",
+            )
+            .hint("Add the selected shots to the chat message, to ask about or change them (R)")
+            .clicked()
+            {
+                mention(io, crate::refs::Modifier::About);
             }
         });
     });

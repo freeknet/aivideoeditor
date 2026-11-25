@@ -284,6 +284,7 @@ pub(super) fn draw(
         view_h: out.inner_rect.height(),
         columns: 1,
         toggles: Vec::new(),
+        refers: Vec::new(),
         sort,
         folds,
         scope,

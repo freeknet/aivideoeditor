@@ -98,6 +98,7 @@ pub(super) fn draw(
     }
     let mut responses = Vec::new();
     let mut toggles = Vec::new();
+    let mut refers = Vec::new();
     let mut folds = Vec::new();
     let mut scope = None;
     let mut hover_scrub = None;
@@ -139,6 +140,9 @@ pub(super) fn draw(
                         if drawn.toggled {
                             toggles.push(i);
                         }
+                        if drawn.refer {
+                            refers.push(i);
+                        }
                         responses.push((i, drawn.response));
                     }
                 }
@@ -153,6 +157,7 @@ pub(super) fn draw(
         view_h: out.inner_rect.height(),
         columns: cols,
         toggles,
+        refers,
         sort: None,
         folds,
         scope,
@@ -166,6 +171,8 @@ struct Card {
     scrub: Option<f32>,
     /// The stack badge was clicked.
     toggled: bool,
+    /// The @ badge was clicked.
+    refer: bool,
 }
 
 /// Paints one card into `rect`.
@@ -188,10 +195,12 @@ fn card(
             response,
             scrub: None,
             toggled: false,
+            refer: false,
         };
     };
     let id = egui::Id::unique(("review-card", &s.id));
     let response = ui.interact(rect, id, Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &s.id));
     let selected = paint.selected.contains(&s.id);
     let focused = paint.cursor == Some(s.id.as_str());
     let hovered = response.hovered();
@@ -300,7 +309,13 @@ fn card(
 
     // Badges, all glass, 4 px in from the corners.
     let inset = SPACE_XS;
-    let toggled = badges(ui, &painter, paint, item, s, thumb, inset, id);
+    // Over the card at all, badges included (the badge under the pointer is
+    // what egui calls hovered then, not the card).
+    let over = ui
+        .ctx()
+        .pointer_hover_pos()
+        .is_some_and(|p| rect.contains(p));
+    let (toggled, refer) = badges(ui, &painter, paint, item, s, thumb, inset, id, over);
 
     // Name, with the quality at the far end, then one muted line.
     let name_y = thumb.bottom() + SPACE_XS + NAME_H / 2.0;
@@ -394,6 +409,7 @@ fn card(
         response,
         scrub,
         toggled,
+        refer,
     }
 }
 
@@ -413,7 +429,8 @@ fn badges(
     thumb: Rect,
     inset: f32,
     id: egui::Id,
-) -> bool {
+    hovered: bool,
+) -> (bool, bool) {
     let theme = paint.theme;
     let mark = paint.night.marks.get(&s.id);
     super::glass_badge(
@@ -482,7 +499,24 @@ fn badges(
             &mark.rating.to_string(),
         );
     }
-    toggled
+    // On hover: @ adds this shot to the chat message, in one click.
+    let mut refer = false;
+    if hovered {
+        let r = super::glass_badge(
+            painter,
+            theme,
+            pos2(right, thumb.top() + inset),
+            Align2::RIGHT_TOP,
+            Some((icons::AT_SIGN, Color32::WHITE)),
+            "",
+        );
+        let b = ui.interact(r.expand(2.0), id.with("refer"), Sense::click());
+        b.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Add to chat"));
+        refer = b
+            .hint("Add this shot to the chat message (or select shots and press R)")
+            .clicked();
+    }
+    (toggled, refer)
 }
 
 /// Quality in a colour: good plain, middling muted, poor red.

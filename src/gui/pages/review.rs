@@ -399,6 +399,8 @@ pub(super) enum Do {
     Copy,
     /// Open or close the stack `item` tops.
     ToggleStack(usize),
+    /// Add result `item` to the chat message (its card's @ badge).
+    RefItem(usize),
     /// Select every result.
     All,
     /// Replace the query.
@@ -592,6 +594,7 @@ fn body(
                 interact(&paint, item, &response, dos);
             }
             dos.extend(out.toggles.into_iter().map(Do::ToggleStack));
+            dos.extend(out.refers.into_iter().map(Do::RefItem));
             dos.extend(out.folds.into_iter().map(Do::ToggleAct));
             if let Some(n) = out.scope {
                 dos.push(Do::Search(acts::scoped(ctx.search, n)));
@@ -1740,6 +1743,12 @@ fn apply(ctx: &mut PageCtx<'_>, state: &mut State, d: Do, egui_ctx: &egui::Conte
                 .collect();
             egui_ctx.copy_text(text.join(" "));
         }
+        Do::RefItem(item) => {
+            if let Some(id) = id_at(state, item) {
+                ctx.actions
+                    .push(Action::AddRef(Reference::new(Target::Segment { id })));
+            }
+        }
         Do::ToggleStack(item) => {
             if let Some(it) = state.items.get(item)
                 && let Some(clip) = clip_of(ctx, it.seg)
@@ -2248,6 +2257,8 @@ pub(super) struct Drawn {
     pub(super) columns: usize,
     /// Stack badges clicked (result positions).
     pub(super) toggles: Vec<usize>,
+    /// @ badges clicked (result positions): add those shots to the chat.
+    pub(super) refers: Vec<usize>,
     /// A column header asked for this order.
     pub(super) sort: Option<Sort>,
     /// Act headers clicked (set numbers): fold or unfold them.
@@ -2768,6 +2779,28 @@ mod tests {
 
         fn selection(h: &Harness<'_, Option<App>>) -> anyhow::Result<Vec<String>> {
             Ok(selected_ids(&app(h)?.selection))
+        }
+
+        #[test]
+        fn a_cards_at_badge_adds_the_shot_to_the_chat() -> anyhow::Result<()> {
+            use egui_kittest::kittest::Queryable as _;
+            let dir = tempfile::tempdir()?;
+            let mut h = harness(dir.path())?;
+            let order = result_ids(review(&h)?);
+            let first = order
+                .first()
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("no results"))?;
+            h.get_by_label(&first).hover();
+            h.run_steps(3);
+            h.get_by_label("Add to chat").click();
+            h.run_steps(3);
+            assert_eq!(
+                selected_ids(&app(&h)?.refs),
+                vec![first],
+                "one click puts the hovered shot in the chat message"
+            );
+            Ok(())
         }
 
         #[test]

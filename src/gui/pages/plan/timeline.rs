@@ -1010,6 +1010,19 @@ fn video(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut Ui, lay: &L
             &format!("{}  {}", k + 1, shot.clip),
             Some(&(k + 1).to_string()),
         );
+        // Flagged for the chat: the key colour's @ in the clip's corner.
+        if s.flagged.contains(&k) && block.width() >= 18.0 {
+            let r = 8.0;
+            let c = pos2(block.right() - r - 3.0, block.top() + r + 3.0);
+            v1_paint.circle_filled(c, r, theme::rgb(t.accent));
+            icons::paint(
+                &v1_paint,
+                Rect::from_center_size(c, vec2(r * 1.6, r * 1.6)),
+                icons::AT_SIGN,
+                r * 1.4,
+                theme::rgb(t.text_on_accent),
+            );
+        }
         if s.sel.contains(&k) {
             paint_selected(&v1_paint, block, outline);
         } else if hover_hit == Hit::Shot(k) && state.drag.is_none() {
