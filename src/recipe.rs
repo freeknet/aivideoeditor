@@ -163,6 +163,14 @@ pub(crate) struct Recipe {
     /// The outputs, in the order they are listed and rendered.
     #[serde(rename = "deliverable", default)]
     pub(crate) deliverables: Vec<Deliverable>,
+    /// The rules every draft keeps (repeats, people, flags, the drop).
+    #[serde(default, skip_serializing_if = "is_default_rules")]
+    pub(crate) rules: crate::plan::Rules,
+}
+
+/// Whether `rules` are the built-in ones (left out of the file).
+fn is_default_rules(rules: &crate::plan::Rules) -> bool {
+    *rules == crate::plan::Rules::default()
 }
 
 /// The default file name template.
@@ -186,6 +194,7 @@ impl Default for Recipe {
                 Deliverable::new("wide-60", Aspect::Wide, 60.0),
                 Deliverable::new("recap", Aspect::Wide, 180.0),
             ],
+            rules: crate::plan::Rules::default(),
         }
     }
 }
@@ -559,6 +568,20 @@ pub(crate) fn parse(text: &str) -> (Recipe, Vec<String>) {
     let otio = field("otio")
         .and_then(|v| v.try_into::<bool>().ok())
         .unwrap_or(defaults.otio);
+    let rules = match table.get("rules") {
+        None => defaults.rules.clone(),
+        Some(v) => v
+            .clone()
+            .try_into::<crate::plan::Rules>()
+            .unwrap_or_else(|e| {
+                let message = e.to_string();
+                let first = message.lines().next().unwrap_or_default();
+                warnings.push(format!(
+                    "recipe: rules skipped, using the built-in ones: {first}"
+                ));
+                defaults.rules.clone()
+            }),
+    };
     let deliverables = match table.get("deliverable") {
         None => defaults.deliverables,
         Some(toml::Value::Array(items)) => {
@@ -596,6 +619,7 @@ pub(crate) fn parse(text: &str) -> (Recipe, Vec<String>) {
             encoder,
             otio,
             deliverables,
+            rules,
         },
         warnings,
     )
@@ -756,6 +780,40 @@ pub(crate) fn new_night(footage: &Path, previous: Option<&Path>) -> Result<NewNi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_rules_are_the_projects_and_a_partial_table_keeps_the_rest() -> anyhow::Result<()> {
+        let (recipe, warnings) = parse(
+            "[rules]
+person_gap = 3
+reject_flags = [\"dark\"]
+",
+        );
+        assert!(warnings.is_empty(), "parses cleanly: {warnings:?}");
+        assert_eq!(recipe.rules.person_gap, 3, "set");
+        assert_eq!(recipe.rules.reject_flags, vec!["dark".to_owned()], "set");
+        assert_eq!(
+            recipe.rules.same_clip_gap,
+            crate::plan::Rules::default().same_clip_gap,
+            "left out, so built in"
+        );
+        let dir = tempfile::tempdir()?;
+        recipe.save_to(&dir.path().join(FILE))?;
+        let (back, _) = parse(&std::fs::read_to_string(dir.path().join(FILE))?);
+        assert_eq!(back.rules, recipe.rules, "survives a save");
+        let (bad, warnings) = parse(
+            "[rules]
+person_gap = \"lots\"
+",
+        );
+        assert_eq!(
+            bad.rules,
+            crate::plan::Rules::default(),
+            "a bad table costs only the rules"
+        );
+        assert_eq!(warnings.len(), 1, "and says so: {warnings:?}");
+        Ok(())
+    }
 
     fn names() -> Names {
         Names {

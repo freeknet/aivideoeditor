@@ -15,8 +15,8 @@
 //! starts a project from it. The track is written into the new project's
 //! settings before it opens, as if carried over from the last project,
 //! because a native file dialog cannot be clicked headlessly.
-//! Pass `none` for the track to walk the no-music path instead: set-up's
-//! "No music" is clicked in place of a track.
+//! Pass `none` for the track to walk the no-music path instead: the project
+//! starts with no track, which is a cut without music.
 //!
 //! Each step clicks a button by its accessible name, as a screen reader
 //! would, and fails loudly when the button is not there, so a broken step
@@ -93,7 +93,7 @@ fn main() -> anyhow::Result<()> {
         work.display()
     );
     std::fs::create_dir_all(&work)?;
-    // `none` walks the no-music path: set-up's "No music" instead of a track.
+    // `none` walks the no-music path: no track is a cut without music.
     let no_music = track == "none";
     let track_line = if no_music {
         String::new()
@@ -103,6 +103,14 @@ fn main() -> anyhow::Result<()> {
     std::fs::write(
         work.join("ave.toml"),
         format!("footage = '{}'\n{track_line}", footage.display()),
+    )?;
+    // Its own recipe, so the walk never inherits the last project's (a new
+    // project starts from the one opened before it on this machine).
+    std::fs::write(
+        work.join("recipe.toml"),
+        "filename = \"{id}.mp4\"\n\n\
+         [[deliverable]]\nid = \"reel-15\"\naspect = \"9x16\"\nseconds = 15.0\n\n\
+         [[deliverable]]\nid = \"story-15\"\naspect = \"9x16\"\nseconds = 15.0\n",
     )?;
 
     let open = footage.clone();
@@ -128,11 +136,6 @@ fn main() -> anyhow::Result<()> {
     shoot(&mut harness, &out, "02-setup-footage")?;
     click(&mut harness, "Continue", 30)?;
     shoot(&mut harness, &out, "03-setup-music")?;
-    if no_music {
-        click(&mut harness, "No music", 10)?;
-        settle(&mut harness, 500);
-        shoot(&mut harness, &out, "03b-setup-no-music")?;
-    }
     click(&mut harness, "Continue", 10)?;
     shoot(&mut harness, &out, "04-setup-deliverables")?;
     click(&mut harness, "Continue", 10)?;

@@ -698,7 +698,7 @@ fn run(command: Cmd, out: &mut impl Write, progress: &Progress) -> anyhow::Resul
             .map_err(|_| anyhow::anyhow!("--aspect must be 9x16, 4x5 or 16x9, not {aspect}"))?;
             progress.stage("plan", format!("drafting {name}"));
             let index = crate::index::Index::load(&work)?;
-            let map = crate::beats::MusicMap::load(&work)?;
+            let map = crate::project::music_for(&work)?;
             let people = crate::people::People::load(&work)?;
             let spec = crate::draft::Spec {
                 name: name.clone(),
@@ -706,12 +706,20 @@ fn run(command: Cmd, out: &mut impl Write, progress: &Progress) -> anyhow::Resul
                 seconds,
                 end_card,
                 card_bars,
+                rules: crate::recipe::Recipe::load(&work).0.rules,
             };
             let plan = crate::draft::draft(&index, &map, &people, &spec, &map.path)?;
             let path = work.join("plans").join(format!("{name}.toml"));
             plan.save(&path)?;
             let problems = crate::plan::check(&plan, &index, &map, &people);
             write!(out, "{}", crate::plan::report(&plan, &problems))?;
+            if plan.rules != spec.rules {
+                writeln!(
+                    out,
+                    "rules loosened to fit the footage: the same person {} shots apart, one clip's shots {:.0} s apart",
+                    plan.rules.person_gap, plan.rules.same_clip_gap
+                )?;
+            }
             writeln!(out, "-> {}", path.display())?;
         }
         Cmd::Check { plan, work } => {
@@ -736,7 +744,7 @@ fn run(command: Cmd, out: &mut impl Write, progress: &Progress) -> anyhow::Resul
                 );
             }
             let index = crate::index::Index::load(&work)?;
-            let map = crate::beats::MusicMap::load(&work)?;
+            let map = crate::project::music_for(&work)?;
             let video = work.join("renders").join(format!("{}.mp4", plan.name));
             progress.check()?;
             progress.stage("render", format!("encoding {}", plan.name));
@@ -755,7 +763,7 @@ fn run(command: Cmd, out: &mut impl Write, progress: &Progress) -> anyhow::Resul
         Cmd::Otio { plan, work } => {
             let plan = crate::plan::Plan::load(&plan)?;
             let index = crate::index::Index::load(&work)?;
-            let map = crate::beats::MusicMap::load(&work)?;
+            let map = crate::project::music_for(&work)?;
             let path = work.join("renders").join(format!("{}.otio", plan.name));
             progress.stage("otio", format!("exporting {}", plan.name));
             crate::otio::export(&plan, &index, &map, &path)?;
@@ -801,7 +809,7 @@ fn load_and_check(
 ) -> anyhow::Result<(crate::plan::Plan, Vec<crate::plan::Finding>)> {
     let plan = crate::plan::Plan::load(plan)?;
     let index = crate::index::Index::load(work)?;
-    let map = crate::beats::MusicMap::load(work)?;
+    let map = crate::project::music_for(work)?;
     let people = crate::people::People::load(work)?;
     let problems = crate::plan::check(&plan, &index, &map, &people);
     Ok((plan, problems))

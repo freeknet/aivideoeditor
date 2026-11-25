@@ -269,7 +269,6 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, home: &mut super::State, ui: &mut egui
     let mut clicked_stage = None;
     let mut next = None;
     let mut progress = false;
-    let mut go_silent = false;
     ui.horizontal(|ui| {
         ui.set_min_height(theme::CONTROL_HEIGHT);
         ui.spacing_mut().item_spacing.x = theme::SPACE_XS;
@@ -308,20 +307,6 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, home: &mut super::State, ui: &mut egui
             } else if let Some(stage) = current(&f) {
                 let label = next_label(&f, stage);
                 let tip = next_tip(&f, stage);
-                // Music is optional: going without is the other way on.
-                if stage == Stage::Music && !f.track {
-                    if widgets::outline_button(ui, theme, "No music")
-                        .on_hover_text(super::wizard::NO_MUSIC_NOTE)
-                        .clicked()
-                    {
-                        go_silent = true;
-                    }
-                    ui.label(
-                        egui::RichText::new("or")
-                            .font(theme::font(theme::BODY_SIZE))
-                            .color(theme::rgb(theme.text_muted)),
-                    );
-                }
                 if widgets::button_with(
                     ui,
                     theme,
@@ -386,14 +371,6 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, home: &mut super::State, ui: &mut egui
     if let Some(stage) = next {
         run(ctx, home, &recipe, &f, stage);
     }
-    if go_silent && let Some(p) = ctx.project.as_mut() {
-        match crate::beats::write_no_music(&p.work) {
-            Ok(_) => home.guide.notice = None,
-            Err(e) => home.guide.notice = Some(format!("Could not go without music: {e:#}")),
-        }
-        p.reload_music();
-        home.guide.cached = None;
-    }
 }
 
 /// The skipped steps of a run as one short line: captions skipped, which
@@ -404,7 +381,11 @@ pub(crate) fn summary(lines: &[String]) -> Option<String> {
         .iter()
         .filter_map(|l| l.split_once(" was not drafted").map(|(name, _)| name))
         .collect();
-    let other = lines.len() - usize::from(captions) - undrafted.len();
+    let loosened: Vec<&str> = lines
+        .iter()
+        .filter_map(|l| l.split_once(": rules loosened").map(|(name, _)| name))
+        .collect();
+    let other = lines.len() - usize::from(captions) - undrafted.len() - loosened.len();
     // Say why only when every failed draft failed for that reason.
     let footage = lines
         .iter()
@@ -420,6 +401,17 @@ pub(crate) fn summary(lines: &[String]) -> Option<String> {
         [one] => parts.push(format!("{one} not drafted{why}")),
         many => parts.push(format!(
             "{} cuts not drafted ({}){why}",
+            many.len(),
+            many.join(", ")
+        )),
+    }
+    match loosened.as_slice() {
+        [] => {}
+        [one] => parts.push(format!(
+            "{one} drafted with looser repeat rules to fit the footage"
+        )),
+        many => parts.push(format!(
+            "{} cuts drafted with looser repeat rules ({})",
             many.len(),
             many.join(", ")
         )),
@@ -465,7 +457,7 @@ fn next_tip(f: &Facts, stage: Stage) -> String {
                 .to_owned()
         }
         Stage::Music if f.track => "Find the track's beats, bars and drops, so cuts land on them.".to_owned(),
-        Stage::Music => "Pick the track the cut is timed to, or press No music to cut without one.".to_owned(),
+        Stage::Music => "Pick a track to cut to its beat; with none, cuts are paced every two seconds.".to_owned(),
         Stage::FirstCut => format!(
             "Draft {} on the beat grid from the shot log.",
             match f.deliverables {
@@ -652,7 +644,7 @@ fn run(ctx: &mut PageCtx<'_>, home: &mut super::State, recipe: &Recipe, f: &Fact
         Stage::FirstCut => {
             if f.indexed.is_none() || !f.mapped {
                 home.guide.notice = Some(
-                    "The first cut needs the footage analysed, and the music mapped or No music chosen."
+                    "The first cut needs the footage analysed, and the chosen track mapped."
                         .to_owned(),
                 );
                 return;
@@ -798,6 +790,14 @@ mod tests {
             "one cut is named"
         );
         assert_eq!(super::summary(&[]), None, "nothing skipped");
+        let loose = vec![
+            "recap: rules loosened to fit the footage: the same person 2 shots apart".to_owned(),
+        ];
+        assert_eq!(
+            super::summary(&loose).as_deref(),
+            Some("recap drafted with looser repeat rules to fit the footage"),
+            "a loosened draft is a note, not a skipped step"
+        );
     }
 
     #[test]

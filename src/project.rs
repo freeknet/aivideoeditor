@@ -55,6 +55,26 @@ pub(crate) struct Settings {
     pub(crate) pages: BTreeMap<String, toml::Table>,
 }
 
+/// The music map for `work`: `music.json`, or, when there is none and no
+/// track is set, the no-music stand-in ([`MusicMap::paced`]). A track that
+/// is set but not mapped is an error: cut to it after mapping it.
+pub(crate) fn music_for(work: &Path) -> Result<MusicMap> {
+    if work.join("music.json").exists() {
+        return MusicMap::load(work);
+    }
+    let track = std::fs::read_to_string(work.join("ave.toml"))
+        .ok()
+        .and_then(|text| toml::from_str::<Settings>(&text).ok())
+        .and_then(|s| s.track);
+    match track {
+        Some(track) => anyhow::bail!(
+            "{} is set as the track but not mapped yet: run `ave beats` on it first",
+            track.display()
+        ),
+        None => Ok(MusicMap::paced()),
+    }
+}
+
 /// The work folder for a folder the user picked.
 ///
 /// - an `_ave` folder, or one holding `index.json` / `ave.toml`, is the work folder;
@@ -252,12 +272,16 @@ impl Project {
         self.settings.track.is_none() && self.music.as_ref().is_some_and(MusicMap::no_music)
     }
 
-    /// Re-reads `music.json`.
+    /// Re-reads `music.json`. A project with no `music.json` and no track
+    /// is cut without music: it gets the paced stand-in, so nothing waits
+    /// on a music step nobody asked for. With a track it waits to be mapped.
     pub(crate) fn reload_music(&mut self) {
         self.music = if self.work.join("music.json").exists() {
             MusicMap::load(&self.work)
                 .map_err(|e| self.warnings.push(format!("music: {e:#}")))
                 .ok()
+        } else if self.settings.track.is_none() {
+            Some(MusicMap::paced())
         } else {
             None
         };
@@ -852,9 +876,10 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let work = dir.path().join("night").join("_ave");
         let project = Project::open(&work)?;
+        assert!(project.index.is_none(), "nothing has run yet");
         assert!(
-            project.index.is_none() && project.music.is_none(),
-            "nothing has run yet"
+            project.no_music(),
+            "with no track the project is cut without music, nothing to map"
         );
         assert_eq!(project.name(), "night", "named after the folder above _ave");
         assert!(project.plans.is_empty(), "no plans yet");

@@ -798,6 +798,7 @@ fn plan_draft(p: &Project, args: &Value, caller: Caller) -> Result<Vec<Value>> {
         seconds: args["seconds"].as_f64().unwrap_or(30.0) as f32,
         end_card,
         card_bars: 2,
+        rules: crate::recipe::Recipe::load(&p.work).0.rules,
     };
     let plan = crate::draft::draft(index, music, &p.people, &spec, &music.path)?;
     let mut s = describe_plan(p, &plan);

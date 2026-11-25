@@ -819,23 +819,6 @@ fn music_step(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
         },
         "Choose\u{2026}",
     );
-    if settings.track.is_none() && !silent {
-        parts::form_row(ui, theme, "", |ui| {
-            if widgets::ghost_button(ui, theme, "No music")
-                .on_hover_text(NO_MUSIC_NOTE)
-                .clicked()
-                && let Some(p) = ctx.project.as_mut()
-            {
-                if let Err(e) = crate::beats::write_no_music(&p.work) {
-                    state
-                        .notes
-                        .push(format!("could not go without music: {e:#}"));
-                }
-                p.reload_music();
-            }
-        });
-        ui.add_space(theme::SPACE_XS + 2.0);
-    }
     let mut pick_card = None;
     for key in &keys {
         if choose_row(

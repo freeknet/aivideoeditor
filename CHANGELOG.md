@@ -12,9 +12,14 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
-- You can make a video without music. Choose **No music** in set-up, or beside
-  **Choose music…** on the guide strip (`ave beats --none` on the command line): cuts are
-  paced every two seconds, the video keeps each clip's own sound (silence for clips without
+- The drafting rules are the project's to edit: a *Rules* section in the Home screen's
+  project settings sets how far apart one clip's shots and one person's shots must be,
+  look-alikes, reused moments, which footage and moments to avoid, and what goes on the
+  drop. They are saved in the recipe (`[rules]`), every draft uses them, and a new project
+  starts from the last one's.
+- You can make a video without music: a project with no track is cut without one, with
+  nothing to choose (clearing the track in project settings, or `ave beats --none`, does
+  the same). Cuts are paced every two seconds, the video keeps each clip's own sound (silence for clips without
   any), and the editor's player plays it too. Choosing a track later replaces it.
 - A guide strip under the top bar on every screen of an open project: *Footage → Analyse
   → Music → First cut → Review → Export*. It shows which stages are done (read from what
@@ -356,6 +361,11 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- When footage runs out under the repeat rules (a few long takes for a long cut), the
+  drafter loosens the person and same-clip gaps a step at a time instead of refusing,
+  records the rules it kept in the cut, and says so on the guide strip.
+- Unnamed footage counts as one person per clip and per three minutes of a longer one,
+  so a long take no longer counts as a single performer the person gap must keep apart.
 - The app says *project* where it said *night*, and drops the weekly-event wording
   ("this week's footage", "last week") from the start page and set-up. The Home
   screen's "not analysed yet" banner is gone (the guide strip carries it), and the

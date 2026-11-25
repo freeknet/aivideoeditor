@@ -20,6 +20,7 @@ use std::time::{Duration, Instant, SystemTime};
 use super::parts;
 use crate::gui::pages::PageCtx;
 use crate::gui::ui::{icons, theme, widgets};
+use crate::plan::Rules;
 use crate::recipe::{self, Deliverable, Recipe, Source};
 
 /// The recipe as loaded for the open night.
@@ -306,7 +307,17 @@ fn settings_rows(ctx: &mut PageCtx<'_>, state: &State, ui: &mut egui::Ui) {
                 .map(|f| settings.track = Some(f))
                 .is_some()
         }
-        ("track", RowAction::Clear) => settings.track.take().is_some(),
+        // No track is no music: the old track's map is replaced, or it
+        // would bring the track straight back.
+        ("track", RowAction::Clear) => {
+            let cleared = settings.track.take().is_some();
+            if cleared && let Err(e) = crate::beats::write_no_music(&project.work) {
+                project
+                    .warnings
+                    .push(format!("Could not clear the music: {e:#}"));
+            }
+            cleared
+        }
         (key, action) => {
             let key = key.trim_start_matches("card:").to_owned();
             match action {
@@ -330,6 +341,9 @@ fn settings_rows(ctx: &mut PageCtx<'_>, state: &State, ui: &mut egui::Ui) {
         project
             .warnings
             .push(format!("Could not save ave.toml: {e:#}"));
+    }
+    if changed {
+        project.reload_music();
     }
 }
 
@@ -586,11 +600,166 @@ fn recipe_table(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
             });
         });
     });
+    ui.add_space(theme::SPACE_XL);
+    changed |= rules_section(ui, theme, &mut loaded.recipe.rules);
     if changed {
         state.dirty = true;
     }
     let editing = ui.ctx().egui_wants_keyboard_input() || ui.ctx().egui_is_using_pointer();
     state.save_if_done(editing);
+}
+
+/// Problems a shot's source range can be flagged with, in the words the
+/// index uses (see `analyze::spans`).
+const FLAGS: [(&str, &str); 5] = [
+    ("dark", "Too dark"),
+    ("blown", "Blown out"),
+    ("soft", "Out of focus"),
+    ("shaky", "Shaky"),
+    ("whip", "Whip pan"),
+];
+
+/// Caption moments a shot can be rejected for.
+const MOMENTS: [(&str, &str); 3] = [
+    ("transition", "Setting up or walking in"),
+    ("idle", "Standing still"),
+    ("crowd", "Mostly audience"),
+];
+
+/// The rules every draft of this project keeps, editable; returns whether
+/// any changed. They live in the recipe, so a new project starts from them.
+fn rules_section(ui: &mut egui::Ui, theme: &crate::theme::Palette, rules: &mut Rules) -> bool {
+    let mut changed = false;
+    parts::section(
+        ui,
+        theme,
+        "Rules",
+        "What every draft keeps to. The check holds a cut to them too; a cut you already drafted keeps the rules it was drafted with until you redraft it.",
+    );
+    ui.scope(|ui| {
+        ui.set_max_width(FORM_WIDTH);
+        parts::form_row(ui, theme, "Same clip", |ui| {
+            changed |= ui
+                .add(
+                    egui::DragValue::new(&mut rules.same_clip_gap)
+                        .range(0.0..=600.0)
+                        .speed(1.0)
+                        .suffix(" s apart"),
+                )
+                .on_hover_text("Two shots from one clip start at least this far apart in it")
+                .accessible_name("Same clip gap")
+                .changed();
+        });
+        ui.add_space(theme::SPACE_XS + 2.0);
+        parts::form_row(ui, theme, "Same person", |ui| {
+            changed |= ui
+                .add(
+                    egui::DragValue::new(&mut rules.person_gap)
+                        .range(0..=30)
+                        .speed(0.1)
+                        .prefix("not again within ")
+                        .suffix(" shots"),
+                )
+                .on_hover_text(
+                    "Unnamed footage counts as one person per clip, and per 3 minutes of a long clip. 0 turns it off.",
+                )
+                .accessible_name("Person gap")
+                .changed();
+        });
+        ui.add_space(theme::SPACE_XS + 2.0);
+        parts::form_row(ui, theme, "Look-alikes", |ui| {
+            let mut on = rules.lookalike > 0.0;
+            if widgets::switch(
+                ui,
+                theme,
+                &mut on,
+                "Keep shots that look the same apart (same person, same spot)",
+            )
+            .changed()
+            {
+                rules.lookalike = if on { crate::plan::LOOKALIKE } else { 0.0 };
+                changed = true;
+            }
+        });
+        ui.add_space(theme::SPACE_XS + 2.0);
+        parts::form_row(ui, theme, "Reused moments", |ui| {
+            changed |= widgets::switch(
+                ui,
+                theme,
+                &mut rules.reject_reused,
+                "Flag a moment another project's cut already used",
+            )
+            .changed();
+        });
+        ui.add_space(theme::SPACE_XS + 2.0);
+        parts::form_row(ui, theme, "Avoid footage", |ui| {
+            ui.horizontal_wrapped(|ui| {
+                for (flag, label) in FLAGS {
+                    changed |= list_box(ui, theme, &mut rules.reject_flags, flag, label);
+                }
+            });
+        });
+        ui.add_space(theme::SPACE_XS + 2.0);
+        parts::form_row(ui, theme, "Avoid moments", |ui| {
+            ui.horizontal_wrapped(|ui| {
+                for (moment, label) in MOMENTS {
+                    changed |= list_box(ui, theme, &mut rules.reject_moments, moment, label);
+                }
+                changed |= widgets::checkbox(ui, theme, &mut rules.reject_blocked, "View blocked")
+                    .on_hover_text("Needs captions")
+                    .changed();
+            });
+        });
+        ui.add_space(theme::SPACE_XS + 2.0);
+        parts::form_row(ui, theme, "On the drop", |ui| {
+            let items = [("", "Any shot"), ("fire", "Fire"), ("led", "LED")];
+            let mut current = items
+                .iter()
+                .position(|(v, _)| *v == rules.drop_subject)
+                .unwrap_or(0);
+            let labels: Vec<(usize, &str)> =
+                items.iter().enumerate().map(|(i, (_, l))| (i, *l)).collect();
+            if widgets::segmented(ui, theme, &mut current, &labels) {
+                rules.drop_subject = items.get(current).map_or("", |(v, _)| *v).to_owned();
+                changed = true;
+            }
+        });
+        ui.add_space(theme::SPACE_XS + 2.0);
+        parts::form_row(ui, theme, "", |ui| {
+            let defaults = Rules::default();
+            if ui
+                .add_enabled_ui(*rules != defaults, |ui| {
+                    widgets::ghost_button(ui, theme, "Back to the built-in rules")
+                })
+                .inner
+                .clicked()
+            {
+                *rules = defaults;
+                changed = true;
+            }
+        });
+    });
+    changed
+}
+
+/// A checkbox for whether `value` is in `list`; returns whether it changed.
+fn list_box(
+    ui: &mut egui::Ui,
+    theme: &crate::theme::Palette,
+    list: &mut Vec<String>,
+    value: &str,
+    label: &str,
+) -> bool {
+    let mut on = list.iter().any(|v| v == value);
+    if widgets::checkbox(ui, theme, &mut on, label).changed() {
+        if on {
+            list.push(value.to_owned());
+        } else {
+            list.retain(|v| v != value);
+        }
+        return true;
+    }
+    false
 }
 
 /// One deliverable's editable cells (id, shape, length, end card, template).

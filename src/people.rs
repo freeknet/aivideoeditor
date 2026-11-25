@@ -18,8 +18,9 @@
 //! ```
 //!
 //! A range entry beats a whole-clip entry. Footage with no entry counts as
-//! one person per clip, which is right for most single-performer clips and
-//! never lets a clip repeat its subject.
+//! one person per clip, and per three minutes of a longer one
+//! ([`UNNAMED_STRETCH`]): right for single-performer clips, and a long take
+//! still has stretches to cut between.
 //!
 //! `ave people --work <dir>` drafts the file from the captions: it groups
 //! clips whose main performer descriptions share enough words (clothing,
@@ -60,7 +61,7 @@ impl People {
     /// The name for footage of `clip` at `t` seconds.
     pub(crate) fn name_at(&self, clip: &str, t: f32) -> String {
         self.entry_at(clip, t)
-            .map_or_else(|| clip.to_owned(), str::to_owned)
+            .map_or_else(|| unnamed(clip, t), str::to_owned)
     }
 
     /// The name the map gives footage of `clip` at `t` seconds, or `None`
@@ -84,6 +85,30 @@ impl People {
         } else {
             shot.who.clone()
         }
+    }
+}
+
+/// How much of a clip unnamed footage counts as one person, seconds.
+///
+/// Short clips are one performer each (a night of turns, one clip per
+/// turn), but a long take shows many: counting a 15-minute clip as one
+/// person left the drafter, under the person gap, nothing to cut to after a
+/// few shots of footage made of a few long clips.
+pub(crate) const UNNAMED_STRETCH: f32 = 180.0;
+
+/// Who unnamed footage of `clip` at `t` counts as: the clip itself for its
+/// first [`UNNAMED_STRETCH`], then a new person for each stretch after.
+fn unnamed(clip: &str, t: f32) -> String {
+    let k = (t.max(0.0) / UNNAMED_STRETCH) as u32;
+    if k == 0 {
+        clip.to_owned()
+    } else {
+        let min = UNNAMED_STRETCH / 60.0;
+        format!(
+            "{clip} {:.0}–{:.0} min",
+            k as f32 * min,
+            (k + 1) as f32 * min
+        )
     }
 }
 
@@ -344,7 +369,7 @@ impl People {
             s,
             "# Who is in which footage. Rename people, split wrong groups, add `clip@from-to` ranges\n\
              # where one clip shows several performers (a range beats a whole-clip entry). Unlisted\n\
-             # footage counts as one person per clip. The comments are regenerated from the captions\n\
+             # footage counts as one person per clip (per 3 minutes of a long one). The comments are regenerated from the captions\n\
              # whenever the app saves this file.\n\n[names]"
         );
         for name in names {

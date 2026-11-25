@@ -20,7 +20,8 @@ chat, and export the video or a timeline for Resolve or Kdenlive.
 
 It was built for the weekly JaJa Flow Night promo edits, so its default rules
 favour fire on the drop. Footage without fire, or music without a drop,
-still gets a cut.
+still gets a cut, and every rule (repeats, people, footage to avoid, the
+drop) is the project's to change under *Rules* in the Home screen's settings.
 
 - [Install](#install-on-windows)
 - [Make a video](#make-a-video)
@@ -129,10 +130,10 @@ is done:
    runs on its own: it indexes the clips, captions them, maps the music,
    works out who's who and drafts the first cut. You can open the editor
    as soon as indexing finishes; the rest carries on in the background.
-2. **Music.** If you skipped the track in set-up, **Choose music…** picks it
-   and maps its beats, bars and drops. Music is optional: **No music**
-   (in set-up, or beside **Choose music…**) cuts every two seconds instead
-   and keeps each clip's own sound in the video.
+2. **Music** (optional). With a track, the guide maps its beats, bars and
+   drops so cuts land on them. With no track the cut has no music: shots
+   are paced every two seconds and keep each clip's own sound. Add a track
+   any time from the *Music* tab or the project settings.
 3. **First cut.** **Draft the first cut** drafts every deliverable that has
    no cut yet. It never redrafts one you have already edited.
 4. **Review the cut.** The editor opens on the timeline. Play the cut,

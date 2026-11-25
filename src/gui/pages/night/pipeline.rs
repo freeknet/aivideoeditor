@@ -192,7 +192,18 @@ impl State {
         if let Some(id) = self.current {
             match jobs.get(id).map(|j| j.status.clone()) {
                 Some(Status::Running) => return,
-                Some(Status::Done) | None => self.current = None,
+                Some(Status::Done) => {
+                    // A draft that had to loosen the rules says so: worth a note.
+                    if let Some(job) = jobs.get(id)
+                        && let Some(name) = job.label.strip_prefix("plan ")
+                        && let Some(line) =
+                            job.lines.iter().find(|l| l.starts_with("rules loosened"))
+                    {
+                        self.skipped.push(format!("{name}: {line}"));
+                    }
+                    self.current = None;
+                }
+                None => self.current = None,
                 Some(Status::Failed(e)) => {
                     let label = jobs.get(id).map(|j| j.label.clone()).unwrap_or_default();
                     let first = e.lines().next().unwrap_or_default().to_owned();

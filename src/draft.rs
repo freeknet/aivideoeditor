@@ -115,6 +115,8 @@ pub(crate) struct Spec {
     pub(crate) end_card: String,
     /// Bars the end card holds.
     pub(crate) card_bars: usize,
+    /// The rules the cut keeps (the project's, from its recipe).
+    pub(crate) rules: Rules,
 }
 
 /// What a segment shows, combining the index subject and the caption.
@@ -739,15 +741,42 @@ pub(crate) fn draft(
 ) -> Result<Plan> {
     let memory = Memory::for_index(index);
     let mut last = None;
-    for ease in 0..3 {
-        match draft_paced(index, map, people, spec, music, &memory, ease) {
-            Ok(plan) => {
-                if ease > 0 {
-                    log::info!("eased the cutting pace {ease} step(s) to find distinct footage");
+    // The rules as set first, easing the pace; then, if the footage still
+    // runs out, the repeat rules loosened a step at a time (a few long takes
+    // hold too few clips and "people" for a long cut). The plan records the
+    // rules it kept, so its check agrees with it.
+    let (gap, spacing) = (spec.rules.person_gap, spec.rules.same_clip_gap);
+    let steps = [
+        (gap, spacing),
+        (gap / 2, spacing),
+        (gap / 4, spacing / 2.0),
+        (0, spacing / 4.0),
+    ];
+    for (k, (person_gap, same_clip_gap)) in steps.into_iter().enumerate() {
+        if k > 0 && person_gap == gap && same_clip_gap >= spacing {
+            continue;
+        }
+        let mut spec = spec.clone();
+        spec.rules.person_gap = person_gap;
+        spec.rules.same_clip_gap = same_clip_gap;
+        for ease in 0..3 {
+            match draft_paced(index, map, people, &spec, music, &memory, ease) {
+                Ok(plan) => {
+                    if ease > 0 {
+                        log::info!(
+                            "eased the cutting pace {ease} step(s) to find distinct footage"
+                        );
+                    }
+                    if k > 0 {
+                        log::warn!(
+                            "not enough different footage for a {:.0} s cut under the rules as set; drafted with the same person {person_gap} shots apart and one clip's shots {same_clip_gap:.0} s apart",
+                            spec.seconds
+                        );
+                    }
+                    return Ok(plan);
                 }
-                return Ok(plan);
+                Err(e) => last = Some(e),
             }
-            Err(e) => last = Some(e),
         }
     }
     Err(last.unwrap_or_else(|| anyhow::anyhow!("no draft")))
@@ -802,7 +831,7 @@ fn draft_paced(
     let start_bar = drop.bar.saturating_sub(lead);
     let lead = drop.bar - start_bar;
     let card_bar = drop.bar + after;
-    let rules = Rules::default();
+    let rules = spec.rules.clone();
     let slots = grid(map, lead, after, drop.bar, ease);
 
     let mut placed: Vec<Option<Shot>> = vec![None; slots.len()];
@@ -1163,6 +1192,7 @@ mod tests {
             seconds: 15.0,
             end_card: String::new(),
             card_bars: 1,
+            rules: crate::plan::Rules::default(),
         };
         let people = crate::people::People::default();
         let plan = super::draft(&index, &music, &people, &spec, "m.wav")?;
