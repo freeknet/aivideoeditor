@@ -209,13 +209,11 @@ captions step is skipped.
    <https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF>:
    `Qwen3VL-4B-Instruct-Q4_K_M.gguf` and `mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf`.
    Put both in `C:\tools\models`.
-3. Tell `ave` where they are, then restart it:
-
-   ```powershell
-   setx AVE_LLAMA_DIR  "C:\tools\llama.cpp"
-   setx AVE_VLM_MODEL  "C:\tools\models\Qwen3VL-4B-Instruct-Q4_K_M.gguf"
-   setx AVE_VLM_MMPROJ "C:\tools\models\mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf"
-   ```
+3. Tell `ave` where they are: **Settings → Captions**, then **Choose…** for
+   the llama.cpp folder, the model and the projector. The section says
+   *Ready* when all three are found. (For scripts, the environment variables
+   `AVE_LLAMA_DIR`, `AVE_VLM_MODEL` and `AVE_VLM_MMPROJ` do the same, and win
+   when set.)
 
 The captions step then starts `llama-server`, captions every segment and
 stops it again. Expect 7–9 s per segment.
