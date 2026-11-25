@@ -217,7 +217,13 @@ fn make(work: &Path, clip: &ClipIndex, progress: &Progress) -> Result<()> {
     .iter()
     .map(|s| (*s).to_owned())
     .collect();
-    let first = encode(&gpu, &tmp, progress);
+    // The GPU only where a CUDA device opens; a GPU failure (an encoder the
+    // card lacks, say) still falls back to the CPU.
+    let first = if crate::media::gpu_decode() {
+        encode(&gpu, &tmp, progress)
+    } else {
+        Err(anyhow::anyhow!("no NVIDIA GPU"))
+    };
     if let Err(e) = first {
         progress.check()?;
         log::info!("no GPU proxy for {} ({e:#}); making it on the CPU", clip.id);
