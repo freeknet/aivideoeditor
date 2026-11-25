@@ -16,6 +16,7 @@
 use super::theme::{SPACE_LG, SPACE_SM};
 use super::{modal, widgets};
 use crate::gui::app::{Action, App};
+use crate::gui::ui::hint::Hint as _;
 use egui::Ui;
 
 /// The settings card's width.
@@ -82,7 +83,7 @@ fn theme_card(
     selected: bool,
 ) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(THEME_CARD, egui::Sense::click());
-    let response = response.on_hover_text(&candidate.name);
+    let response = response.hint(&candidate.name);
     let lift = widgets::hover_t(ui, response.id, response.hovered());
     let ring = widgets::fade(ui.ctx(), response.id.with("selected"), selected);
     let painter = ui.painter();

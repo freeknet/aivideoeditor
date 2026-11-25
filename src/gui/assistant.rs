@@ -66,6 +66,7 @@ mod skills;
 pub(crate) mod store;
 mod tools;
 
+use crate::gui::ui::hint::Hint as _;
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -1282,7 +1283,7 @@ fn settings(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                     if !waiting {
                         let label = if state.signed_in == Some(true) { "Switch account" } else { "Sign in" };
                         sign_in = widgets::outline_button(ui, theme, label)
-                            .on_hover_text("Opens your browser to log in to Claude (claude auth login). The sign-in is Claude Code's own; the app never sees a token.")
+                            .hint("Opens your browser to log in to Claude (claude auth login). The sign-in is Claude Code's own; the app never sees a token.")
                             .clicked();
                     }
                 });
@@ -1307,7 +1308,7 @@ fn settings(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                             .desired_width(ui.available_width() - 64.0),
                     )
                     .accessible_name("Claude API key")
-                    .on_hover_text(format!("Stored in plain text at {at}. Or set ANTHROPIC_API_KEY. Keys: console.anthropic.com."));
+                    .hint(format!("Stored in plain text at {at}. Or set ANTHROPIC_API_KEY. Keys: console.anthropic.com."));
                     if widgets::outline_button(ui, theme, "Save").clicked() {
                         let key = state.key_draft.trim().to_owned();
                         prefs.api_key = (!key.is_empty()).then_some(key);
@@ -1320,7 +1321,7 @@ fn settings(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
             ui.horizontal(|ui| {
                 ui.add(egui::TextEdit::singleline(&mut state.url_draft).desired_width(ui.available_width() - 64.0))
                     .accessible_name("Local model server")
-                    .on_hover_text("llama.cpp's server (AVE_LLM_URL). Small local models plan poorly; use it offline.");
+                    .hint("llama.cpp's server (AVE_LLM_URL). Small local models plan poorly; use it offline.");
                 if widgets::outline_button(ui, theme, "Save").clicked() {
                     prefs.local_url = Some(state.url_draft.trim().to_owned());
                     state.error = prefs.save().err().map(|e| format!("{e:#}"));
@@ -1328,7 +1329,7 @@ fn settings(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
             });
             let mut auto = auto_apply(ctx);
             if widgets::switch(ui, theme, &mut auto, "Apply proposals that keep the check clean")
-                .on_hover_text("Off: every proposal waits for you (suggest only). On: proposals that add no check problems are applied at once, still as a revertible version.")
+                .hint("Off: every proposal waits for you (suggest only). On: proposals that add no check problems are applied at once, still as a revertible version.")
                 .changed()
             {
                 state.error = set_page_option(ctx, "auto_apply", toml::Value::Boolean(auto));
@@ -2016,7 +2017,7 @@ fn staged_refs(ctx: &mut PageCtx<'_>, ui: &mut Ui, refs: &[(Reference, complete:
                             )
                             .sense(Sense::click()),
                         )
-                        .on_hover_text(format!(
+                        .hint(format!(
                             "{r}\n{} · {facts}\nclick to change intent",
                             r.modifier.label()
                         ));
@@ -2226,7 +2227,7 @@ fn toolbar(
                                     theme.text_faint
                                 })),
                         )
-                        .on_hover_text(format!(
+                        .hint(format!(
                             "{} of {} tokens: how full the model's context was after the last \
                              reply. Start a new chat when it fills up.",
                             kilo(used),
@@ -2292,7 +2293,7 @@ fn model_menu(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                 ),
             ] {
                 if widgets::menu_item(ui, theme, None, name, "", allow == value)
-                    .on_hover_text(hint)
+                    .hint(hint)
                     .clicked()
                 {
                     permission = Some(value);
@@ -2606,7 +2607,7 @@ fn comments(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                         theme::ink(theme, theme::INK_05),
                     );
                 }
-                if response.on_hover_text("Play the plan from here").clicked() {
+                if response.hint("Play the plan from here").clicked() {
                     seek = Some(c.time);
                 }
             }
@@ -3522,8 +3523,7 @@ fn message(
                             )
                         })
                         .inner;
-                    let r =
-                        r.on_hover_text(format!("{target} · select it and show it in the viewer"));
+                    let r = r.hint(format!("{target} · select it and show it in the viewer"));
                     if r.hovered() {
                         ui.painter().hline(
                             r.rect.x_range(),
@@ -3690,7 +3690,7 @@ fn empty_state(
             .wrap()
             .halign(Align::Center),
         )
-        .on_hover_text("Select shots and press R, or type @, to point at them.");
+        .hint("Select shots and press R, or type @, to point at them.");
     child.add_space(SPACE_SM);
     if widgets::tip(
         look::suggestion(&mut child, theme, "Suggest a first cut"),
@@ -4039,7 +4039,7 @@ fn proposal_card(
                 ui.horizontal(|ui| {
                     if pending {
                         widgets::checkbox(ui, theme, &mut picked[k], "")
-                            .on_hover_text("Include this change");
+                            .hint("Include this change");
                     }
                     ui.label(
                         RichText::new(op.label())
@@ -4111,9 +4111,7 @@ fn proposal_card(
                     };
                     let r = card_line(ui, Some(glyph), &text, theme::rgb(color));
                     if !new.is_empty() {
-                        r.on_hover_text(
-                            new.iter().map(|q| q.text()).collect::<Vec<_>>().join("\n"),
-                        );
+                        r.hint(new.iter().map(|q| q.text()).collect::<Vec<_>>().join("\n"));
                         for q in new.iter().take(3) {
                             card_line(ui, None, &q.text(), theme::rgb(theme.danger));
                         }
@@ -4292,7 +4290,7 @@ fn effect_row(ctx: &mut PageCtx<'_>, ui: &mut Ui, e: &Effect, plan: &str) {
                             );
                         }
                     }
-                    let r = response.on_hover_text(format!(
+                    let r = response.hint(format!(
                         "#{slot} {}@{:.2} · {} beats · cx {:.2} · {}\n{}",
                         shot.clip, shot.t_in, shot.beats, shot.cx, shot.who, shot.note
                     ));
@@ -4619,7 +4617,7 @@ fn history(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                                     job.wrap.max_rows = 1;
                                     job.wrap.break_anywhere = true;
                                     ui.add(egui::Label::new(job))
-                                        .on_hover_text(v.header.clone());
+                                        .hint(v.header.clone());
                                 });
                             });
                         });

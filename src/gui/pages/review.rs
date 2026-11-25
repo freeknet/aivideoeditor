@@ -55,6 +55,7 @@ mod list;
 mod survey;
 mod tape;
 
+use crate::gui::ui::hint::Hint as _;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -954,7 +955,7 @@ fn header(
                     icons::SMALL,
                     theme::rgb(theme.warning),
                 )
-                .on_hover_text(err);
+                .hint(err);
             }
         },
     );
@@ -1015,7 +1016,7 @@ fn count(
         )
         .truncate(),
     )
-    .on_hover_text(detail.join(" · "));
+    .hint(detail.join(" · "));
 }
 
 /// The filter button and its popover: the minimum score, stacks, hover
@@ -1056,7 +1057,7 @@ fn filter_menu(
                         .show_value(false)
                         .trailing_fill(true),
                 )
-                .on_hover_text("Quality when nothing is searched")
+                .hint("Quality when nothing is searched")
                 .accessible_name(label.clone());
                 ui.label(
                     egui::RichText::new(format!("{:.2}", state.opts.cutoff))
@@ -1152,7 +1153,7 @@ fn smart_menu(ui: &mut egui::Ui, theme: &Palette, dos: &mut Vec<Do>) {
             });
             for (label, q) in SMART {
                 if widgets::menu_item(ui, theme, None, label, "", false)
-                    .on_hover_text(*q)
+                    .hint(*q)
                     .clicked()
                 {
                     dos.push(Do::Search((*q).to_owned()));
@@ -1385,7 +1386,7 @@ fn chips(ui: &mut egui::Ui, theme: &Palette, query: &Query, dos: &mut Vec<Do>) {
                 icons::SMALL - 2.0,
                 theme::rgb(theme.text_muted),
             );
-            if resp.on_hover_text("Remove").clicked() {
+            if resp.hint("Remove").clicked() {
                 dos.push(Do::Search(query.without(i)));
             }
         }

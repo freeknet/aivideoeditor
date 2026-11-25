@@ -15,6 +15,7 @@
 //! changes the app-wide selection, so the inspector doubles as a way to
 //! walk from a shot to its segment, its clip, its performer and back.
 
+use crate::gui::ui::hint::Hint as _;
 use std::path::{Path, PathBuf};
 
 use egui::{Rect, Sense, Ui, vec2};
@@ -123,7 +124,7 @@ fn picture(
         egui::Stroke::new(1.0, egui::Color32::from_white_alpha(110)),
     );
     if response
-        .on_hover_text("Open in the viewer (the line marks the action centre)")
+        .hint("Open in the viewer (the line marks the action centre)")
         .clicked()
     {
         ops.push(Op::Open(path, f64::from(t0), f64::from(t1), cx));
@@ -415,7 +416,7 @@ fn clip_strip(v: &View<'_>, ui: &mut Ui, clip: &str, current: Option<&str>, ops:
                 format!(" · {}", s.flags.join(" "))
             }
         );
-        if response.on_hover_text(hover).clicked() {
+        if response.hint(hover).clicked() {
             ops.push(Op::Select(Reference::new(Target::Segment {
                 id: s.id.clone(),
             })));
@@ -719,7 +720,7 @@ pub(super) fn person(
             let mid = f64::from(s.seg.start + s.seg.end) / 2.0;
             thumbs.paint(ui, r, &v.path(&s.clip), mid, s.seg.cx, theme::rgb(p.hover));
             let response = ui.interact(r, ui.scope_id().with(("person-frame", k)), Sense::click());
-            if response.on_hover_text(&s.id).clicked() {
+            if response.hint(&s.id).clicked() {
                 ops.push(Op::Select(Reference::new(Target::Segment {
                     id: s.id.clone(),
                 })));

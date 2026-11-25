@@ -141,6 +141,17 @@ fn main() -> anyhow::Result<()> {
     click(&mut harness, "Continue", 10)?;
     settle(&mut harness, 1500);
     shoot(&mut harness, &out, "05-setup-approve")?;
+    // Hovering a control writes what it does into the status bar.
+    if let Some(node) = harness.query_by_label("Start analysis") {
+        node.hover();
+    }
+    settle(&mut harness, 300);
+    let hint = aivideoeditor::gui::ui::hint::current(&harness.ctx);
+    anyhow::ensure!(
+        hint.as_ref().is_some_and(|(text, _)| text.contains("ticked steps")),
+        "hovering Start analysis should describe it in the status bar, got {hint:?}"
+    );
+    shoot(&mut harness, &out, "05b-hover-hint")?;
     click(&mut harness, "Start analysis", 30)?;
     settle(&mut harness, 4000);
     shoot(&mut harness, &out, "06-analysing")?;

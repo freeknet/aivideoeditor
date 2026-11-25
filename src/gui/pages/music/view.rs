@@ -29,6 +29,7 @@
 //! | Ctrl-wheel / pinch | anywhere | zoom around the pointer |
 //! | right-click | lane | reference in chat, drops, ranges, rename |
 
+use crate::gui::ui::hint::Hint as _;
 use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Vec2};
 
 use super::peaks::Peaks;
@@ -197,7 +198,7 @@ pub(super) fn overview(
         state.view_t0 = span.t(p.x) - 0.5 * state.view_span;
         state.clamp_view(map.duration);
     }
-    response.on_hover_text("Whole track: click or drag to move the zoomed view");
+    response.hint("Whole track: click or drag to move the zoomed view");
 }
 
 /// Draws the zoomed view and handles its gestures.

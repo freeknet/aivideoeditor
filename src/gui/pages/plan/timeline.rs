@@ -25,6 +25,7 @@
 //! song's bars sit in the marker lane, so bars and beats stay where the
 //! music has them even when the tempo drifts.
 
+use crate::gui::ui::hint::Hint as _;
 use std::collections::BTreeSet;
 
 use egui::{
@@ -1114,6 +1115,38 @@ fn video(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut Ui, lay: &L
     }
 
     context_menu(state, s, io, &v1_resp);
+    if state.drag.is_none() {
+        let says = match hover_hit {
+            Hit::Shot(k) => s.plan.shots.get(k).map(|sh| {
+                let dur = s.timing.get(k).map_or(0.0, |x| x.1);
+                let note = if sh.note.is_empty() {
+                    String::new()
+                } else {
+                    format!(" · {}", sh.note)
+                };
+                let how = if s.editable {
+                    " · drag to move it, Alt-drag to slip it, right-click for more"
+                } else {
+                    ""
+                };
+                format!(
+                    "Shot {} · {} at {:.1} s · {dur:.1} s{note}{how}",
+                    k + 1,
+                    sh.clip,
+                    sh.t_in
+                )
+            }),
+            Hit::Edge(n) => Some(format!(
+                "The cut between shots {n} and {}: drag to move it (a roll: the total length stays)",
+                n + 1
+            )),
+            Hit::Card => Some("The end card: set its image in the project settings".to_owned()),
+            Hit::None => None,
+        };
+        if let Some(says) = says {
+            crate::gui::ui::hint::set(ui.ctx(), &says, "");
+        }
+    }
     // Tooltip.
     if state.drag.is_none()
         && let Hit::Shot(k) = hover_hit
@@ -1671,7 +1704,7 @@ fn headers(state: &mut State, s: &Shown<'_>, ui: &mut Ui, lay: &Layout, id: egui
         icons::paint(&painter, r, icons::LOCK, icons::SIZE, muted);
         let _ = ui
             .interact(r, id.with("lock"), Sense::hover())
-            .on_hover_text("Chat is editing this plan: read-only");
+            .hint("Chat is editing this plan: read-only");
     }
     let mute = toggle(
         ui,

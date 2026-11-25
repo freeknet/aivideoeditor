@@ -15,6 +15,7 @@
 //! fills in when it lands; it reruns when the recent list changes, when a
 //! job finishes, and on demand.
 
+use crate::gui::ui::hint::Hint as _;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -555,7 +556,7 @@ pub(crate) fn row(ctx: &mut PageCtx<'_>, ui: &mut egui::Ui, night: &Summary, ope
     } else {
         format!("{} \u{b7} {}", night.date, night.work.display())
     };
-    let response = response.on_hover_text(tip);
+    let response = response.hint(tip);
     let mut clicked = response.clicked();
     response.context_menu(|ui| {
         if widgets::menu_item(ui, theme, Some(icons::FOLDER_OPEN), "Open", "", false).clicked() {

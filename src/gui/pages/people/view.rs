@@ -13,6 +13,7 @@
 //! Selection is a 2 px outline round the thumbnail (cards) or the `#525252`
 //! row fill (rows); hover is an ink wash.
 
+use crate::gui::ui::hint::Hint as _;
 use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, Ui, pos2, vec2};
 
 use crate::gui::thumbs::Thumbs;
@@ -224,7 +225,7 @@ pub(super) fn card(
     if props.is_empty() {
         response
     } else {
-        response.on_hover_text(props)
+        response.hint(props)
     }
 }
 

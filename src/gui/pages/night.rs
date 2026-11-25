@@ -39,6 +39,7 @@ pub(crate) mod settings;
 pub(crate) mod start;
 pub(crate) mod wizard;
 
+use crate::gui::ui::hint::Hint as _;
 use std::path::PathBuf;
 
 use super::PageCtx;
@@ -442,7 +443,7 @@ fn clips(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
                             );
                         }
                     }
-                    if response.on_hover_text(id).clicked() {
+                    if response.hint(id).clicked() {
                         state.preview = Some(i);
                         ctx.player.open_clip(path, 0.0, *duration, 0.5);
                         ctx.player.play();

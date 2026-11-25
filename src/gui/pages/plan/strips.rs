@@ -14,6 +14,7 @@
 //! parts of a panel. Nothing here is a hint line: what a key does is in the
 //! control's tooltip and on the shortcut sheet.
 
+use crate::gui::ui::hint::Hint as _;
 use egui::{
     Align, Align2, Color32, CornerRadius, Layout, Rect, Sense, Stroke, Ui, UiBuilder, Vec2, pos2,
     vec2,
@@ -289,7 +290,7 @@ fn framing(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut Ui, rect:
             egui::Id::unique("plan_framing").with(k),
             Sense::click_and_drag(),
         )
-        .on_hover_text(if crop < 1.0 {
+        .hint(if crop < 1.0 {
             format!(
                 "{} crop, cx {:.2}: drag to reframe",
                 super::aspect_key(s.plan.aspect),

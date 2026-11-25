@@ -25,6 +25,7 @@
 //! - **Nights**: the recent nights and their siblings as 40 px rows (frame,
 //!   name, counts, how far it got). Click one to open it.
 
+use crate::gui::ui::hint::Hint as _;
 use std::path::PathBuf;
 
 use super::{parts, recent};
@@ -258,10 +259,7 @@ fn templates(ctx: &PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
                     continue;
                 };
                 let chosen = state.prompt == text;
-                if template_pill(ui, theme, label, chosen)
-                    .on_hover_text(text)
-                    .clicked()
-                {
+                if template_pill(ui, theme, label, chosen).hint(text).clicked() {
                     state.prompt = text.to_owned();
                 }
             }

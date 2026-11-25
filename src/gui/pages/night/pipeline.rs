@@ -29,6 +29,7 @@
 //! any `N/M` in its lines, and indexing to counting the per-clip cache
 //! files it writes.
 
+use crate::gui::ui::hint::Hint as _;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
@@ -936,7 +937,7 @@ pub(crate) fn draw(
                     )
                 })
                 .inner
-                .on_hover_text(tip)
+                .hint(tip)
                 .on_disabled_hover_text(if busy {
                     "The queue is running"
                 } else {
@@ -978,6 +979,27 @@ fn bar(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui, views: Vec<V
             response.widget_info(|| {
                 egui::WidgetInfo::selected(egui::Role::Button, true, selected, view.step.title())
             });
+            if response.hovered() {
+                let what = match view.step {
+                    Step::Index => "measures every clip and makes playback copies of heavy ones",
+                    Step::Caption => {
+                        "describes each segment with the local vision model (optional)"
+                    }
+                    Step::Music => "maps the track's beats and drops, or paces cuts with no music",
+                    Step::People => "groups the footage by who is in it, from the captions",
+                    Step::Plans => "drafts a cut for each deliverable",
+                    Step::Export => "renders the cuts into the output folder",
+                };
+                crate::gui::ui::hint::set(
+                    ui.ctx(),
+                    &format!(
+                        "{}: {what}. Now: {}. Click for details.",
+                        view.step.title(),
+                        view.summary
+                    ),
+                    "",
+                );
+            }
             let lift = widgets::hover_t(ui, response.id, response.hovered());
             let (word, tone) = match view.standing {
                 Standing::Done => ("done", widgets::Tone::Success),

@@ -37,6 +37,7 @@
 use super::icons;
 use super::theme::{self, SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XS};
 use crate::color::Rgb;
+use crate::gui::ui::hint::Hint as _;
 use crate::theme::Palette;
 use egui::{Align, Align2, Color32, CornerRadius, Layout, Rect, Response, Sense, Stroke, Ui, Vec2};
 
@@ -88,7 +89,7 @@ pub fn nav_item(ui: &mut Ui, theme: &Palette, label: &str, active: bool, compact
     let (rect, response) =
         ui.allocate_exact_size(Vec2::new(width, theme::CONTROL_HEIGHT), Sense::click());
     let response = if compact {
-        response.on_hover_text(label)
+        response.hint(label)
     } else {
         response
     };
@@ -142,7 +143,7 @@ pub fn icon_button(ui: &mut Ui, theme: &Palette, label: &str) -> Slot {
 pub fn toggle_button(ui: &mut Ui, theme: &Palette, label: &str, on: bool) -> Slot {
     let size = Vec2::splat(theme::CONTROL_HEIGHT);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    let response = response.on_hover_text(label);
+    let response = response.hint(label);
     response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, label));
     let lift = hover_t(ui, response.id, response.hovered());
     paint_ghost(ui, theme, rect, on, lift, theme::RADIUS_MD);
@@ -202,6 +203,7 @@ pub fn tab(ui: &mut Ui, theme: &Palette, label: &str, open: bool) -> Response {
     ui.painter()
         .galley(rect.center() - galley.size() / 2.0, galley, ink);
     focus_ring(ui, theme, &response);
+    super::hint::auto(&response, label);
     response
 }
 
@@ -220,7 +222,7 @@ pub fn rail(ui: &mut Ui, theme: &Palette, label: &str, hint: &str, side: RailSid
     let rect = ui.max_rect();
     let response = ui
         .interact(rect, ui.scope_id().with(("rail", label)), Sense::click())
-        .on_hover_text(hint);
+        .hint(hint);
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
     let lift = hover_t(ui, response.id, response.hovered());
     let painter = ui.painter();
@@ -406,6 +408,7 @@ pub fn switch(ui: &mut Ui, theme: &Palette, on: &mut bool, label: &str) -> Respo
         theme::rgb(theme.panel),
     );
     focus_ring(ui, theme, &response);
+    super::hint::auto(&response, label);
     response
 }
 
@@ -793,6 +796,7 @@ pub fn button_sized(
         painter.galley(egui::pos2(x, y), galley, text);
     }
     focus_ring(ui, theme, &response);
+    super::hint::auto(&response, label);
     response
 }
 
@@ -1057,6 +1061,9 @@ pub fn tip(response: Response, theme: &Palette, label: &str, keys: &str) -> Resp
     if label.is_empty() {
         return response;
     }
+    if response.hovered() {
+        super::hint::set(&response.ctx, label, keys);
+    }
     response.on_hover_ui(|ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = SPACE_SM;
@@ -1172,6 +1179,7 @@ pub fn segmented<T: PartialEq + Copy>(
         x += width;
         let id = ui.scope_id().with(("segment", label));
         let response = ui.interact(rect, id, Sense::click());
+        super::hint::auto(&response, label);
         let on = *current == value;
         response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, on, label));
         let lift = hover_t(ui, id, response.hovered());
@@ -1610,6 +1618,7 @@ pub fn checkbox(ui: &mut Ui, theme: &Palette, on: &mut bool, label: &str) -> Res
             ink,
         );
     }
+    super::hint::auto(&response, label);
     response
 }
 

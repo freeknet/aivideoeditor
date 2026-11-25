@@ -33,6 +33,7 @@
 //! Everything here is drawing and plain data; starting jobs and writing the
 //! log is the panel's business.
 
+use crate::gui::ui::hint::Hint as _;
 use egui::{Align, CornerRadius, Layout, RichText, Sense, Stroke, Ui, Vec2};
 use serde_json::Value;
 
@@ -374,7 +375,7 @@ pub(super) fn first_cut(
                             .speed(1.0)
                             .suffix(" s"),
                     )
-                    .on_hover_text("Target length in seconds; the cut lands on whole phrases");
+                    .hint("Target length in seconds; the cut lands on whole phrases");
                 }
             });
         });
@@ -415,11 +416,12 @@ pub(super) fn first_cut(
         rule(ui, theme);
         ui.spacing_mut().item_spacing.y = 0.0;
         let _ = widgets::switch(ui, theme, &mut card.no_repeats, "No repeated shots")
-            .on_hover_text("Two shots from one clip start far apart; look-alike shots count as repeats");
+            .hint("Two shots from one clip start far apart; look-alike shots count as repeats");
         let _ = widgets::switch(ui, theme, &mut card.people_spacing, "People spacing")
-            .on_hover_text("The same performer does not come back within a few shots");
-        let _ = widgets::switch(ui, theme, &mut card.drop_on_hero, "Drop on the hero")
-            .on_hover_text("The shot on the drop is the hero: the one you picked, else the strongest fire shot");
+            .hint("The same performer does not come back within a few shots");
+        let _ = widgets::switch(ui, theme, &mut card.drop_on_hero, "Drop on the hero").hint(
+            "The shot on the drop is the hero: the one you picked, else the strongest fire shot",
+        );
         ui.spacing_mut().item_spacing.y = SPACE_SM;
         if let Some(e) = &card.error {
             ui.add(
@@ -459,7 +461,7 @@ fn hero_chip(ui: &mut Ui, theme: &Palette, card: &mut FirstCut, selection: &[Ref
                 )
                 .selectable(false),
             )
-            .on_hover_text(h.to_string());
+            .hint(h.to_string());
             if widgets::icon_btn(ui, theme, icons::X, "Remove the hero shot", "").clicked() {
                 card.hero = None;
             }

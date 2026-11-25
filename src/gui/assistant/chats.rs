@@ -24,6 +24,7 @@
 //! switch ends the running process and the next message resumes the
 //! chat's own session.
 
+use crate::gui::ui::hint::Hint as _;
 use egui::{Align, CornerRadius, Layout, Rect, Sense, Stroke, Ui, Vec2};
 
 use super::{PAGE_KEY, PageCtx, State, Tab, find, open_chat, store};
@@ -790,7 +791,7 @@ pub(super) fn title(ctx: &PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                 .selectable(false)
                 .sense(Sense::click()),
         )
-        .on_hover_text(format!("About {} · double-click to rename", meta.plan));
+        .hint(format!("About {} · double-click to rename", meta.plan));
     let pen = ui.rect_contains_pointer(label.rect.expand2(Vec2::new(28.0, 0.0)));
     let mut start = label.double_clicked();
     if pen

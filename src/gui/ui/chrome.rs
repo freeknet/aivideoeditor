@@ -22,6 +22,10 @@ use super::{icons, widgets};
 use crate::gui::app::App;
 use egui::{Align, Layout, Ui};
 
+/// The widest the status (project, running jobs, an error) grows, so the
+/// hint beside it keeps its room.
+const STATUS_MAX: f32 = 360.0;
+
 /// Draws the status bar.
 pub fn status_bar(app: &App, ui: &mut Ui) {
     let theme = &app.theme;
@@ -54,14 +58,23 @@ pub fn status_bar(app: &App, ui: &mut Ui) {
                     )
                 };
                 icons::icon(ui, glyph, icons::SMALL - 2.0, theme::rgb(color));
-                ui.add(
-                    egui::Label::new(
-                        egui::RichText::new(text)
-                            .font(theme::font(theme::SMALL_SIZE))
-                            .color(theme::rgb(theme.text_muted)),
-                    )
-                    .truncate(),
+                // The status keeps to its share, so the hint has room.
+                let status_w = (ui.available_width() * 0.3).clamp(120.0, STATUS_MAX);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(status_w, theme::STATUS_HEIGHT),
+                    Layout::left_to_right(Align::Center),
+                    |ui| {
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(text)
+                                    .font(theme::font(theme::SMALL_SIZE))
+                                    .color(theme::rgb(theme.text_muted)),
+                            )
+                            .truncate(),
+                        );
+                    },
                 );
+                let hint = super::hint::current(ui.ctx());
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = SPACE_SM;
                     ui.label(
@@ -84,6 +97,35 @@ pub fn status_bar(app: &App, ui: &mut Ui) {
                         );
                         widgets::kbd(ui, theme, &keys);
                     }
+                    // The hint: what the control under the pointer does.
+                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                        ui.spacing_mut().item_spacing.x = SPACE_XS + 2.0;
+                        let (rect, _) =
+                            ui.allocate_exact_size(egui::vec2(1.0, 12.0), egui::Sense::hover());
+                        ui.painter()
+                            .rect_filled(rect, 0.0, theme::ink(theme, theme::INK_STRONG));
+                        ui.add_space(SPACE_XS);
+                        let Some((text, keys)) = hint else {
+                            return;
+                        };
+                        icons::icon(
+                            ui,
+                            icons::INFO,
+                            icons::SMALL - 2.0,
+                            theme::rgb(theme.text_muted),
+                        );
+                        if !keys.is_empty() {
+                            widgets::kbd(ui, theme, &keys);
+                        }
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(text)
+                                    .font(theme::font(theme::SMALL_SIZE))
+                                    .color(theme::rgb(theme.text)),
+                            )
+                            .truncate(),
+                        );
+                    });
                 });
             });
         });

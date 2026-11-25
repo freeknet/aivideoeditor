@@ -24,6 +24,7 @@
 pub(crate) mod files;
 pub(crate) mod queue;
 
+use crate::gui::ui::hint::Hint as _;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
@@ -518,10 +519,10 @@ fn matrix(
                                 .font(theme::mono(theme::SMALL_SIZE))
                                 .color(theme::rgb(theme.text)),
                         )
-                        .on_hover_text(dest.display().to_string());
+                        .hint(dest.display().to_string());
                         if replaces {
                             widgets::pill(ui, theme, "replaces", widgets::Tone::Warning)
-                                .on_hover_text("Replaces the delivered file");
+                                .hint("Replaces the delivered file");
                         }
                     });
                 }
@@ -621,10 +622,7 @@ fn cell_chip(ui: &mut egui::Ui, theme: &crate::theme::Palette, state: &mut State
         theme::rgb(theme.text_muted),
     );
     widgets::focus_ring(ui, theme, &response);
-    if response
-        .on_hover_text(format!("{stem}.toml\n{tip}"))
-        .clicked()
-    {
+    if response.hint(format!("{stem}.toml\n{tip}")).clicked() {
         if on {
             state.ticked.remove(&cell.path);
         } else {
@@ -1136,7 +1134,7 @@ fn output_row(
                         )
                         .truncate(),
                     )
-                    .on_hover_text(path.display().to_string());
+                    .hint(path.display().to_string());
                     ui.label(
                         egui::RichText::new(&meta)
                             .font(theme::tabular(ui.ctx(), theme::SMALL_SIZE))
@@ -1161,7 +1159,7 @@ fn output_row(
                 }
                 if forced {
                     widgets::pill(ui, theme, "unchecked", widgets::Tone::Warning)
-                        .on_hover_text("Rendered from a plan that fails its check");
+                        .hint("Rendered from a plan that fails its check");
                 }
             });
         },

@@ -14,6 +14,7 @@
 //! / `U` mark the candidate and move on. The numbers that differ are the
 //! point: the better value of each measurement is drawn in green.
 
+use crate::gui::ui::hint::Hint as _;
 use egui::{Align2, CornerRadius, Rect, Sense, Stroke, StrokeKind, vec2};
 
 use super::{Do, Paint};
@@ -176,7 +177,7 @@ fn pane(
             StrokeKind::Outside,
         );
     }
-    if response.on_hover_text("Show in the viewer").clicked() {
+    if response.hint("Show in the viewer").clicked() {
         dos.push(Do::Preview(s.id.clone()));
     }
     let line = Rect::from_min_size(ui.cursor().min, vec2(width, 16.0));

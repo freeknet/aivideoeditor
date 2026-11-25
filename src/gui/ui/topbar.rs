@@ -34,6 +34,7 @@ use super::layout::{Region, ViewMode};
 use super::theme::{self, SPACE_MD, SPACE_SM, SPACE_XS};
 use super::{icons, keymap, widgets};
 use crate::gui::app::{Action, App, BrowserTab, Page};
+use crate::gui::ui::hint::Hint as _;
 use crate::theme::Palette;
 use egui::{Align, CornerRadius, Layout, Rect, Ui, Vec2};
 
@@ -227,7 +228,7 @@ fn view_menu(app: &App, ui: &mut Ui, theme: &Palette, actions: &mut Vec<Action>)
                 let on = app.layout.mode == mode;
                 let keys = keys(&format!("view-{}", mode.key()), app);
                 let row = widgets::menu_item(ui, theme, None, mode.label(), &keys, on);
-                if row.on_hover_text(mode.hint()).clicked() {
+                if row.hint(mode.hint()).clicked() {
                     actions.push(Action::SetViewMode(mode));
                     ui.close();
                 }
@@ -241,7 +242,7 @@ fn view_menu(app: &App, ui: &mut Ui, theme: &Palette, actions: &mut Vec<Action>)
                 "",
                 false,
             )
-            .on_hover_text("Choosing the mode on screen again resets it too.")
+            .hint("Choosing the mode on screen again resets it too.")
             .clicked()
             {
                 actions.push(Action::SetViewMode(app.layout.mode));

@@ -14,6 +14,7 @@
 //! `recipe.toml` (and the user-level default) once an edit is finished,
 //! never on open: opening a night must not write into it.
 
+use crate::gui::ui::hint::Hint as _;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -163,7 +164,7 @@ fn path_row(
                 ui.add_space(theme::CONTROL_HEIGHT + theme::SPACE_XS);
             }
             if widgets::outline_button(ui, theme, "Change\u{2026}")
-                .on_hover_text(format!("Choose the {}", label.to_lowercase()))
+                .hint(format!("Choose the {}", label.to_lowercase()))
                 .clicked()
             {
                 action = Some(RowAction::Change);
@@ -446,7 +447,7 @@ fn recipe_table(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
                     )
                 })
                 .response
-                .on_hover_text(if exists {
+                .hint(if exists {
                     "Already delivered (a new render replaces it)"
                 } else {
                     "Not delivered yet"
@@ -503,7 +504,7 @@ fn recipe_table(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
             Some(icons::ROTATE_CCW),
             "Reset to the Flow Night week",
         )
-        .on_hover_text("Three reels, a story, a feed cut, a wide cut and a recap")
+        .hint("Three reels, a story, a feed cut, a wide cut and a recap")
         .clicked()
         {
             loaded.recipe.deliverables = Recipe::default().deliverables;
@@ -647,7 +648,7 @@ fn rules_section(ui: &mut egui::Ui, theme: &crate::theme::Palette, rules: &mut R
                         .speed(1.0)
                         .suffix(" s apart"),
                 )
-                .on_hover_text("Two shots from one clip start at least this far apart in it")
+                .hint("Two shots from one clip start at least this far apart in it")
                 .accessible_name("Same clip gap")
                 .changed();
         });
@@ -661,7 +662,7 @@ fn rules_section(ui: &mut egui::Ui, theme: &crate::theme::Palette, rules: &mut R
                         .prefix("not again within ")
                         .suffix(" shots"),
                 )
-                .on_hover_text(
+                .hint(
                     "Unnamed footage counts as one person per clip, and per 3 minutes of a long clip. 0 turns it off.",
                 )
                 .accessible_name("Person gap")
@@ -707,7 +708,7 @@ fn rules_section(ui: &mut egui::Ui, theme: &crate::theme::Palette, rules: &mut R
                     changed |= list_box(ui, theme, &mut rules.reject_moments, moment, label);
                 }
                 changed |= widgets::checkbox(ui, theme, &mut rules.reject_blocked, "View blocked")
-                    .on_hover_text("Needs captions")
+                    .hint("Needs captions")
                     .changed();
             });
         });
@@ -828,7 +829,7 @@ fn deliverable_row(
                 .speed(0.05)
                 .suffix(" bars"),
         )
-        .on_hover_text("How long the end card holds, in bars (two seconds each with no music)")
+        .hint("How long the end card holds, in bars (two seconds each with no music)")
         .accessible_name(format!("Deliverable {} card length", i + 1))
         .changed();
     let mut template = d.filename.clone().unwrap_or_default();

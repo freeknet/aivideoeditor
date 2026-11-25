@@ -12,6 +12,10 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- The status bar says what the control under the pointer does: every tooltip also
+  appears there (with its shortcut), the shared buttons, tabs and switches describe
+  themselves, and the guide's steps, the Home pipeline cards and the timeline's shots, cuts
+  and end card explain what they are and what dragging or clicking does.
 - Smooth playback of heavy footage: analysis now makes light playback copies (720p H.264,
   same frames) of 4K and HEVC clips, on the NVIDIA GPU when there is one (about eight
   times real time on an RTX 4080), else the CPU. The editor's player uses them; renders

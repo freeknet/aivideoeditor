@@ -26,6 +26,7 @@
 //! jitter. There is no volume slider in the row (Selects has none): it
 //! lives in the settings menu the caller puts on the right.
 
+use crate::gui::ui::hint::Hint as _;
 use egui::{Align, Color32, CornerRadius, Layout, Rect, Sense, Ui, Vec2, pos2, vec2};
 
 use super::{Player, clock};
@@ -157,7 +158,7 @@ pub(crate) fn bar(
     let id = ui.scope_id().with("transport-timecode");
     let response = ui.interact(shown, id, Sense::hover());
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, &text));
-    let _ = response.on_hover_text("Playhead position / length");
+    let _ = response.hint("Playhead position / length");
 
     scrub_bar(p, ui, theme, strip, fps);
 }

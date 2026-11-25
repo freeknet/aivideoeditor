@@ -29,6 +29,7 @@
 mod peaks;
 mod view;
 
+use crate::gui::ui::hint::Hint as _;
 use egui::RichText;
 
 use super::PageCtx;
@@ -421,7 +422,7 @@ fn header(ctx: &mut PageCtx<'_>, state: &State, ui: &mut egui::Ui, map: &MusicMa
             )
             .truncate(),
         )
-        .on_hover_text(&map.path);
+        .hint(&map.path);
         ui.add(
             egui::Label::new(
                 RichText::new(format!("{} bars · {}", map.bars.len(), clock(map.duration)))
@@ -430,7 +431,7 @@ fn header(ctx: &mut PageCtx<'_>, state: &State, ui: &mut egui::Ui, map: &MusicMa
             )
             .truncate(),
         )
-        .on_hover_text(grid);
+        .hint(grid);
     });
     if let Some(e) = &state.error {
         ui.label(
@@ -754,7 +755,7 @@ fn none(ui: &mut egui::Ui, palette: &Palette, text: &str, tooltip: &str) {
             .color(theme::rgb(palette.text_faint)),
     );
     if !tooltip.is_empty() {
-        label.on_hover_text(tooltip);
+        label.hint(tooltip);
     }
 }
 
@@ -787,7 +788,7 @@ fn selection_row(
         .size(theme::BODY_SIZE)
         .color(theme::rgb(ctx.theme.text)),
     )
-    .on_hover_text(format!("{} – {}", clock(t0), clock(t1)));
+    .hint(format!("{} – {}", clock(t0), clock(t1)));
     ui.add_space(theme::SPACE_XS);
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = egui::vec2(theme::SPACE_XS, theme::SPACE_XS);
@@ -897,7 +898,7 @@ fn sections(
                             )
                             .sense(egui::Sense::click()),
                         )
-                        .on_hover_text("Click to select; double-click or right-click to rename");
+                        .hint("Click to select; double-click or right-click to rename");
                     if label.clicked() {
                         view::select(ctx, state, s.from_bar, s.to_bar);
                         if let Some(bar) = map.bars.get(s.from_bar) {
@@ -936,7 +937,7 @@ fn sections(
                     .font(theme::tabular(ui.ctx(), theme::BODY_SIZE))
                     .color(theme::rgb(ctx.theme.text_muted)),
                 )
-                .on_hover_text(clock(t0));
+                .hint(clock(t0));
                 ui.end_row();
             }
         });
@@ -978,7 +979,7 @@ fn drops(ctx: &mut PageCtx<'_>, ui: &mut egui::Ui, map: &MusicMap, edits: &mut V
                         .font(theme::tabular(ui.ctx(), theme::BODY_SIZE))
                         .color(theme::rgb(ctx.theme.text_muted)),
                 )
-                .on_hover_text(format!("score {:.2}", d.score));
+                .hint(format!("score {:.2}", d.score));
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
                     if widgets::icon_btn(ui, ctx.theme, icons::PLAY, "Play from the bar before", "")

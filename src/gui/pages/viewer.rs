@@ -28,6 +28,7 @@
 
 mod overlays;
 
+use crate::gui::ui::hint::Hint as _;
 use std::path::Path;
 
 use super::PageCtx;
@@ -281,7 +282,7 @@ fn settings(ui: &mut egui::Ui, theme: &Palette, state: &mut State, p: &mut Playe
             for aspect in Aspect::ALL {
                 let on = state.aspect == aspect;
                 if widgets::menu_item(ui, theme, Some(aspect.icon()), aspect.label(), "", on)
-                    .on_hover_text(aspect.hint())
+                    .hint(aspect.hint())
                     .clicked()
                     && !on
                 {
@@ -292,16 +293,16 @@ fn settings(ui: &mut egui::Ui, theme: &Palette, state: &mut State, p: &mut Playe
             widgets::menu_separator(ui, theme);
             heading(ui, theme, "Guides");
             changed |= check(ui, theme, "Safe margins", "", &mut state.safe)
-                .on_hover_text("Title and action safe areas")
+                .hint("Title and action safe areas")
                 .clicked();
             if state.aspect == Aspect::Vertical {
                 changed |= check(ui, theme, "UI zones", "", &mut state.social)
-                    .on_hover_text("Where TikTok and Reels draw over a vertical video")
+                    .hint("Where TikTok and Reels draw over a vertical video")
                     .clicked();
             }
             if state.aspect != Aspect::Wide {
                 changed |= check(ui, theme, "Full frame", "", &mut state.ghost)
-                    .on_hover_text("Show the whole frame with the crop outlined")
+                    .hint("Show the whole frame with the crop outlined")
                     .clicked();
             }
             changed |= check(ui, theme, "Info overlay", "Ctrl+Shift+I", &mut state.info).clicked();
@@ -310,7 +311,7 @@ fn settings(ui: &mut egui::Ui, theme: &Palette, state: &mut State, p: &mut Playe
             for (width, label) in QUALITIES {
                 let on = state.width == width;
                 if widgets::menu_item(ui, theme, None, label, "", on)
-                    .on_hover_text("Decode width of the preview")
+                    .hint("Decode width of the preview")
                     .clicked()
                     && !on
                 {

@@ -19,6 +19,7 @@
 //! Grouped by act, a header row across the grid opens each act (see
 //! [`acts`]); rows break at an act's end.
 
+use crate::gui::ui::hint::Hint as _;
 use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 
 use super::acts::{self, Row};
@@ -446,7 +447,7 @@ fn badges(
         );
         let b = ui
             .interact(r.expand(2.0), id.with("stack"), Sense::click())
-            .on_hover_text(if open {
+            .hint(if open {
                 "Collapse this clip's shots"
             } else {
                 "Show this clip's other shots"

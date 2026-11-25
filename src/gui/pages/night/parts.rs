@@ -18,6 +18,7 @@
 //! ink on ink), a sonner-style notice, and the step marks (spinner, check,
 //! cross) of a run.
 
+use crate::gui::ui::hint::Hint as _;
 use std::path::Path;
 
 use egui::{Align2, Color32, CornerRadius, Rect, Response, Sense, Stroke, Ui, Vec2};
@@ -207,7 +208,7 @@ pub(crate) fn path_box(
         color,
     );
     match path {
-        Some(p) => response.on_hover_text(p.display().to_string()),
+        Some(p) => response.hint(p.display().to_string()),
         None => response,
     }
 }

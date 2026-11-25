@@ -13,6 +13,7 @@
 //! Rows are Selects' list rows: 28 px, 2 px apart, 8 px corners, a 16 px
 //! thumbnail, the name in 14 px and the numbers in 12 px tabular, muted.
 
+use crate::gui::ui::hint::Hint as _;
 use egui::{CornerRadius, Rect, Sense, StrokeKind, pos2, vec2};
 
 use super::acts::{self, Row};
@@ -175,7 +176,7 @@ pub(super) fn draw(
                     egui::Id::unique(("review-col", c.title())),
                     Sense::click(),
                 )
-                .on_hover_text(format!("Sort by {}", order.label().to_lowercase()));
+                .hint(format!("Sort by {}", order.label().to_lowercase()));
             if resp.hovered() {
                 color = theme.text;
             }

@@ -16,6 +16,7 @@
 //! here `]` / `[` load the next / previous *group* (one clip's results, at
 //! most [`MAX`] of them) without leaving the mode.
 
+use crate::gui::ui::hint::Hint as _;
 use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 
 use super::{Do, Paint};
@@ -135,7 +136,7 @@ pub(super) fn draw(
                     .font(theme::medium(ui.ctx(), theme::BODY_SIZE))
                     .color(theme::rgb(theme.text)),
             )
-            .on_hover_text(format!("P picks it; {keys} goes on to the next group"));
+            .hint(format!("P picks it; {keys} goes on to the next group"));
         });
         ui.add_space(SPACE_SM);
     }
@@ -246,7 +247,7 @@ fn tile(
                 egui::Id::unique(("review-survey-drop", id)),
                 Sense::click(),
             )
-            .on_hover_text(format!(
+            .hint(format!(
                 "Drop it from the survey ({})",
                 super::keys_of("review-survey-remove", paint.preset)
             ));

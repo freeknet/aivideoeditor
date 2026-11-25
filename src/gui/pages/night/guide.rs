@@ -37,6 +37,7 @@
 
 use crate::gui::app::{Action, Page, Stage};
 use crate::gui::pages::PageCtx;
+use crate::gui::ui::hint::Hint as _;
 use crate::gui::ui::{icons, theme, widgets};
 use crate::project::Project;
 use crate::recipe::{self, Recipe};
@@ -317,7 +318,7 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, home: &mut super::State, ui: &mut egui
             ui.spacing_mut().item_spacing.x = theme::SPACE_SM;
             if let Some(line) = &running {
                 progress = widgets::outline_button(ui, theme, "Progress")
-                    .on_hover_text("What each step and clip has been through")
+                    .hint("What each step and clip has been through")
                     .clicked();
                 ui.label(
                     egui::RichText::new(line)
@@ -337,7 +338,7 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, home: &mut super::State, ui: &mut egui
                     Some(icons::SPARKLES),
                     label,
                 )
-                .on_hover_text(tip)
+                .hint(tip)
                 .clicked()
                 {
                     next = Some(stage);
@@ -523,6 +524,20 @@ fn stage_chip(
             stage.title(),
         )
     });
+    if response.hovered() {
+        let state = match mark {
+            Mark::Done => "done",
+            Mark::Here => "next",
+            Mark::Busy => "running now",
+            Mark::Later => "later",
+        };
+        let what = crate::gui::ui::hint::describe(stage.title()).unwrap_or_default();
+        crate::gui::ui::hint::set(
+            ui.ctx(),
+            &format!("{} ({state}): {what}. Click to go there.", stage.title()),
+            "",
+        );
+    }
     let hover = widgets::hover_t(ui, response.id, response.hovered());
     let painter = ui.painter();
     if matches!(mark, Mark::Here | Mark::Busy) {
@@ -567,7 +582,7 @@ fn stage_chip(
         galley,
         ink,
     );
-    response.on_hover_text(match stage {
+    response.hint(match stage {
         Stage::Footage => "The project's clips and settings",
         Stage::Analyse => "Analysis progress, clip by clip",
         Stage::Music => "The beat map",

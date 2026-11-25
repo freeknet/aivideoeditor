@@ -33,6 +33,7 @@ mod model;
 mod queue;
 mod view;
 
+use crate::gui::ui::hint::Hint as _;
 use egui::{Key, Modifiers, Ui};
 
 use super::PageCtx;
@@ -710,7 +711,7 @@ fn detail(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui, ops: &mut Vec<O
             .truncate(),
         );
         if !about.is_empty() {
-            name.on_hover_text(about);
+            name.hint(about);
         }
         ui.label(text(
             format!("{} clips · {} segments", group.clips.len(), group.segs),
@@ -810,7 +811,7 @@ fn detail(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui, ops: &mut Vec<O
                     if row.segs.len() == 1 { "" } else { "s" }
                 );
                 let header = view::clip_header(ui, ctx.theme, &caption)
-                    .on_hover_text("Drag onto a person to move this clip's segments");
+                    .hint("Drag onto a person to move this clip's segments");
                 header.dnd_set_drag_payload(DragSegs(row.segs.clone()));
                 if header.clicked() {
                     state.picked.clone_from(&row.segs);
@@ -1036,7 +1037,7 @@ fn confirm_queue(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui, ops: &mu
             SMALL,
             muted,
         ))
-        .on_hover_text("From the caption words, the prop, and what was recorded nearby");
+        .hint("From the caption words, the prop, and what was recorded nearby");
     });
     if let Some(guess) = model.group(Some(&question.guess.0)) {
         strip(ctx.thumbs, ui, &guess.strip);

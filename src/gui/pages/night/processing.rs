@@ -27,6 +27,7 @@
 //! running job's live reports, so a night reopened after a crash or a
 //! cancel shows exactly what is done.
 
+use crate::gui::ui::hint::Hint as _;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -350,7 +351,7 @@ pub(crate) fn draw(
                         )
                     })
                     .inner
-                    .on_hover_text("Captions keep running in the background")
+                    .hint("Captions keep running in the background")
                     .on_disabled_hover_text("Unlocks when indexing finishes")
                     .clicked();
                 if open {
@@ -358,7 +359,7 @@ pub(crate) fn draw(
                 }
                 if active
                     && widgets::outline_button(ui, theme, "Stop")
-                        .on_hover_text(
+                        .hint(
                             "Stop after the clip or segment in hand; what is finished is kept, \
                              and the next run picks up from there",
                         )
@@ -494,7 +495,7 @@ fn steps(ctx: &PageCtx<'_>, ui: &mut egui::Ui, phases: &[(Planned, Phase)]) {
                     );
                 }
                 if detail_w < full_w {
-                    response.on_hover_text(detail);
+                    response.hint(detail);
                 }
             }
         });
@@ -643,7 +644,7 @@ fn clips(
             theme::rgb(after.1),
         );
         if let Some(reason) = &row.reason {
-            response.on_hover_text(reason);
+            response.hint(reason);
         }
     }
 }

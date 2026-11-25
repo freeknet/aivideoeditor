@@ -28,6 +28,7 @@
 //! Every choice is written to the night's `ave.toml` the moment it is made,
 //! so leaving the wizard halfway loses nothing.
 
+use crate::gui::ui::hint::Hint as _;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -398,7 +399,7 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if widgets::ghost_button(ui, theme, "Skip setup")
-                    .on_hover_text("Go to the Home screen; nothing runs")
+                    .hint("Go to the Home screen; nothing runs")
                     .clicked()
                 {
                     outcome = Some(Outcome::Close);
@@ -777,7 +778,7 @@ fn footage_step(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
                 let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
                 let t = clip.duration.map_or(1.0, |d| d * 0.4);
                 parts::thumb(ctx.thumbs, ui, theme, rect, Some((clip.path.as_path(), t)));
-                response.on_hover_text(&clip.id);
+                response.hint(&clip.id);
             }
         });
     }
@@ -881,7 +882,7 @@ fn music_step(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
             Some(icons::HISTORY),
             &format!("Carry over {from}'s"),
         )
-        .on_hover_text("Fill the track and end cards still missing from the last project")
+        .hint("Fill the track and end cards still missing from the last project")
         .clicked()
             && let Some(p) = ctx.project.as_mut()
         {
