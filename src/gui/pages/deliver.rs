@@ -761,6 +761,13 @@ fn render_bar(
                     .font(theme::tabular(ui.ctx(), theme::BODY_SIZE))
                     .color(theme::rgb(theme.text_muted)),
             );
+        } else if rows.iter().any(|r| !r.cells.is_empty()) {
+            // Say why Render is dim rather than leave it silently off.
+            ui.label(
+                egui::RichText::new("Tick a cut's version above to render it")
+                    .font(theme::font(theme::SMALL_SIZE))
+                    .color(theme::rgb(theme.text_muted)),
+            );
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let response = ui
