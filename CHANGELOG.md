@@ -12,6 +12,8 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- A project can have a name of its own (*Name* in the Home screen's project settings),
+  shown in the top bar and the projects list in place of its folder's name.
 - Templates: what was built in for Flow Night is now one template of two. *General* (the
   new default: a 30 s wide cut and a 30 s vertical one, no kind of footage favoured) and
   *Flow Night* (the weekly seven-cut promo set, fire on the drop) set a project's
@@ -385,6 +387,9 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- The People tab with nobody named yet says where people come from (captions, then
+  People) instead of "Nobody matches" with a *Clear search* button for a search that was
+  never made; the Index card says how many clips still need playback copies in full.
 - Long clip names (camera files like `DJI_20261122150730_0124_D`) are cut in the
   middle in the shot browser, so the part that tells them apart stays visible, and the
   status bar names running work in words ("Preparing smooth playback", not `proxy`).

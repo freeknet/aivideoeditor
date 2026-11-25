@@ -40,6 +40,9 @@ use crate::people::People;
 /// a hand-written or older file still loads.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Settings {
+    /// What the project is called, when not its folder's name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) name: Option<String>,
     /// Folder of source clips.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) footage: Option<PathBuf>,
@@ -203,8 +206,24 @@ impl Project {
         Ok(project)
     }
 
-    /// The night's name: the folder above `_ave`, or the work folder's own.
+    /// The project's name: the one set in its settings, else the folder above
+    /// `_ave`, or the work folder's own.
     pub(crate) fn name(&self) -> String {
+        if let Some(name) = self
+            .settings
+            .name
+            .as_deref()
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+        {
+            return name.to_owned();
+        }
+        self.folder_name()
+    }
+
+    /// The name the project's folder gives it: the folder above `_ave`, or
+    /// the work folder's own.
+    pub(crate) fn folder_name(&self) -> String {
         let named = if self.work.file_name().is_some_and(|n| n == "_ave") {
             self.work.parent()
         } else {
@@ -871,6 +890,24 @@ pub(crate) fn clip_rows(
 #[cfg(test)]
 mod tests {
     use super::Project;
+
+    #[test]
+    fn a_name_set_in_the_settings_beats_the_folder() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let work = dir.path().join("ADUPU").join("_ave");
+        let mut project = Project::open(&work)?;
+        assert_eq!(project.name(), "ADUPU", "the folder, until named");
+        project.settings.name = Some("Thanksgiving 2026".to_owned());
+        project.save_settings()?;
+        let again = Project::open(&work)?;
+        assert_eq!(
+            again.name(),
+            "Thanksgiving 2026",
+            "the name, saved with the project"
+        );
+        assert_eq!(again.folder_name(), "ADUPU", "the folder is still known");
+        Ok(())
+    }
 
     #[test]
     fn an_empty_folder_opens_with_nothing_run() -> anyhow::Result<()> {

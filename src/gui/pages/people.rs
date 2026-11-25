@@ -473,6 +473,22 @@ fn grid(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui, ops: &mut Vec<Op>
         .chain((!model.unassigned.clips.is_empty()).then_some(&model.unassigned))
         .collect();
     let names: Vec<String> = model.groups.iter().filter_map(|g| g.name.clone()).collect();
+    if shown.is_empty() && filter.is_empty() {
+        let mut home = false;
+        widgets::empty_state(
+            ui,
+            ctx.theme,
+            icons::USERS,
+            "Nobody named yet",
+            "People are grouped from the captions. Set captions up, then run Caption and People on the Home screen; until then each clip counts as one person per three minutes.",
+            |ui| home = widgets::outline_button(ui, ctx.theme, "Home screen").clicked(),
+        );
+        if home {
+            ctx.actions
+                .push(crate::gui::app::Action::Go(crate::gui::app::Page::Night));
+        }
+        return;
+    }
     if shown.is_empty() {
         let mut clear = false;
         widgets::empty_state(ui, ctx.theme, icons::SEARCH, "Nobody matches", "", |ui| {

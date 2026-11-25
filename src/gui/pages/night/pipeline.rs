@@ -562,7 +562,7 @@ fn views(ctx: &PageCtx<'_>, state: &State, recipe: &Recipe) -> Vec<View> {
                     0 => (Standing::Done, text),
                     n => (
                         Standing::Partial,
-                        format!("{text} · {n} need playback copies"),
+                        format!("{n} clips to copy for playback · {text}"),
                     ),
                 },
             }

@@ -138,9 +138,15 @@ pub(crate) fn summarize(work: &Path) -> Summary {
         Progress::New
     };
     let date = recipe::night_date(&names.night).unwrap_or_default();
+    // The name set in the project's settings, else its folder's.
+    let named = std::fs::read_to_string(work.join("ave.toml"))
+        .ok()
+        .and_then(|t| toml::from_str::<crate::project::Settings>(&t).ok())
+        .and_then(|s| s.name)
+        .filter(|n| !n.trim().is_empty());
     Summary {
         work: work.to_path_buf(),
-        name: names.night,
+        name: named.unwrap_or(names.night),
         date,
         progress,
         clips,

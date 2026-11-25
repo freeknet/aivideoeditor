@@ -228,6 +228,27 @@ fn settings_rows(ctx: &mut PageCtx<'_>, state: &State, ui: &mut egui::Ui) {
     let mut change: Option<(String, RowAction)> = None;
     ui.scope(|ui| {
         ui.set_max_width(FORM_WIDTH);
+        if let Some(p) = ctx.project.as_mut() {
+            let folder = p.folder_name();
+            let mut name = p.settings.name.clone().unwrap_or_default();
+            parts::form_row(ui, ctx.theme, "Name", |ui| {
+                let field = ui
+                    .allocate_ui(egui::vec2(320.0, theme::CONTROL_HEIGHT), |ui| {
+                        widgets::text_field(ui, ctx.theme, &mut name, &folder)
+                            .accessible_name("Project name")
+                    })
+                    .inner
+                    .hint("What this project is called; empty uses its folder's name");
+                if field.changed() {
+                    let trimmed = name.trim();
+                    p.settings.name = (!trimmed.is_empty()).then(|| trimmed.to_owned());
+                    if let Err(e) = p.save_settings() {
+                        p.warnings.push(format!("Could not save ave.toml: {e:#}"));
+                    }
+                }
+            });
+            ui.add_space(theme::SPACE_XS + 2.0);
+        }
         if let Some(a) = path_row(
             ctx,
             ui,
