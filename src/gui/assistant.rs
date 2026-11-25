@@ -4771,7 +4771,10 @@ mod tests {
             h.query_by_label("Versions of reel-a").is_some(),
             "History lists the plan's versions"
         );
-        h.query_by_label(history)
+        // The pointer still rests on History, so its tooltip (the same words)
+        // is up too: pick the button.
+        h.query_all_by_label(history)
+            .find(|n| n.accesskit_node().role() == egui::accesskit::Role::Button)
             .ok_or_else(|| anyhow::anyhow!("no History button"))?
             .click();
         h.run_steps(3);
