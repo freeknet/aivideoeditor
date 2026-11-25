@@ -324,6 +324,9 @@ struct Key {
 #[derive(Debug, Default)]
 pub(crate) struct State {
     work: Option<PathBuf>,
+    /// The template measures fire, LED or light: the sorts and searches for
+    /// them are offered.
+    lit: bool,
     marks: Marks,
     marks_rev: u64,
     opts: Options,
@@ -526,6 +529,12 @@ fn body(
         let mut night = Night::new(index, &project.people, marks);
         let recipe = crate::recipe::Recipe::cached(&project.work);
         night.bars = search::Metric::bars(&recipe.metrics);
+        state.lit = night.bars.iter().any(|m| {
+            matches!(
+                m,
+                search::Metric::Fire | search::Metric::Led | search::Metric::Light
+            )
+        });
         night.avoid = recipe.rules.reject_flags;
         refresh(state, &night, ctx.search);
         let query = Query::parse(ctx.search);
@@ -915,7 +924,7 @@ fn header(
                 }
                 filter_menu(ui, theme, state, (picks, rejects));
                 sort_menu(ui, theme, state, sort_label);
-                smart_menu(ui, theme, dos);
+                smart_menu(ui, theme, dos, state.lit);
                 count(ui, theme, state, query, total, room);
             } else {
                 mode_status(ui, theme, state, dos);
@@ -1124,7 +1133,12 @@ fn sort_menu(ui: &mut egui::Ui, theme: &Palette, state: &mut State, label: &str)
             pad(ui, |ui| {
                 widgets::menu_heading(ui, theme, "Order by");
             });
-            for s in Sort::ALL.into_iter().filter(|s| !s.groups()) {
+            // Fire as an order only under a template that measures it.
+            let lit = state.lit;
+            for s in Sort::ALL
+                .into_iter()
+                .filter(|s| !s.groups() && (lit || *s != Sort::Fire))
+            {
                 if widgets::menu_item(ui, theme, None, s.label(), "", state.opts.sort == s)
                     .clicked()
                 {
@@ -1145,7 +1159,7 @@ fn sort_menu(ui: &mut egui::Ui, theme: &Palette, state: &mut State, label: &str)
 }
 
 /// The saved searches.
-fn smart_menu(ui: &mut egui::Ui, theme: &Palette, dos: &mut Vec<Do>) {
+fn smart_menu(ui: &mut egui::Ui, theme: &Palette, dos: &mut Vec<Do>, lit: bool) {
     let id = ui.make_persistent_id("review-smart");
     let open = egui::Popup::is_id_open(ui.ctx(), id);
     let response = widgets::icon_toggle(ui, theme, icons::SPARKLES, "Smart searches", "", open);
@@ -1157,7 +1171,10 @@ fn smart_menu(ui: &mut egui::Ui, theme: &Palette, dos: &mut Vec<Do>) {
             pad(ui, |ui| {
                 widgets::menu_heading(ui, theme, "Smart searches");
             });
-            for (label, q) in SMART {
+            // The fire, LED and stage searches only for a template about them.
+            for (label, q) in SMART.iter().filter(|(l, _)| {
+                lit || !matches!(*l, "Best fire" | "LED" | "DJ booth" | "Performing, sharp")
+            }) {
                 if widgets::menu_item(ui, theme, None, label, "", false)
                     .hint(*q)
                     .clicked()
