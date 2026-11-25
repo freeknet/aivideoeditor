@@ -513,7 +513,7 @@ fn list(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui, new_keys: &str) {
     });
     if stems.len() > 1 {
         ui.add_enabled_ui(idle, |ui| {
-            ui.menu_button("New chat about another plan", |ui| {
+            ui.menu_button("New chat about another cut", |ui| {
                 for s in &stems {
                     if widgets::menu_item(ui, theme, None, s, "", false).clicked() {
                         new_on = Some(s.clone());

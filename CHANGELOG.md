@@ -405,6 +405,9 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- The screens say *cut* where they said *plan* (the file format's word): "Draft the cuts
+  first", "Compare cuts", "Whole cut", "New cut…", and so on. Prompts sent to the
+  assistant are unchanged.
 - The export panel opens with the cuts that pass their check and are not delivered yet
   already ticked (once per project, when nothing is ticked), so *Render* is ready to press.
 - In the editor, the guide's *Next* offers *Export the cut…* instead of re-opening the

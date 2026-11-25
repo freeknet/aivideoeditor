@@ -11,7 +11,7 @@
 //! The compare view (Frame.io's "Compare Versions", for plans).
 //!
 //! **A** is the open plan as the timeline shows it; **B** is another plan
-//! file or a saved version of this one, picked from the "Compare plans" menu in
+//! file or a saved version of this one, picked from the "Compare cuts" menu in
 //! the tab strip (`Shift+C` takes the previous version, or the next plan
 //! when there is no history). The view is read-only.
 //!
@@ -364,7 +364,7 @@ pub(super) fn default_choice(state: &State, project: &Project) -> Option<(String
         })
 }
 
-/// What the "Compare plans" menu offers, read before it is drawn.
+/// What the "Compare cuts" menu offers, read before it is drawn.
 #[derive(Clone, Debug)]
 pub(super) struct MenuInfo {
     /// The open plan.
@@ -398,9 +398,9 @@ pub(super) fn menu_info(state: &State, project: &Project) -> Option<MenuInfo> {
     })
 }
 
-/// The "Compare plans" button in the timeline's header and its menu.
+/// The "Compare cuts" button in the timeline's header and its menu.
 pub(super) fn menu(ui: &mut Ui, t: &Palette, info: &MenuInfo) -> Option<Pick> {
-    let resp = widgets::icon_toggle(ui, t, icons::COMPARE, "Compare plans", "Shift+C", info.open);
+    let resp = widgets::icon_toggle(ui, t, icons::COMPARE, "Compare cuts", "Shift+C", info.open);
     let mut pick = None;
     let _ = egui::Popup::menu(&resp)
         .width(300.0)
@@ -458,7 +458,7 @@ pub(super) fn menu(ui: &mut Ui, t: &Palette, info: &MenuInfo) -> Option<Pick> {
             widgets::menu_separator(ui, t);
             ui.horizontal(|ui| {
                 ui.add_space(theme::SPACE_SM);
-                widgets::menu_heading(ui, t, "Other plans");
+                widgets::menu_heading(ui, t, "Other cuts");
             });
             for stem in &info.stems {
                 if *stem == info.name {

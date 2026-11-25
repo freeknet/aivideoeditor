@@ -144,7 +144,7 @@ pub fn describe(label: &str) -> Option<&'static str> {
         "Shot list" => "The open cut as a list, shot by shot",
         "Chat" => "Ask for edits or questions about the footage",
         "Comments" => "Notes pinned to moments of the cut",
-        "Whole plan" => "The chat sees the whole cut",
+        "Whole cut" => "The chat sees the whole cut",
         "Selected shots" => "The chat sees only the shots you selected",
         "Before the drop" => "The chat works on the part before the drop",
         "From the drop" => "The chat works on the drop and after",

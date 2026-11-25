@@ -651,7 +651,7 @@ fn card_actions(
                 }
             }
         });
-        if ui.button("Avoid this person in plans").clicked() {
+        if ui.button("Avoid this person in cuts").clicked() {
             ops.push(Op::Ref(
                 Reference::new(Target::Person { name: name.clone() }).with(Modifier::Avoid),
             ));

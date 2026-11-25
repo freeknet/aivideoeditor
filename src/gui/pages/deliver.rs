@@ -366,7 +366,7 @@ fn summary(ctx: &PageCtx<'_>, state: &mut State, ui: &mut egui::Ui, rows: &[Row]
                 ui,
                 theme,
                 icons::LIST_FILTER,
-                "Tick the main version of every deliverable whose plan passes its check",
+                "Tick the main version of every deliverable whose cut passes its check",
                 "",
             )
             .clicked()
@@ -1188,7 +1188,7 @@ fn output_row(
                 }
                 if forced {
                     widgets::pill(ui, theme, "unchecked", widgets::Tone::Warning)
-                        .hint("Rendered from a plan that fails its check");
+                        .hint("Rendered from a cut that fails its check");
                 }
             });
         },

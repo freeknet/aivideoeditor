@@ -560,11 +560,11 @@ fn open_chats(
     Ok(())
 }
 
-/// Opens the timeline's "Compare plans" menu and picks B: the first other plan,
+/// Opens the timeline's "Compare cuts" menu and picks B: the first other plan,
 /// or else the latest earlier version of the open one.
 fn open_compare(harness: &mut egui_kittest::Harness<'_, Option<App>>) -> anyhow::Result<()> {
     harness
-        .query_by_label("Compare plans")
+        .query_by_label("Compare cuts")
         .ok_or_else(|| anyhow::anyhow!("no Compare plans menu: the night has no plan"))?
         .click();
     harness.run_steps(4);

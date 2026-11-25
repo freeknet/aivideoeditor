@@ -30,7 +30,7 @@
 //! chat as one batch ([`comments`]). While the assistant commits an edit it
 //! holds `plans/.lock-<name>` and the timeline goes read-only. A
 //! storyboard lane ([`storyboard`]) shows the plan as cards with their
-//! notes, grouped by song section. "Compare plans" in the tab strip
+//! notes, grouped by song section. "Compare cuts" in the tab strip
 //! ([`compare`]) stacks the plan over another plan or a saved version on
 //! one beat grid and lists what differs, shot by shot.
 //!
@@ -768,7 +768,7 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
                     ui,
                     palette,
                     icons::TRIANGLE_ALERT,
-                    "Could not read the plan",
+                    "Could not read the cut",
                     e,
                     |_| {},
                 ),
@@ -808,7 +808,7 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
                     ui,
                     palette,
                     icons::LIST,
-                    "Pick a plan",
+                    "Pick a cut",
                     "Open one of the tabs above.",
                     |_| {},
                 ),
@@ -1589,7 +1589,7 @@ fn lock_banner(palette: &Palette, ui: &mut egui::Ui) {
         |ui| {
             ui.label(
                 egui::RichText::new(
-                    "Chat is editing this plan. The timeline is read-only until it finishes.",
+                    "Chat is editing this cut. The timeline is read-only until it finishes.",
                 )
                 .font(theme::font(theme::BODY_SIZE))
                 .color(theme::rgb(palette.text)),
@@ -1694,7 +1694,7 @@ fn draft_window(
     let mut open = true;
     let mut go = false;
     let mut cancel = false;
-    egui::Window::new("Draft a new plan")
+    egui::Window::new("Draft a new cut")
         .collapsible(false)
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
@@ -2161,7 +2161,7 @@ mod tests {
         use egui_kittest::kittest::Queryable;
         let (_dir, work) = night()?;
         let mut h = harness(work.clone());
-        h.query_by_label("Compare plans")
+        h.query_by_label("Compare cuts")
             .ok_or_else(|| anyhow::anyhow!("no Compare menu in the tab strip"))?
             .click();
         h.run_steps(3);

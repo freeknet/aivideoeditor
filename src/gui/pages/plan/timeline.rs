@@ -1477,7 +1477,7 @@ fn audio(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut Ui, lay: &L
             "No music: each shot plays its own sound",
             theme::rgb(t.text_muted),
         ),
-        None => note("The plan names no music file", theme::rgb(t.text_muted)),
+        None => note("The cut names no music file", theme::rgb(t.text_muted)),
     }
     let file = std::path::Path::new(&s.plan.music)
         .file_name()
@@ -1717,7 +1717,7 @@ fn headers(state: &mut State, s: &Shown<'_>, ui: &mut Ui, lay: &Layout, id: egui
         icons::paint(&painter, r, icons::LOCK, icons::SIZE, muted);
         let _ = ui
             .interact(r, id.with("lock"), Sense::hover())
-            .hint("Chat is editing this plan: read-only");
+            .hint("Chat is editing this cut: read-only");
     }
     let mute = toggle(
         ui,

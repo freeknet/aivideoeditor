@@ -120,7 +120,7 @@ impl ScopeChoice {
     /// Chip label.
     fn label(self) -> &'static str {
         match self {
-            Self::Whole => "Whole plan",
+            Self::Whole => "Whole cut",
             Self::Selected => "Selected shots",
             Self::Build => "Before the drop",
             Self::FromDrop => "From the drop",
@@ -1206,7 +1206,7 @@ fn header(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                     ui,
                     theme,
                     icons::HISTORY,
-                    "History: applied proposals and plan versions",
+                    "History: applied proposals and versions of the cut",
                     "",
                     state.tab == Tab::History,
                     32.0,
@@ -2615,7 +2615,7 @@ fn comments(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                         theme::ink(theme, theme::INK_05),
                     );
                 }
-                if response.hint("Play the plan from here").clicked() {
+                if response.hint("Play the cut from here").clicked() {
                     seek = Some(c.time);
                 }
             }
@@ -3708,7 +3708,7 @@ fn empty_state(
     if widgets::tip(
         look::suggestion(&mut child, theme, "Suggest a first cut"),
         theme,
-        "Pick the length, aspect, pacing and rules, then draft a new plan",
+        "Pick the length, aspect, pacing and rules, then draft a new cut",
         "",
     )
     .clicked()
@@ -4189,7 +4189,7 @@ fn proposal_card(
                                 )
                             })
                             .inner;
-                        if widgets::tip(preview, theme, "Play the edited plan in the viewer", "")
+                        if widgets::tip(preview, theme, "Play the edited cut in the viewer", "")
                             .clicked()
                         {
                             action = Some(CardAction::Preview);
@@ -4209,7 +4209,7 @@ fn proposal_card(
                         if widgets::tip(
                             revert,
                             theme,
-                            "Restore the plan as it was before this (as a new version)",
+                            "Restore the cut as it was before this (as a new version)",
                             "",
                         )
                         .clicked()
@@ -4607,7 +4607,7 @@ fn history(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                                     if widgets::tip(
                                         r,
                                         theme,
-                                        "Make this the current plan (saved as a new version)",
+                                        "Make this the current cut (saved as a new version)",
                                         "",
                                     )
                                     .clicked()
@@ -4759,7 +4759,7 @@ mod tests {
         for label in [
             "Fix what the check flags",
             "Chats",
-            "History: applied proposals and plan versions",
+            "History: applied proposals and versions of the cut",
             "Assistant settings: model key, local server, autonomy",
             "Chat",
             "Comments",
@@ -4782,7 +4782,7 @@ mod tests {
             "no text button in the header: New chat lives in the Chats menu"
         );
 
-        let history = "History: applied proposals and plan versions";
+        let history = "History: applied proposals and versions of the cut";
         h.query_by_label(history)
             .ok_or_else(|| anyhow::anyhow!("no History button"))?
             .click();

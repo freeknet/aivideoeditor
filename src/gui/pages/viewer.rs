@@ -230,7 +230,7 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
             ctx.theme,
             icons::CLAPPERBOARD,
             "Nothing to play",
-            "Select a shot, a plan or a stretch of music to play it here.",
+            "Select a shot, a cut or a stretch of music to play it here.",
             |_| {},
         );
     }

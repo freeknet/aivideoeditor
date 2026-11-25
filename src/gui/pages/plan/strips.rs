@@ -649,7 +649,7 @@ pub(super) fn check_bar(
         if s.project.index.is_none() {
             icons::icon(ui, icons::INFO, icons::SMALL, theme::rgb(t.text_muted));
             ui.label(
-                egui::RichText::new("No shot log: the plan cannot be checked.")
+                egui::RichText::new("Not analysed yet: the cut cannot be checked.")
                     .color(theme::rgb(t.text_muted)),
             );
             return;

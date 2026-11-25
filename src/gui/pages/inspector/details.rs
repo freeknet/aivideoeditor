@@ -800,13 +800,7 @@ pub(super) fn plan(v: &View<'_>, ui: &mut Ui, name: &str, ops: &mut Vec<Op>) {
     let p = v.palette;
     rows::title(ui, p, name, "");
     let Some(plan) = v.plans.get(name) else {
-        rows::row_colored(
-            ui,
-            p,
-            "",
-            "Could not read this plan.",
-            theme::rgb(p.warning),
-        );
+        rows::row_colored(ui, p, "", "Could not read this cut.", theme::rgb(p.warning));
         return;
     };
     rows::section(ui, p, "Plan");

@@ -342,7 +342,7 @@ pub(super) fn strip(
         close_resp.widget_info(|| {
             egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Close {}", tab.name))
         });
-        let close_resp = widgets::tip(close_resp, t, "Close the tab (the plan file stays)", "");
+        let close_resp = widgets::tip(close_resp, t, "Close the tab (the cut is kept)", "");
         let hovered = resp.hovered() || close_resp.hovered();
         let p = ui.painter();
         let fill = if tab.current {
@@ -448,7 +448,7 @@ pub(super) fn strip(
                 ui,
                 t,
                 Some(icons::COPY),
-                "Duplicate as new plan…",
+                "Duplicate as a new cut…",
                 "",
                 false,
             )
@@ -490,7 +490,7 @@ pub(super) fn strip(
     let busy = state.pending_job.is_some();
     let (rect, plus) = ui.allocate_exact_size(Vec2::splat(theme::CONTROL_HEIGHT), Sense::click());
     plus.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::Role::Button, true, "New or reopen a plan")
+        egui::WidgetInfo::labeled(egui::Role::Button, true, "New cut, or reopen one")
     });
     let open_menu = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&plus));
     if plus.hovered() || open_menu {
@@ -511,7 +511,7 @@ pub(super) fn strip(
             theme::ring(t)
         },
     );
-    let plus = widgets::tip(plus, t, "New plan, or reopen a closed tab", "");
+    let plus = widgets::tip(plus, t, "New cut, or reopen a closed tab", "");
     let reopenable: Vec<&String> = names
         .iter()
         .filter(|n| closed.contains(*n) && Some(n.as_str()) != state.name.as_deref())
@@ -523,7 +523,7 @@ pub(super) fn strip(
         .show(|ui| {
             if ui
                 .add_enabled_ui(!busy, |ui| {
-                    widgets::menu_item(ui, t, Some(icons::PLUS), "Draft new plan…", "", false)
+                    widgets::menu_item(ui, t, Some(icons::PLUS), "New cut…", "", false)
                 })
                 .inner
                 .clicked()
@@ -535,7 +535,7 @@ pub(super) fn strip(
             if reopenable.is_empty() {
                 ui.horizontal(|ui| {
                     ui.add_space(theme::SPACE_SM);
-                    ui.label(egui::RichText::new("All plans open").color(theme::ink(t, 102)));
+                    ui.label(egui::RichText::new("All cuts open").color(theme::ink(t, 102)));
                 });
             }
             for n in &reopenable {

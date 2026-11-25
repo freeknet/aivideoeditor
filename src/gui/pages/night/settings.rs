@@ -408,7 +408,7 @@ fn recipe_table(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
         theme,
         "Deliverables",
         &format!(
-            "What this project makes. Each deliverable is drafted as the plan of the same name. {from}"
+            "What this project makes. Each deliverable is drafted as a cut of the same name. {from}"
         ),
     );
     for w in &loaded.warnings {

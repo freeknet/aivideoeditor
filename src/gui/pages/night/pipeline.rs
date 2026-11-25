@@ -760,13 +760,17 @@ fn views(ctx: &PageCtx<'_>, state: &State, recipe: &Recipe) -> Vec<View> {
     } else if !ready {
         (
             Standing::Blocked,
-            "Needs the shot log, and music (or No music)".to_owned(),
+            "Needs the footage analysed first".to_owned(),
             Run::None,
         )
     } else if have == 0 {
         (
             Standing::Ready,
-            format!("{total} deliverables to draft"),
+            if total == 1 {
+                "1 deliverable to draft".to_owned()
+            } else {
+                format!("{total} deliverables to draft")
+            },
             Run::Jobs("Draft", plan_cmds(ctx, recipe, &all)),
         )
     } else {
@@ -811,9 +815,9 @@ fn views(ctx: &PageCtx<'_>, state: &State, recipe: &Recipe) -> Vec<View> {
             format!("{} of {total} delivered", f.delivered),
         )
     } else if have > 0 {
-        (Standing::Ready, "Render and deliver the plans".to_owned())
+        (Standing::Ready, "Render and deliver the cuts".to_owned())
     } else {
-        (Standing::Blocked, "Draft plans first".to_owned())
+        (Standing::Blocked, "Draft the cuts first".to_owned())
     };
     out.push(View {
         step: Step::Export,
