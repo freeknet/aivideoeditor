@@ -168,6 +168,8 @@ pub enum Action {
     ToggleMotion,
     /// Set how many clips analysis reads at once.
     SetAnalysisJobs(usize),
+    /// Set the folder ffmpeg is in (empty: find it on `PATH`).
+    SetFfmpegDir(String),
     /// Set the captioning model's paths: llama.cpp's folder, the model file
     /// and its projector file (`None` leaves one as it is, `Some("")` clears it).
     SetCaptionPaths([Option<String>; 3]),
@@ -460,6 +462,14 @@ impl App {
             Action::SetAnalysisJobs(n) => {
                 self.config.analysis_jobs = Some(n);
                 crate::gui::pages::night::pipeline::set_analysis_jobs(n);
+            }
+            Action::SetFfmpegDir(dir) => {
+                let dir = (!dir.trim().is_empty()).then_some(dir);
+                crate::media::set_tool_dir(dir.as_ref().map(std::path::PathBuf::from));
+                self.config.ffmpeg_dir = dir;
+                if let Err(e) = crate::config::save(&self.config) {
+                    self.notice = Some(format!("Could not save the ffmpeg folder: {e:#}"));
+                }
             }
             Action::SetCaptionPaths([dir, model, mmproj]) => {
                 let keep = |new: Option<String>, old: &mut Option<String>| {

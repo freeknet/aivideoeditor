@@ -80,6 +80,10 @@ pub struct Config {
     /// How many clips analysis reads at once (each runs its own ffmpeg).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub analysis_jobs: Option<usize>,
+    /// The folder ffmpeg and ffprobe are in, when not on `PATH`
+    /// (`AVE_FFMPEG_DIR` wins when set).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ffmpeg_dir: Option<String>,
     /// Captions: the folder holding llama.cpp's llama-server (`AVE_LLAMA_DIR`
     /// wins when set).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -161,6 +165,7 @@ pub fn parse(text: &str) -> Config {
         panel_sizes: field::<PanelSizes>(&table, "panel_sizes").filter(PanelSizes::is_valid),
         folded_panels: field(&table, "folded_panels"),
         analysis_jobs: field::<usize>(&table, "analysis_jobs").filter(|n| (1..=32).contains(n)),
+        ffmpeg_dir: field(&table, "ffmpeg_dir"),
         caption_llama_dir: field(&table, "caption_llama_dir"),
         caption_model: field(&table, "caption_model"),
         caption_mmproj: field(&table, "caption_mmproj"),
@@ -245,6 +250,7 @@ mod tests {
             }),
             folded_panels: Some(vec!["browser".to_string()]),
             analysis_jobs: Some(6),
+            ffmpeg_dir: Some("C:/ffmpeg/bin".to_string()),
             caption_llama_dir: Some("C:/llama".to_string()),
             caption_model: Some("C:/models/vl.gguf".to_string()),
             caption_mmproj: Some("C:/models/mmproj.gguf".to_string()),

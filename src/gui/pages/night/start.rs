@@ -115,6 +115,21 @@ pub(crate) fn draw(
     parts::centred(ui, COLUMN, |ui| {
         ui.add_space((view.height() * 0.12).clamp(theme::SPACE_XL, 112.0));
         heading(ctx, ui);
+        // Nothing works without ffmpeg: said before anything else is tried.
+        if crate::media::ffmpeg_status().is_none() {
+            ui.add_space(theme::SPACE_MD);
+            ui.horizontal_wrapped(|ui| {
+                parts::status_line(
+                    ui,
+                    ctx.theme,
+                    parts::Kind::Danger,
+                    "ffmpeg was not found. Install it (winget install Gyan.FFmpeg) or choose its folder in Settings.",
+                );
+                if widgets::outline_button(ui, ctx.theme, "Settings").clicked() {
+                    ctx.actions.push(Action::OpenSettings);
+                }
+            });
+        }
         ui.add_space(theme::SPACE_XL);
         pick |= composer(ctx, state, ui);
         ui.add_space(theme::SPACE_MD);

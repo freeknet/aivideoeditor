@@ -63,8 +63,9 @@ ffmpeg -version
 ffprobe -version
 ```
 
-If you already have ffmpeg somewhere else, point `ave` at its folder instead:
-`setx AVE_FFMPEG_DIR "C:\tools\ffmpeg\bin"`.
+If you already have ffmpeg somewhere else, point `ave` at its folder in
+**Settings → Tools** (or set `AVE_FFMPEG_DIR`). The app says on its start page
+and guide strip when it cannot find ffmpeg.
 
 ### 3. Get the code
 
@@ -246,7 +247,8 @@ model menu under the chat box:
 - **`ave` is not recognised:** reopen PowerShell, or check that
   `%USERPROFILE%\.cargo\bin` is on your `PATH`.
 - **"ffprobe failed" or "ffmpeg not available":** ffmpeg is not on `PATH`.
-  Reopen PowerShell after installing it, or set `AVE_FFMPEG_DIR`.
+  Reopen PowerShell after installing it, or choose its folder in
+  **Settings → Tools**.
 - **A step failed:** the Home screen shows each step's log. Click the step
   to read why. For captions the usual cause is a wrong path in one of the
   `AVE_*` settings, or a llama.cpp build that does not match your graphics

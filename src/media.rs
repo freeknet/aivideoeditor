@@ -21,12 +21,80 @@ use std::process::{Child, ChildStdout, Command, Stdio};
 
 use anyhow::{Context, Result, bail};
 
+/// The folder ffmpeg and ffprobe are in, when not on `PATH`: `AVE_FFMPEG_DIR`,
+/// else the one chosen in Settings (read from the config once, then kept
+/// here; [`set_tool_dir`] changes it).
+fn tool_dir() -> &'static std::sync::RwLock<Option<PathBuf>> {
+    static DIR: std::sync::OnceLock<std::sync::RwLock<Option<PathBuf>>> =
+        std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let dir = std::env::var_os("AVE_FFMPEG_DIR")
+            .filter(|d| !d.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| {
+                crate::config::load()
+                    .ffmpeg_dir
+                    .filter(|d| !d.trim().is_empty())
+                    .map(PathBuf::from)
+            });
+        std::sync::RwLock::new(dir)
+    })
+}
+
+/// Uses `dir` for ffmpeg and ffprobe from now on (`None`: from `PATH`).
+pub(crate) fn set_tool_dir(dir: Option<PathBuf>) {
+    if let Ok(mut d) = tool_dir().write() {
+        *d = dir;
+    }
+    recheck_ffmpeg();
+}
+
 /// Path to an ffmpeg-suite executable (`ffmpeg`, `ffprobe`).
 pub(crate) fn tool(name: &str) -> PathBuf {
-    match std::env::var_os("AVE_FFMPEG_DIR") {
-        Some(dir) => Path::new(&dir).join(format!("{name}{}", std::env::consts::EXE_SUFFIX)),
+    let dir = tool_dir().read().ok().and_then(|d| d.clone());
+    match dir {
+        Some(dir) => dir.join(format!("{name}{}", std::env::consts::EXE_SUFFIX)),
         None => PathBuf::from(name),
     }
+}
+
+/// Whether ffmpeg runs, as its version line (`None`: it does not), checked
+/// once and again after [`set_tool_dir`].
+pub(crate) fn ffmpeg_status() -> Option<String> {
+    if let Some(known) = STATUS.read().ok().and_then(|s| s.clone()) {
+        return known;
+    }
+    let found = ffmpeg_version();
+    if let Ok(mut s) = STATUS.write() {
+        *s = Some(found.clone());
+    }
+    found
+}
+
+/// The checked ffmpeg status: `None` until checked.
+static STATUS: std::sync::RwLock<Option<Option<String>>> = std::sync::RwLock::new(None);
+
+/// Forgets the checked ffmpeg status (the folder changed).
+fn recheck_ffmpeg() {
+    if let Ok(mut s) = STATUS.write() {
+        *s = None;
+    }
+}
+
+/// The ffmpeg version line, or `None` when ffmpeg does not run.
+fn ffmpeg_version() -> Option<String> {
+    let out = command("ffmpeg")
+        .arg("-version")
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .next()
+        .map(str::to_owned)
 }
 
 /// Whether ffmpeg can decode on an NVIDIA GPU here (a CUDA device opens),

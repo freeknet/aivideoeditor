@@ -12,6 +12,9 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- ffmpeg's folder can be set in *Settings → Tools*, which also says whether ffmpeg runs;
+  when it cannot be found the start page and the guide strip say so, with the install
+  command and a way to Settings, instead of every step failing with "starting ffmpeg".
 - Captions can be set up in the app: *Settings → Captions* chooses the llama.cpp folder,
   the vision model and its projector, and says whether captioning is ready (the AVE_*
   environment variables still win when set). The Settings window scrolls on a small

@@ -38,6 +38,8 @@ pub fn draw(app: &App, ctx: &egui::Context, actions: &mut Vec<Action>) {
                 ui.add_space(SPACE_LG);
                 behaviour(app, ui, actions);
                 ui.add_space(SPACE_LG);
+                tools(app, ui, actions);
+                ui.add_space(SPACE_LG);
                 captions(app, ui, actions);
             });
         ui.add_space(SPACE_LG);
@@ -131,6 +133,56 @@ fn captions(app: &App, ui: &mut Ui, actions: &mut Vec<Action>) {
         app.theme.success
     } else {
         app.theme.text_muted
+    })));
+}
+
+/// Tools: where ffmpeg is, and whether it runs.
+fn tools(app: &App, ui: &mut Ui, actions: &mut Vec<Action>) {
+    widgets::title(ui, &app.theme, "Tools");
+    ui.add_space(SPACE_SM);
+    let status = crate::media::ffmpeg_status();
+    ui.horizontal(|ui| {
+        ui.allocate_ui_with_layout(
+            egui::vec2(120.0, super::theme::CONTROL_HEIGHT),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.set_min_width(120.0);
+                ui.label("ffmpeg");
+            },
+        );
+        let shown = app
+            .config
+            .ffmpeg_dir
+            .clone()
+            .unwrap_or_else(|| "from PATH".to_owned());
+        ui.add(egui::Label::new(shown).truncate());
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if app.config.ffmpeg_dir.is_some()
+                && widgets::ghost_button(ui, &app.theme, "Use PATH").clicked()
+            {
+                actions.push(Action::SetFfmpegDir(String::new()));
+            }
+            if widgets::outline_button(ui, &app.theme, "Choose\u{2026}").clicked()
+                && let Some(dir) = rfd::FileDialog::new()
+                    .set_title("The folder ffmpeg.exe is in")
+                    .pick_folder()
+            {
+                actions.push(Action::SetFfmpegDir(dir.display().to_string()));
+            }
+        });
+    });
+    ui.add_space(SPACE_SM);
+    let (ok, line) = match status {
+        Some(version) => (true, format!("Found: {version}")),
+        None => (
+            false,
+            "Not found. Install it (winget install Gyan.FFmpeg) or choose the folder ffmpeg.exe is in.".to_owned(),
+        ),
+    };
+    ui.label(egui::RichText::new(line).color(super::theme::rgb(if ok {
+        app.theme.success
+    } else {
+        app.theme.warning
     })));
 }
 

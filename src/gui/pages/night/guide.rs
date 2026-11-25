@@ -369,6 +369,21 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, home: &mut super::State, ui: &mut egui
             }
         });
     });
+    // Nothing runs without ffmpeg: say so first, with the way out.
+    if crate::media::ffmpeg_status().is_none() {
+        ui.add_space(theme::SPACE_XS);
+        ui.horizontal(|ui| {
+            parts::status_line(
+                ui,
+                theme,
+                parts::Kind::Danger,
+                "ffmpeg was not found: analysis, playback and export need it. Install it (winget install Gyan.FFmpeg) or choose its folder.",
+            );
+            if widgets::outline_button(ui, theme, "Settings").clicked() {
+                ctx.actions.push(Action::OpenSettings);
+            }
+        });
+    }
     if let Some(why) = home.guide.notice.clone() {
         ui.add_space(theme::SPACE_XS);
         ui.horizontal(|ui| {
