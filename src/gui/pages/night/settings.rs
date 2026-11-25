@@ -50,6 +50,14 @@ pub(crate) struct State {
     dirty: bool,
     /// The last save error.
     error: Option<String>,
+    /// The template picked in the Template section (not applied yet).
+    template_pick: Option<String>,
+    /// The name typed for Save as template.
+    template_name: String,
+    /// The props as typed (a comma list), while being edited.
+    props_draft: Option<String>,
+    /// What the last template action did.
+    template_note: Option<String>,
 }
 
 /// `recipe.toml`'s modification time.
@@ -359,6 +367,8 @@ fn head(ui: &mut egui::Ui, theme: &crate::theme::Palette, text: &str) {
 
 /// The deliverables table and the recipe-wide naming and output options.
 fn recipe_table(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
+    template_section(ui, ctx.theme, state);
+    ui.add_space(theme::SPACE_XL);
     let Some(loaded) = state.loaded.as_ref() else {
         return;
     };
@@ -497,19 +507,6 @@ fn recipe_table(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
             ));
             changed = true;
         }
-        if widgets::button_with(
-            ui,
-            theme,
-            widgets::ButtonKind::Ghost,
-            Some(icons::ROTATE_CCW),
-            "Reset to the Flow Night week",
-        )
-        .hint("Three reels, a story, a feed cut, a wide cut and a recap")
-        .clicked()
-        {
-            loaded.recipe.deliverables = Recipe::default().deliverables;
-            changed = true;
-        }
     });
     ui.add_space(theme::SPACE_XL);
     parts::section(
@@ -607,12 +604,171 @@ fn recipe_table(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
         .project
         .as_ref()
         .is_some_and(crate::project::Project::no_music);
-    changed |= rules_section(ui, theme, &mut loaded.recipe.rules, no_music);
+    let template_rules = crate::template::catalog()
+        .into_iter()
+        .find(|t| t.name == loaded.recipe.template)
+        .map_or_else(|| Recipe::default().rules, |t| t.recipe.rules);
+    changed |= rules_section(
+        ui,
+        theme,
+        &mut loaded.recipe.rules,
+        no_music,
+        &template_rules,
+    );
     if changed {
         state.dirty = true;
     }
     let editing = ui.ctx().egui_wants_keyboard_input() || ui.ctx().egui_is_using_pointer();
     state.save_if_done(editing);
+}
+
+/// The measures the shot browser can show as bars, by recipe name.
+const BAR_CHOICES: [&str; 8] = ["q", "focus", "exp", "luma", "move", "light", "fire", "led"];
+
+/// The Template section: start from a template (or save this project's
+/// setup as one), and say what the footage is, the props in it and which
+/// measures the shot browser shows.
+fn template_section(ui: &mut egui::Ui, theme: &crate::theme::Palette, state: &mut State) {
+    let Some(loaded) = state.loaded.as_mut() else {
+        return;
+    };
+    let mut changed = false;
+    parts::section(
+        ui,
+        theme,
+        "Template",
+        "What kind of project this is. A template sets the deliverables, the rules, what the footage is and what the shot browser measures; applying one replaces those, and keeps the naming and output.",
+    );
+    let catalog = crate::template::catalog();
+    let current = loaded.recipe.template.clone();
+    ui.scope(|ui| {
+        ui.set_max_width(FORM_WIDTH);
+        parts::form_row(ui, theme, "Start from", |ui| {
+            let pick = state
+                .template_pick
+                .clone()
+                .unwrap_or_else(|| if current.is_empty() { "General".to_owned() } else { current.clone() });
+            egui::ComboBox::from_id_salt("recipe-template")
+                .width(220.0)
+                .selected_text(pick.as_str())
+                .show_ui(ui, |ui| {
+                    for t in &catalog {
+                        if ui
+                            .selectable_label(pick == t.name, &t.name)
+                            .hint(&t.description)
+                            .clicked()
+                        {
+                            state.template_pick = Some(t.name.clone());
+                        }
+                    }
+                })
+                .response
+                .accessible_name("Template")
+                .hint("The template to apply");
+            let chosen = catalog.iter().find(|t| t.name == pick);
+            if widgets::outline_button(ui, theme, "Apply")
+                .hint("Replace this project's deliverables, rules, footage words and measures with the template's")
+                .clicked()
+                && let Some(t) = chosen
+            {
+                crate::template::apply(&mut loaded.recipe, t);
+                state.props_draft = None;
+                state.template_note = Some(format!("Applied {}.", t.name));
+                changed = true;
+            }
+        });
+        ui.add_space(theme::SPACE_XS + 2.0);
+        parts::form_row(ui, theme, "Save as", |ui| {
+            ui.allocate_ui(egui::vec2(220.0, theme::CONTROL_HEIGHT), |ui| {
+                widgets::text_field(ui, theme, &mut state.template_name, "template name")
+                    .accessible_name("New template name")
+            });
+            let name = state.template_name.trim().to_owned();
+            if ui
+                .add_enabled_ui(!name.is_empty(), |ui| widgets::outline_button(ui, theme, "Save template"))
+                .inner
+                .hint("Keep this project's deliverables, rules, footage words and measures as a template of your own")
+                .clicked()
+            {
+                state.template_note = Some(match crate::template::save(&name, &loaded.recipe) {
+                    Ok(path) => format!("Saved {name} to {}.", path.display()),
+                    Err(e) => format!("Could not save the template: {e:#}"),
+                });
+                state.template_name.clear();
+            }
+        });
+        if let Some(note) = &state.template_note {
+            ui.add_space(theme::SPACE_XS);
+            parts::status_line(ui, theme, parts::Kind::Info, note);
+        }
+        ui.add_space(theme::SPACE_XS + 2.0);
+        parts::form_row(ui, theme, "The footage is", |ui| {
+            let field = ui
+                .allocate_ui(egui::vec2(FORM_WIDTH - 200.0, theme::CONTROL_HEIGHT), |ui| {
+                    widgets::text_field(ui, theme, &mut loaded.recipe.about, recipe::DEFAULT_ABOUT)
+                        .accessible_name("What the footage is")
+                })
+                .inner;
+            changed |= field
+                .hint("A few words the captioning model and the chat are told, e.g. a wedding, a skate session")
+                .changed();
+        });
+        ui.add_space(theme::SPACE_XS + 2.0);
+        parts::form_row(ui, theme, "Props", |ui| {
+            let draft = state
+                .props_draft
+                .get_or_insert_with(|| loaded.recipe.props.join(", "));
+            let field = ui
+                .allocate_ui(egui::vec2(FORM_WIDTH - 200.0, theme::CONTROL_HEIGHT), |ui| {
+                    widgets::text_field(ui, theme, draft, "none listed: whatever people hold")
+                        .accessible_name("Props")
+                })
+                .inner;
+            if field
+                .hint("Things people may hold, comma-separated, so captions name them (fire staff, LED hoop)")
+                .changed()
+            {
+                loaded.recipe.props = draft
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|p| !p.is_empty())
+                    .map(str::to_owned)
+                    .collect();
+                changed = true;
+            }
+        });
+        ui.add_space(theme::SPACE_XS + 2.0);
+        parts::form_row(ui, theme, "Browser shows", |ui| {
+            while loaded.recipe.metrics.len() < 4 {
+                let n = loaded.recipe.metrics.len();
+                loaded
+                    .recipe
+                    .metrics
+                    .push(recipe::DEFAULT_METRICS.get(n).copied().unwrap_or("q").to_owned());
+            }
+            for (i, slot) in loaded.recipe.metrics.iter_mut().take(4).enumerate() {
+                let shown = crate::search::Metric::bars(std::slice::from_ref(slot))[0].display();
+                egui::ComboBox::from_id_salt(("recipe-bar", i))
+                    .width(96.0)
+                    .selected_text(shown)
+                    .show_ui(ui, |ui| {
+                        for name in BAR_CHOICES {
+                            let label = crate::search::Metric::bars(&[name.to_owned()])[0].display();
+                            if ui.selectable_label(slot == name, label).clicked() {
+                                *slot = name.to_owned();
+                                changed = true;
+                            }
+                        }
+                    })
+                    .response
+                    .accessible_name(format!("Bar {}", i + 1))
+                    .hint("A measure the shot browser shows as a bar on each shot");
+            }
+        });
+    });
+    if changed {
+        state.dirty = true;
+    }
 }
 
 /// Problems a shot's source range can be flagged with, in the words the
@@ -639,6 +795,7 @@ fn rules_section(
     theme: &crate::theme::Palette,
     rules: &mut Rules,
     no_music: bool,
+    defaults: &Rules,
 ) -> bool {
     let mut changed = false;
     parts::section(
@@ -740,15 +897,14 @@ fn rules_section(
         }
         ui.add_space(theme::SPACE_XS + 2.0);
         parts::form_row(ui, theme, "", |ui| {
-            let defaults = Rules::default();
             if ui
-                .add_enabled_ui(*rules != defaults, |ui| {
-                    widgets::ghost_button(ui, theme, "Back to the built-in rules")
+                .add_enabled_ui(rules != defaults, |ui| {
+                    widgets::ghost_button(ui, theme, "Back to the template's rules")
                 })
                 .inner
                 .clicked()
             {
-                *rules = defaults;
+                rules.clone_from(defaults);
                 changed = true;
             }
         });

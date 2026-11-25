@@ -130,8 +130,39 @@ pub(crate) enum Metric {
 }
 
 impl Metric {
+    /// The short word a bar or a column shows for it.
+    pub(crate) fn display(self) -> &'static str {
+        match self {
+            Self::Fire => "fire",
+            Self::Led => "LED",
+            Self::Light => "light",
+            Self::Move => "motion",
+            Self::Q => "quality",
+            Self::Focus => "focus",
+            Self::Exp => "exposure",
+            Self::Luma => "brightness",
+            Self::Dur => "length",
+            Self::Cx => "centre",
+            Self::Rating => "rating",
+            Self::Cheer => "cheer",
+        }
+    }
+
+    /// The four measures for a recipe's `metrics` names: each one named, an
+    /// unknown or missing one taking the default's place.
+    pub(crate) fn bars(names: &[String]) -> [Self; 4] {
+        let defaults = [Self::Q, Self::Focus, Self::Exp, Self::Move];
+        let mut out = defaults;
+        for (slot, name) in out.iter_mut().zip(names) {
+            if let Some(m) = Self::named(&name.to_lowercase()) {
+                *slot = m;
+            }
+        }
+        out
+    }
+
     /// The metric a facet name stands for.
-    fn named(name: &str) -> Option<Self> {
+    pub(crate) fn named(name: &str) -> Option<Self> {
         Some(match name {
             "fire" | "flame" => Self::Fire,
             "led" => Self::Led,
@@ -534,6 +565,8 @@ pub(crate) struct Night<'a> {
     scales: Scales,
     /// Each clip's set number (see [`crate::analyze::sets`]).
     sets: std::collections::HashMap<&'a str, usize>,
+    /// The four measures the shot browser shows as bars (the recipe's).
+    pub(crate) bars: [Metric; 4],
 }
 
 impl<'a> Night<'a> {
@@ -549,6 +582,7 @@ impl<'a> Night<'a> {
                 .iter()
                 .flat_map(|set| set.clips.iter().map(move |c| (c.as_str(), set.n)))
                 .collect(),
+            bars: Metric::bars(&[]),
         }
     }
 

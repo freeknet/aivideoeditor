@@ -141,7 +141,28 @@ fn schema() -> serde_json::Value {
 }
 
 /// The instruction sent with every pair of stills.
-const PROMPT: &str = "Two frames, about a second apart, from event footage (a night of fire spinning, \nLED props, aerial silks and DJs). Answer tersely. summary: one short sentence. people: at most the 3 most \nprominent people, each with appearance (clothing, colours, hair, build: enough to recognise them in another clip, \nunder 15 words) and prop (fire fans, fire staff, fire poi, fire hoop, LED hoop, LED poi, silks, DJ decks, none). \nmoment: performing = actively doing a trick with the prop in motion; transition = walking in, climbing, \nwrapping, lighting or picking up props, adjusting, fumbling, turning away; idle = standing still or watching; \ncrowd = mainly audience; venue = no person in focus. props_active: is a prop lit AND moving in both frames? \nblocked: is a person, head or object between the camera and the main subject? framing: size of the main \nsubject. setting: where, in a few words. issues: only real problems (out of focus, motion blur, too dark, \nblown out), else empty. Be literal; never guess names.";
+/// The question asked of every segment's two frames: `about` is what the
+/// footage is (the recipe's words), `props` what people may hold (empty:
+/// whatever they hold).
+fn prompt(about: &str, props: &[String]) -> String {
+    let props = if props.is_empty() {
+        "what they are holding or using, else none".to_owned()
+    } else {
+        format!("{}, none", props.join(", "))
+    };
+    format!(
+        "Two frames, about a second apart, from {about}. Answer tersely. summary: one short sentence. \
+         people: at most the 3 most prominent people, each with appearance (clothing, colours, hair, \
+         build: enough to recognise them in another clip, under 15 words) and prop ({props}). \
+         moment: performing = actively doing the main action, any prop in motion; transition = walking \
+         in, setting up, picking up or adjusting things, fumbling, turning away; idle = standing still or \
+         watching; crowd = mainly onlookers; venue = no person in focus. props_active: is a prop in use \
+         AND moving in both frames (lit, for a light prop)? blocked: is a person, head or object between \
+         the camera and the main subject? framing: size of the main subject. setting: where, in a few \
+         words. issues: only real problems (out of focus, motion blur, too dark, blown out), else empty. \
+         Be literal; never guess names."
+    )
+}
 
 /// Why captions cannot run here, or `None` when they look set up: a server
 /// of the person's own (`AVE_VLM_URL`), or llama-server and both model
@@ -236,6 +257,7 @@ fn start_server(agent: &ureq::Agent, url: &str) -> Result<Server> {
 fn caption_one(
     agent: &ureq::Agent,
     url: &str,
+    prompt: &str,
     index: &Index,
     seg: &Scored,
     tmp: &Path,
@@ -254,7 +276,7 @@ fn caption_one(
         content.push(serde_json::json!({"type": "image_url",
             "image_url": {"url": format!("data:image/jpeg;base64,{b64}")}}));
     }
-    content.push(serde_json::json!({"type": "text", "text": PROMPT}));
+    content.push(serde_json::json!({"type": "text", "text": prompt}));
     let body = serde_json::json!({
         "temperature": 0.1,
         "max_tokens": 360,
@@ -302,6 +324,8 @@ pub(crate) fn run(
     };
     let tmp = work.join("tmp");
     std::fs::create_dir_all(&tmp)?;
+    let recipe = crate::recipe::Recipe::load(work).0;
+    let question = prompt(&recipe.about, &recipe.props);
 
     let todo: Vec<usize> = index
         .segments
@@ -342,7 +366,7 @@ pub(crate) fn run(
                         ItemState::Started,
                     ));
                     let began = Instant::now();
-                    let r = caption_one(&agent, &url, &snapshot, seg, &tmp);
+                    let r = caption_one(&agent, &url, &question, &snapshot, seg, &tmp);
                     let n = done.lock().map_or(0, |mut n| {
                         *n += 1;
                         *n

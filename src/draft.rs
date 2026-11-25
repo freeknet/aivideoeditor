@@ -401,8 +401,18 @@ fn grid(map: &MusicMap, lead: usize, after: usize, drop_bar: usize, ease: usize)
     slots
 }
 
-/// How well a candidate suits a slot (multiplier, 0 = not at all).
-pub(crate) fn fit(want: Want, c: &Candidate) -> f32 {
+/// How well a candidate suits a slot (multiplier, 0 = not at all). With
+/// `neutral` (the rules want no particular subject on the drop) no kind of
+/// footage is favoured: every slot takes the best shot, an empty frame a
+/// little less.
+pub(crate) fn fit(want: Want, c: &Candidate, neutral: bool) -> f32 {
+    if neutral {
+        return if matches!(c.kind, "venue" | "none") {
+            0.6
+        } else {
+            1.0
+        };
+    }
     let fire = c.kind == "fire";
     match want {
         Want::Hook => match c.kind {
@@ -858,7 +868,8 @@ fn draft_paced(
             pool.iter()
                 .filter(|c| allowed(c, k, &slots, &placed, (index, people, &rules, beat)))
                 .map(|c| {
-                    let mut s = c.score * fit(slot.want, c).max(floor);
+                    let mut s =
+                        c.score * fit(slot.want, c, rules.drop_subject.is_empty()).max(floor);
                     if prev_framing
                         .as_deref()
                         .is_some_and(|n| !c.framing.is_empty() && n.contains(&c.framing))

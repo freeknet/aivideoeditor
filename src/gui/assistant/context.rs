@@ -25,8 +25,8 @@ use crate::beats::MusicMap;
 use crate::plan::{Finding, Plan};
 
 /// The rules and conventions every provider is told.
-const BRIEF: &str = "ave is a desktop video editor for a weekly night of dark, dialogue-free \
-event footage (fire spinning, LED props, aerial silks, DJs). Footage is indexed into a shot log: \
+const BRIEF: &str = "ave is a desktop video editor. This project's footage is {about}. \
+Footage is indexed into a shot log: \
 one line per segment with measured numbers (exposure, focus relative to the shoot, fire and LED \
 share of the frame, moving light, action centre, quality q 0-1, flags) and a vision caption. \
 Plans are beat-synced storyboards: a music window in bars and one shot per slot with a clip, an \
@@ -87,10 +87,16 @@ reminder.
 Style: short. Plain sentences, **bold** for what matters, bullets for lists. No headings, no \
 tables.";
 
+/// [`BRIEF`] for a project whose footage is `about` (the recipe's words).
+fn brief(about: &str) -> String {
+    BRIEF.replace("{about}", about)
+}
+
 /// The in-process loop's standing instructions (Claude API, local model).
-pub(crate) fn system() -> String {
+pub(crate) fn system(about: &str) -> String {
+    let brief = brief(about);
     format!(
-        "You are the editing assistant inside ave.\n\n{BRIEF}\n\nIf a request is ambiguous \
+        "You are the editing assistant inside ave.\n\n{brief}\n\nIf a request is ambiguous \
          (\"make it punchier\", \"fix the start\") and the references do not settle it, call \
          ask_user with one short question and two or three concrete options instead of \
          guessing. Ask at most one question per turn."
@@ -99,12 +105,13 @@ pub(crate) fn system() -> String {
 
 /// What is appended to Claude Code's system prompt; `skills` is the folder
 /// holding the skill files and `list` one line per skill.
-pub(crate) fn claude_code(skills: &str, list: &str) -> String {
+pub(crate) fn claude_code(skills: &str, list: &str, about: &str) -> String {
+    let brief = brief(about);
     format!(
         "# You are ave's editing assistant\n\nYou run inside ave's chat panel, not in a \
          terminal. You have no shell and cannot edit files: the night is reached only through \
          the mcp__ave__* tools, and Read/Glob/Grep for the shot log (shotlog.md in the working \
-         folder) and the skill files.\n\n{BRIEF}\n\n## Skills\n\nSkills are step-by-step \
+         folder) and the skill files.\n\n{brief}\n\n## Skills\n\nSkills are step-by-step \
          recipes in {skills}. When the reminder names a relevant skill, Read its SKILL.md before \
          you start and follow it. Available:\n{list}\n\nIf a request is ambiguous, ask one short \
          question in plain text with two or three concrete options and stop."

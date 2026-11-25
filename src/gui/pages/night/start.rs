@@ -36,19 +36,19 @@ use crate::gui::ui::{icons, theme, widgets};
 /// The first-request templates: the pill's label and the request it fills.
 pub(crate) const TEMPLATES: [(&str, &str); 5] = [
     (
-        "Make the reels",
-        "Make the reels: draft every deliverable in the recipe from the best moments, \
-         beat-synced, no repeated shots or performers, drop on the hero fire shot.",
+        "Draft the cuts",
+        "Draft every deliverable in the recipe from the best moments, with no repeated shots \
+         or people.",
     ),
     (
-        "Find the best fire moments",
-        "Find the best fire moments in the footage: list the strongest fire shots with their \
-         segment ids, sharpest and best lit first, one per performer.",
+        "Find the best moments",
+        "Find the best moments in the footage: list the strongest shots with their segment \
+         ids, sharpest and best lit first.",
     ),
     (
         "Cut a 60 s recap",
-        "Cut a 60 s recap in 16:9: open wide on the venue, build through the acts, \
-         land the hero fire shot on the drop, end card last.",
+        "Cut a 60 s recap in 16:9: open wide, follow the footage in order, keep the strongest \
+         shot for last before the end card.",
     ),
     (
         "Who is in the footage",
@@ -57,8 +57,7 @@ pub(crate) const TEMPLATES: [(&str, &str); 5] = [
     ),
     (
         "A 15 s story",
-        "Cut a 15 s vertical story: three quick fire moments and one crowd reaction, beat-synced, \
-         end card last.",
+        "Cut a 15 s vertical story: four quick, strong moments, end card last.",
     ),
 ];
 

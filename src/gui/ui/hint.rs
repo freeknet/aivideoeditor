@@ -157,7 +157,7 @@ pub fn describe(label: &str) -> Option<&'static str> {
         "Discard" => "Throw these changes away",
         "Approve" => "Let the assistant run this",
         "Sign in" => "Sign in to Claude in the browser, for the chat",
-        "Back to the built-in rules" => "Put every drafting rule back to its default",
+        "Back to the template's rules" => "Put every drafting rule back to what the template sets",
         "x264 (CPU)" => "Encode on the processor: slower, the most compatible",
         "AMF (AMD GPU)" => "Encode on an AMD graphics card: faster",
         "Any shot" => "Any shot may land on the drop",

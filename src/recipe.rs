@@ -166,6 +166,35 @@ pub(crate) struct Recipe {
     /// The rules every draft keeps (repeats, people, flags, the drop).
     #[serde(default, skip_serializing_if = "is_default_rules")]
     pub(crate) rules: crate::plan::Rules,
+    /// The template this recipe started from (its name; informational).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub(crate) template: String,
+    /// What the footage is, in a few words, for the captioning model and the
+    /// chat: `video footage`, `a night of fire spinning, LED props and DJs`.
+    #[serde(default = "default_about")]
+    pub(crate) about: String,
+    /// Props people in the footage may hold, for captions (empty: whatever
+    /// they are holding).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) props: Vec<String>,
+    /// The four measurements the shot browser shows as bars, by name
+    /// (`fire`, `led`, `light`, `move`, `q`, `focus`, `exp`, `luma`).
+    #[serde(default = "default_metrics")]
+    pub(crate) metrics: Vec<String>,
+}
+
+/// What footage is, when a recipe does not say.
+pub(crate) const DEFAULT_ABOUT: &str = "video footage";
+
+fn default_about() -> String {
+    DEFAULT_ABOUT.to_owned()
+}
+
+/// The browser's bars when a recipe does not say: general measures.
+pub(crate) const DEFAULT_METRICS: [&str; 4] = ["q", "focus", "exp", "move"];
+
+fn default_metrics() -> Vec<String> {
+    DEFAULT_METRICS.iter().map(|m| (*m).to_owned()).collect()
 }
 
 /// Whether `rules` are the built-in ones (left out of the file).
@@ -177,14 +206,37 @@ fn is_default_rules(rules: &crate::plan::Rules) -> bool {
 pub(crate) const DEFAULT_FILENAME: &str = "{id}.mp4";
 
 impl Default for Recipe {
-    /// The Flow Night week: three reels, a story, a feed cut, a wide cut
-    /// and a recap.
+    /// The General template: a 30-second wide cut and a 30-second vertical
+    /// one, rules that favour no kind of footage.
     fn default() -> Self {
         Self {
             filename: DEFAULT_FILENAME.to_owned(),
             output_dir: None,
             encoder: EncoderChoice::X264,
             otio: true,
+            deliverables: vec![
+                Deliverable::new("wide-30", Aspect::Wide, 30.0),
+                Deliverable::new("vertical-30", Aspect::Vertical, 30.0),
+            ],
+            rules: crate::plan::Rules {
+                drop_subject: String::new(),
+                reject_moments: Vec::new(),
+                ..crate::plan::Rules::default()
+            },
+            template: "General".to_owned(),
+            about: default_about(),
+            props: Vec::new(),
+            metrics: default_metrics(),
+        }
+    }
+}
+
+impl Recipe {
+    /// The Flow Night template: the weekly promo set (three reels, a story,
+    /// a feed cut, a wide cut and a recap), fire on the drop, and captions
+    /// that know the props.
+    pub(crate) fn flow_night() -> Self {
+        Self {
             deliverables: vec![
                 Deliverable::new("reel-15", Aspect::Vertical, 15.0),
                 Deliverable::new("reel-30", Aspect::Vertical, 30.0),
@@ -195,6 +247,26 @@ impl Default for Recipe {
                 Deliverable::new("recap", Aspect::Wide, 180.0),
             ],
             rules: crate::plan::Rules::default(),
+            template: "Flow Night".to_owned(),
+            about: "a night of fire spinning, LED props, aerial silks and DJs".to_owned(),
+            props: [
+                "fire fans",
+                "fire staff",
+                "fire poi",
+                "fire hoop",
+                "LED hoop",
+                "LED poi",
+                "silks",
+                "DJ decks",
+            ]
+            .iter()
+            .map(|p| (*p).to_owned())
+            .collect(),
+            metrics: ["fire", "led", "move", "focus"]
+                .iter()
+                .map(|m| (*m).to_owned())
+                .collect(),
+            ..Self::default()
         }
     }
 }
@@ -499,6 +571,49 @@ impl Recipe {
         (Self::default(), Vec::new(), Source::BuiltIn)
     }
 
+    /// [`Recipe::load`] for screens that ask every frame: the file is read
+    /// again only when it changed, checked at most once a second.
+    pub(crate) fn cached(work: &Path) -> Self {
+        type Slot = Option<(
+            PathBuf,
+            Option<std::time::SystemTime>,
+            std::time::Instant,
+            Recipe,
+        )>;
+        static CACHE: std::sync::Mutex<Slot> = std::sync::Mutex::new(None);
+        let modified = || {
+            std::fs::metadata(work.join(FILE))
+                .and_then(|m| m.modified())
+                .ok()
+        };
+        let Ok(mut slot) = CACHE.lock() else {
+            return Self::load(work).0;
+        };
+        if let Some((w, mtime, checked, recipe)) = slot.as_mut()
+            && w.as_path() == work
+        {
+            if checked.elapsed() < std::time::Duration::from_secs(1) {
+                return recipe.clone();
+            }
+            *checked = std::time::Instant::now();
+            let now = modified();
+            if now == *mtime {
+                return recipe.clone();
+            }
+            *mtime = now;
+            *recipe = Self::load(work).0;
+            return recipe.clone();
+        }
+        let recipe = Self::load(work).0;
+        *slot = Some((
+            work.to_path_buf(),
+            modified(),
+            std::time::Instant::now(),
+            recipe.clone(),
+        ));
+        recipe
+    }
+
     /// Writes `<work>/recipe.toml`, and the same recipe as the user-level
     /// default so next week starts from it.
     pub(crate) fn save(&self, work: &Path) -> Result<()> {
@@ -568,6 +683,16 @@ pub(crate) fn parse(text: &str) -> (Recipe, Vec<String>) {
     let otio = field("otio")
         .and_then(|v| v.try_into::<bool>().ok())
         .unwrap_or(defaults.otio);
+    let text_field = |key: &str| field(key).and_then(|v| v.try_into::<String>().ok());
+    let list_field = |key: &str| field(key).and_then(|v| v.try_into::<Vec<String>>().ok());
+    let template = text_field("template").unwrap_or_default();
+    let about = text_field("about")
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| defaults.about.clone());
+    let props = list_field("props").unwrap_or_default();
+    let metrics = list_field("metrics")
+        .filter(|m| !m.is_empty())
+        .unwrap_or_else(|| defaults.metrics.clone());
     let rules = match table.get("rules") {
         None => defaults.rules.clone(),
         Some(v) => v
@@ -620,6 +745,10 @@ pub(crate) fn parse(text: &str) -> (Recipe, Vec<String>) {
             otio,
             deliverables,
             rules,
+            template,
+            about,
+            props,
+            metrics,
         },
         warnings,
     )
@@ -808,7 +937,7 @@ person_gap = \"lots\"
         );
         assert_eq!(
             bad.rules,
-            crate::plan::Rules::default(),
+            Recipe::default().rules,
             "a bad table costs only the rules"
         );
         assert_eq!(warnings.len(), 1, "and says so: {warnings:?}");
@@ -844,7 +973,7 @@ person_gap = \"lots\"
 
     #[test]
     fn the_default_name_is_just_what_the_file_is() {
-        let recipe = Recipe::default();
+        let recipe = Recipe::flow_night();
         let names = names();
         let reel = recipe.get("reel-30");
         let name = reel.map(|d| recipe.filename(d, MAIN_VERSION, &names));
@@ -853,7 +982,7 @@ person_gap = \"lots\"
 
     #[test]
     fn a_second_version_never_lands_on_the_first_ones_name() -> anyhow::Result<()> {
-        let recipe = Recipe::default();
+        let recipe = Recipe::flow_night();
         let names = names();
         let reel = recipe
             .get("reel-30")

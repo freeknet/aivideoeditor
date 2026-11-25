@@ -1232,7 +1232,7 @@ mod tests {
 
     #[test]
     fn every_deliverable_is_a_row_with_its_versions() {
-        let recipe = Recipe::default();
+        let recipe = Recipe::flow_night();
         let names = Names {
             night: "2026-11-11".to_owned(),
             date: "2026-11-11".to_owned(),

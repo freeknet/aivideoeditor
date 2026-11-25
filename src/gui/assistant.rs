@@ -3032,7 +3032,7 @@ fn start_loop(
     };
     let job = agent::Job {
         provider,
-        system: context::system(),
+        system: context::system(&crate::recipe::Recipe::load(&project.work).0.about),
         tools: tools::definitions(),
         msgs: model::messages(&chat.log),
         env,
@@ -3099,7 +3099,12 @@ fn claude_config(exe: PathBuf, work: &Path, chat_id: &str) -> Result<claude_code
     std::fs::write(&mcp_config, claude_code::mcp_config(&ave, work).to_string())
         .map_err(|e| fail("the MCP config", &e))?;
     let prompt_file = chat.join("claude-prompt.md");
-    let prompt = context::claude_code(&skills.display().to_string(), &skills::listing(&skills));
+    let about = crate::recipe::Recipe::load(work).0.about;
+    let prompt = context::claude_code(
+        &skills.display().to_string(),
+        &skills::listing(&skills),
+        &about,
+    );
     std::fs::write(&prompt_file, prompt).map_err(|e| fail("the prompt", &e))?;
     let resume = std::fs::read_to_string(claude_code::session_file(work, chat_id))
         .ok()

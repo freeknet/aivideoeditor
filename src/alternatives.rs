@@ -195,7 +195,7 @@ pub(crate) fn rank(
                 || subject_at(index, &c.clip, c.t_in) == rules.drop_subject
         })
         .filter_map(|c| {
-            let fit = draft::fit(want, &c);
+            let fit = draft::fit(want, &c, rules.drop_subject.is_empty());
             let mut score = c.score * fit;
             if current_kind == Some(c.kind) {
                 score *= 1.1;

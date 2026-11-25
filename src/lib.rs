@@ -64,6 +64,7 @@ mod recipe;
 pub mod refs;
 mod render;
 mod search;
+mod template;
 pub mod theme;
 
 #[cfg(windows)]

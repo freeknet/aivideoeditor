@@ -104,7 +104,10 @@ fn handle(work: &Path, msg: &Value) -> Option<Value> {
             "protocolVersion": msg["params"]["protocolVersion"].as_str().unwrap_or(PROTOCOL),
             "capabilities": {"tools": {}},
             "serverInfo": {"name": "ave", "version": env!("CARGO_PKG_VERSION")},
-            "instructions": INSTRUCTIONS,
+            "instructions": INSTRUCTIONS.replace(
+                "{about}",
+                &crate::recipe::Recipe::load(work).0.about,
+            ),
         })),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({"tools": tools()})),
@@ -127,8 +130,8 @@ fn handle(work: &Path, msg: &Value) -> Option<Value> {
 }
 
 /// What the server tells the agent about itself on connect.
-const INSTRUCTIONS: &str = "ave edits a night of event footage (fire spinning, LED props, silks, DJs) into \
-beat-synced promo cuts. Start with night_overview. Find footage with search_shots (free text plus facets such as \
+const INSTRUCTIONS: &str = "ave edits {about} into cuts (beat-synced when there is music). \
+Start with night_overview. Find footage with search_shots (free text plus facets such as \
 fire>0.3 -dark person:x move:zoom-in pick) and read exact facts with segment_details. Use look to see frames when a \
 decision depends on the picture. Plans are storyboards on the music's beat grid: plan_get shows one with its rule \
 check (each finding is `<where> [<hard|soft> <id>] <message>`: hard ones, such as bad-span or beat-count, make the \

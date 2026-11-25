@@ -919,6 +919,43 @@ fn deliverables_step(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui
         "What this project makes. Untick one to leave it out of the first drafts; change the \
          list itself on the Home screen.",
     );
+    // The template: what kind of project this is. Picking one applies it to
+    // the project's recipe and saves it (drafts read the saved recipe).
+    let catalog = crate::template::catalog();
+    let current = state.recipe().template.clone();
+    let mut index = catalog
+        .iter()
+        .position(|t| t.name == current)
+        .unwrap_or(usize::MAX);
+    let items: Vec<(usize, &str)> = catalog
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (i, t.name.as_str()))
+        .collect();
+    parts::form_row(ui, theme, "Template", |ui| {
+        if widgets::segmented(ui, theme, &mut index, &items)
+            && let Some(t) = catalog.get(index)
+        {
+            let work = state.work.clone();
+            let mut recipe = state.recipe().clone();
+            crate::template::apply(&mut recipe, t);
+            if let Err(e) = recipe.save(&work) {
+                state
+                    .notes
+                    .push(format!("could not save the template: {e:#}"));
+            }
+            state.skip.clear();
+            state.recipe = Some(recipe);
+        }
+    });
+    if let Some(t) = catalog.get(index) {
+        ui.label(
+            egui::RichText::new(&t.description)
+                .font(theme::font(theme::SMALL_SIZE))
+                .color(theme::rgb(theme.text_muted)),
+        );
+    }
+    ui.add_space(theme::SPACE_SM);
     let cards = ctx
         .project
         .as_ref()

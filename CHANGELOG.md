@@ -12,6 +12,16 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Templates: what was built in for Flow Night is now one template of two. *General* (the
+  new default: a 30 s wide cut and a 30 s vertical one, no kind of footage favoured) and
+  *Flow Night* (the weekly seven-cut promo set, fire on the drop) set a project's
+  deliverables, rules, what the footage is (told to the captioning model and the chat in
+  place of "fire spinning, LED props…"), the props captions name and the four measures the
+  shot browser shows (fire, LED and moving light for Flow Night; quality, focus, exposure
+  and motion for General). Pick one in set-up or under *Template* on the Home screen, edit
+  those parts there, and save any project's setup as a template of your own. With no
+  subject wanted on the drop, the drafter favours no kind of footage. The start page's
+  suggestions no longer assume fire or performers.
 - The status bar says what the control under the pointer does: every tooltip also
   appears there (with its shortcut), the shared buttons, tabs and switches describe
   themselves, and the guide's steps, the Home pipeline cards and the timeline's shots, cuts

@@ -210,35 +210,15 @@ fn numbers(ui: &mut egui::Ui, paint: &Paint<'_>, a: &Scored, b: &Scored) {
     let night = paint.night;
     let len = |s: &Scored| s.seg.end - s.seg.start;
     // (label, select, candidate, higher is better)
-    let rows = [
-        ("quality", a.q, b.q, true),
-        (
-            "fire",
-            night.metric(a, Metric::Fire),
-            night.metric(b, Metric::Fire),
-            true,
-        ),
-        (
-            "LED",
-            night.metric(a, Metric::Led),
-            night.metric(b, Metric::Led),
-            true,
-        ),
-        (
-            "moving light",
-            night.metric(a, Metric::Move),
-            night.metric(b, Metric::Move),
-            true,
-        ),
-        (
-            "focus",
-            night.metric(a, Metric::Focus),
-            night.metric(b, Metric::Focus),
-            true,
-        ),
-        // Length is not better or worse, only different.
-        ("length s", len(a), len(b), false),
-    ];
+    // Quality, the template's measures, then length (not better or worse,
+    // only different).
+    let mut rows: Vec<(&str, f32, f32, bool)> = vec![("quality", a.q, b.q, true)];
+    for m in night.bars {
+        if m != Metric::Q {
+            rows.push((m.display(), night.metric(a, m), night.metric(b, m), true));
+        }
+    }
+    rows.push(("length s", len(a), len(b), false));
     let small = |text: String, color| {
         egui::RichText::new(text)
             .size(theme::BODY_SIZE)

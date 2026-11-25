@@ -18,8 +18,10 @@ cut on the beat grid (or, with no music, paced every two seconds over the
 clips' own sound). Then you review it, change it by hand or by asking the
 chat, and export the video or a timeline for Resolve or Kdenlive.
 
-It was built for the weekly JaJa Flow Night promo edits, so its default rules
-favour fire on the drop. Footage without fire, or music without a drop,
+It was built for the weekly JaJa Flow Night promo edits; that setup is now the
+*Flow Night* template, and new projects start from *General*, which favours no
+kind of footage. Pick or save templates in set-up or on the Home screen. The
+Flow Night rules favour fire on the drop. Footage without fire, or music without a drop,
 still gets a cut, and every rule (repeats, people, footage to avoid, the
 drop) is the project's to change under *Rules* in the Home screen's settings.
 

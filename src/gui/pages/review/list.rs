@@ -159,7 +159,24 @@ pub(super) fn draw(
     let bar = super::scroll_bar_width(ui);
     let full_w = super::visible_width(ui);
     let inner_w = (full_w - bar).max(120.0);
-    let cols = fitting(inner_w - PAD_X * 2.0);
+    // Fire and LED columns only for a template that measures them.
+    let bars = paint.night.bars;
+    let cols: Vec<Col> = fitting(inner_w - PAD_X * 2.0)
+        .into_iter()
+        .filter(|c| match c {
+            Col::Fire => bars.contains(&crate::search::Metric::Fire),
+            Col::Led => bars.contains(&crate::search::Metric::Led),
+            Col::Thumb
+            | Col::Id
+            | Col::Time
+            | Col::Camera
+            | Col::Exp
+            | Col::Focus
+            | Col::Move
+            | Col::Q
+            | Col::Flags => true,
+        })
+        .collect();
     let mut sort = None;
 
     // Column header: 28 px, a hairline under it.

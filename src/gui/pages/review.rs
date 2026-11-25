@@ -521,7 +521,8 @@ fn body(
             }
             return None;
         };
-        let night = Night::new(index, &project.people, marks);
+        let mut night = Night::new(index, &project.people, marks);
+        night.bars = search::Metric::bars(&crate::recipe::Recipe::cached(&project.work).metrics);
         refresh(state, &night, ctx.search);
         let query = Query::parse(ctx.search);
         opts_changed |= header(
@@ -2341,7 +2342,7 @@ pub(super) fn name_in(
     text_in(painter, pos, &fitted, font, color, max_w)
 }
 
-/// The colours of the metric bars: fire, LED, moving light, focus.
+/// The colours of the four bars, by position.
 pub(super) fn metric_colors(theme: &Palette) -> [egui::Color32; 4] {
     [
         theme::rgb(theme.warning),
@@ -2351,14 +2352,30 @@ pub(super) fn metric_colors(theme: &Palette) -> [egui::Color32; 4] {
     ]
 }
 
-/// A segment's four bar values, 0..1: fire, LED, moving light, focus.
+/// A segment's four bar values, 0..1, for the recipe's measures
+/// (`night.bars`).
 pub(super) fn bar_values(night: &Night<'_>, s: &crate::index::Scored) -> [f32; 4] {
-    [
-        night.metric(s, search::Metric::Fire),
-        night.metric(s, search::Metric::Led),
-        night.metric(s, search::Metric::Move),
-        (night.metric(s, search::Metric::Focus) / 1.4).clamp(0.0, 1.0),
-    ]
+    night.bars.map(|m| bar_value(night, s, m))
+}
+
+/// One measure as a bar's 0..1.
+fn bar_value(night: &Night<'_>, s: &crate::index::Scored, m: search::Metric) -> f32 {
+    let v = night.metric(s, m);
+    let scaled = match m {
+        search::Metric::Focus => v / 1.4,
+        search::Metric::Dur => v / 10.0,
+        search::Metric::Rating => v / 5.0,
+        search::Metric::Fire
+        | search::Metric::Led
+        | search::Metric::Light
+        | search::Metric::Move
+        | search::Metric::Q
+        | search::Metric::Exp
+        | search::Metric::Luma
+        | search::Metric::Cx
+        | search::Metric::Cheer => v,
+    };
+    scaled.clamp(0.0, 1.0)
 }
 
 /// The hover card: caption, why it matched, the numbers.
@@ -2405,17 +2422,20 @@ pub(super) fn tooltip(ui: &mut egui::Ui, paint: &Paint<'_>, item: &Item) {
         );
     }
     let v = bar_values(paint.night, s);
-    measures(ui, paint.theme, v);
+    measures(ui, paint.theme, paint.night.bars, v);
+    let numbers: Vec<String> = paint
+        .night
+        .bars
+        .iter()
+        .map(|m| format!("{} {:.2}", m.display(), paint.night.metric(s, *m)))
+        .collect();
     ui.label(
         egui::RichText::new(format!(
-            "{:.1}–{:.1}s · {} · fire {:.2} · led {:.2} · move {:.2} · focus {:.2} · q {:.2}",
+            "{:.1}–{:.1}s · {} · {} · q {:.2}",
             s.seg.start,
             s.seg.end,
             s.seg.camera.label(),
-            v[0],
-            v[1],
-            v[2],
-            paint.night.metric(s, search::Metric::Focus),
+            numbers.join(" · "),
             s.q
         ))
         .monospace()
@@ -2429,14 +2449,14 @@ pub(super) fn tooltip(ui: &mut egui::Ui, paint: &Paint<'_>, item: &Item) {
     }
 }
 
-/// The four measures as small labelled bars (fire, LED, moving light,
-/// focus): the hover card's at-a-glance row, kept off the cards so they
-/// stay calm.
-fn measures(ui: &mut egui::Ui, theme: &Palette, values: [f32; 4]) {
+/// The four measures as small labelled bars: the hover card's at-a-glance
+/// row, kept off the cards so they stay calm.
+fn measures(ui: &mut egui::Ui, theme: &Palette, bars: [search::Metric; 4], values: [f32; 4]) {
     let colors = metric_colors(theme);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = SPACE_SM;
-        for ((name, v), c) in ["fire", "led", "move", "focus"]
+        for ((name, v), c) in bars
+            .map(search::Metric::display)
             .into_iter()
             .zip(values)
             .zip(colors)
