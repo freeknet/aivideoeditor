@@ -199,18 +199,25 @@ fn measurements(v: &View<'_>, ui: &mut Ui, seg: &Scored) {
         "Focus",
         format!("{:.2}× the project's median", g.sharp / sharp_ref.max(1e-6)),
     );
-    rows::row(ui, p, "Subject", seg.subject.as_str());
-    rows::row(
-        ui,
-        p,
-        "Light",
-        format!(
-            "fire {:.1}% · LED {:.1}% · white {:.1}%",
-            g.flame * 100.0,
-            g.led * 100.0,
-            g.white * 100.0
-        ),
-    );
+    // Fire, LED and white light only under a template that measures them.
+    let lit = crate::recipe::Recipe::cached(&v.project.work)
+        .metrics
+        .iter()
+        .any(|m| matches!(m.as_str(), "fire" | "led" | "light"));
+    if lit {
+        rows::row(ui, p, "Subject", seg.subject.as_str());
+        rows::row(
+            ui,
+            p,
+            "Light",
+            format!(
+                "fire {:.1}% · LED {:.1}% · white {:.1}%",
+                g.flame * 100.0,
+                g.led * 100.0,
+                g.white * 100.0
+            ),
+        );
+    }
     rows::row(
         ui,
         p,
@@ -550,7 +557,7 @@ pub(super) fn shot(
             shot.beats
         ),
     );
-    if bar == plan.drop_bar && beat == 1 {
+    if bar == plan.drop_bar && beat == 1 && !plan.music.is_empty() {
         rows::row(ui, p, "", "lands on the drop");
     }
     rows::row(ui, p, "Crop cx", format!("{:.2}", shot.cx));
@@ -809,10 +816,17 @@ pub(super) fn plan(v: &View<'_>, ui: &mut Ui, name: &str, ops: &mut Vec<Op>) {
         ui,
         p,
         "Bars",
-        format!(
-            "{}–{} · drop {} · card {}",
-            plan.start_bar, plan.end_bar, plan.drop_bar, plan.card_bar
-        ),
+        if plan.music.is_empty() {
+            format!(
+                "{}–{} · card {}",
+                plan.start_bar, plan.end_bar, plan.card_bar
+            )
+        } else {
+            format!(
+                "{}–{} · drop {} · card {}",
+                plan.start_bar, plan.end_bar, plan.drop_bar, plan.card_bar
+            )
+        },
     );
     let lengths = usage::shot_lengths(plan, v.project.music.as_ref());
     rows::row(
