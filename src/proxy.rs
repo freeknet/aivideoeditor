@@ -292,6 +292,45 @@ mod tests {
         }
     }
 
+    /// Windows only: elsewhere a backslash is not a separator.
+    #[cfg(windows)]
+    #[test]
+    fn the_player_finds_a_copy_whichever_way_the_path_is_written() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let source = dir.path().join("Thanksgiving 2026").join("DJI_0125.MP4");
+        std::fs::create_dir_all(
+            source
+                .parent()
+                .ok_or_else(|| anyhow::anyhow!("no parent"))?,
+        )?;
+        std::fs::write(&source, b"x")?;
+        let mut c = clip(3840, 2160, "hevc");
+        c.id = "DJI_0125".into();
+        // As the index stores it: forward slashes, then a backslash.
+        c.path = format!(
+            "{}\\DJI_0125.MP4",
+            source
+                .parent()
+                .map(|p| p.display().to_string().replace('\\', "/"))
+                .unwrap_or_default()
+        );
+        let copy = super::path(dir.path(), "DJI_0125");
+        std::fs::create_dir_all(copy.parent().ok_or_else(|| anyhow::anyhow!("no parent"))?)?;
+        std::fs::write(&copy, b"y")?;
+        let index = crate::index::Index {
+            clips: vec![c],
+            ..crate::index::Index::default()
+        };
+        super::register(dir.path(), Some(&index));
+        assert_eq!(
+            super::for_playback(&source),
+            copy,
+            "the player's backslash path finds the copy registered under the index's"
+        );
+        super::register(dir.path(), None);
+        Ok(())
+    }
+
     #[test]
     fn only_heavy_clips_get_a_proxy() -> anyhow::Result<()> {
         assert!(needed(&clip(3840, 2160, "h264")), "4K");
