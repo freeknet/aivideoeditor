@@ -58,6 +58,8 @@ pub(crate) struct State {
     props_draft: Option<String>,
     /// What the last template action did.
     template_note: Option<String>,
+    /// The recipe before the last Apply, for its Undo.
+    template_undo: Option<Recipe>,
 }
 
 /// `recipe.toml`'s modification time.
@@ -718,6 +720,7 @@ fn template_section(ui: &mut egui::Ui, theme: &crate::theme::Palette, state: &mu
                 .clicked()
                 && let Some(t) = chosen
             {
+                state.template_undo = Some(loaded.recipe.clone());
                 crate::template::apply(&mut loaded.recipe, t);
                 state.props_draft = None;
                 state.template_note = Some(format!("Applied {}.", t.name));
@@ -737,6 +740,7 @@ fn template_section(ui: &mut egui::Ui, theme: &crate::theme::Palette, state: &mu
                 .hint("Keep this project's deliverables, rules, footage words and measures as a template of your own")
                 .clicked()
             {
+                state.template_undo = None;
                 state.template_note = Some(match crate::template::save(&name, &loaded.recipe) {
                     Ok(path) => format!("Saved {name} to {}.", path.display()),
                     Err(e) => format!("Could not save the template: {e:#}"),
@@ -744,9 +748,23 @@ fn template_section(ui: &mut egui::Ui, theme: &crate::theme::Palette, state: &mu
                 state.template_name.clear();
             }
         });
-        if let Some(note) = &state.template_note {
+        if let Some(note) = state.template_note.clone() {
             ui.add_space(theme::SPACE_XS);
-            parts::status_line(ui, theme, parts::Kind::Info, note);
+            ui.horizontal(|ui| {
+                parts::status_line(ui, theme, parts::Kind::Info, &note);
+                // Apply replaced the cuts and rules: one click puts them back.
+                if state.template_undo.is_some()
+                    && widgets::ghost_button(ui, theme, "Undo")
+                        .hint("Put back the deliverables, rules and footage words from before")
+                        .clicked()
+                    && let Some(before) = state.template_undo.take()
+                {
+                    loaded.recipe = before;
+                    state.props_draft = None;
+                    state.template_note = Some("Put back as it was.".to_owned());
+                    changed = true;
+                }
+            });
         }
         ui.add_space(theme::SPACE_XS + 2.0);
         parts::form_row(ui, theme, "The footage is", |ui| {

@@ -38,7 +38,8 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   place of "fire spinning, LED props…"), the props captions name and the four measures the
   shot browser shows (fire, LED and moving light for Flow Night; quality, focus, exposure
   and motion for General). Pick one in set-up or under *Template* on the Home screen, edit
-  those parts there, and save any project's setup as a template of your own. With no
+  those parts there, and save any project's setup as a template of your own. Applying one
+  can be undone right after (*Undo* beside *Applied …*). With no
   subject wanted on the drop, the drafter favours no kind of footage. The start page's
   suggestions no longer assume fire or performers.
 - The status bar says what the control under the pointer does: every tooltip also
