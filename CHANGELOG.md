@@ -12,6 +12,10 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Captions can be set up in the app: *Settings → Captions* chooses the llama.cpp folder,
+  the vision model and its projector, and says whether captioning is ready (the AVE_*
+  environment variables still win when set). The Settings window scrolls on a small
+  screen instead of pushing *Done* out of view.
 - NVENC (NVIDIA GPU) is an encoder choice for renders, beside x264 and AMF, and the 720p
   preview is made on the same encoder as the render. On a machine with an NVIDIA card,
   the encoder settings offer it in one click (*Use NVENC*).

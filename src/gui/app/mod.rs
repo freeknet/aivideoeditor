@@ -168,6 +168,9 @@ pub enum Action {
     ToggleMotion,
     /// Set how many clips analysis reads at once.
     SetAnalysisJobs(usize),
+    /// Set the captioning model's paths: llama.cpp's folder, the model file
+    /// and its projector file (`None` leaves one as it is, `Some("")` clears it).
+    SetCaptionPaths([Option<String>; 3]),
     /// Ask for a folder and open it as a night.
     PickProject,
     /// Open this folder as a night (a footage folder or an `_ave` work folder).
@@ -457,6 +460,20 @@ impl App {
             Action::SetAnalysisJobs(n) => {
                 self.config.analysis_jobs = Some(n);
                 crate::gui::pages::night::pipeline::set_analysis_jobs(n);
+            }
+            Action::SetCaptionPaths([dir, model, mmproj]) => {
+                let keep = |new: Option<String>, old: &mut Option<String>| {
+                    if let Some(v) = new {
+                        *old = (!v.trim().is_empty()).then_some(v);
+                    }
+                };
+                keep(dir, &mut self.config.caption_llama_dir);
+                keep(model, &mut self.config.caption_model);
+                keep(mmproj, &mut self.config.caption_mmproj);
+                // Captioning reads these from disk: saved now, not on exit.
+                if let Err(e) = crate::config::save(&self.config) {
+                    self.notice = Some(format!("Could not save the caption settings: {e:#}"));
+                }
             }
             Action::Focus => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));

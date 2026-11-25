@@ -164,6 +164,22 @@ fn prompt(about: &str, props: &[String]) -> String {
     )
 }
 
+/// A caption setting: the environment variable `key` when set, else the
+/// path saved in Settings → Captions (the app's config).
+pub(crate) fn setting(key: &str) -> Option<String> {
+    if let Some(v) = std::env::var_os(key).filter(|v| !v.is_empty()) {
+        return Some(v.to_string_lossy().into_owned());
+    }
+    let config = crate::config::load();
+    match key {
+        "AVE_LLAMA_DIR" => config.caption_llama_dir,
+        "AVE_VLM_MODEL" => config.caption_model,
+        "AVE_VLM_MMPROJ" => config.caption_mmproj,
+        _ => None,
+    }
+    .filter(|v| !v.trim().is_empty())
+}
+
 /// Why captions cannot run here, or `None` when they look set up: a server
 /// of the person's own (`AVE_VLM_URL`), or llama-server and both model
 /// files where the `AVE_LLAMA_DIR` / `AVE_VLM_MODEL` / `AVE_VLM_MMPROJ`
@@ -171,7 +187,7 @@ fn prompt(about: &str, props: &[String]) -> String {
 /// server on the default port without `AVE_VLM_URL` set still works when
 /// the step runs, it is just not promised here.
 pub(crate) fn not_set_up() -> Option<String> {
-    let set = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty());
+    let set = setting;
     if set("AVE_VLM_URL").is_some() {
         return None;
     }
@@ -180,7 +196,7 @@ pub(crate) fn not_set_up() -> Option<String> {
         set("AVE_VLM_MODEL"),
         set("AVE_VLM_MMPROJ"),
     ) else {
-        return Some("needs the local vision model: see Captions in the README".to_owned());
+        return Some("needs the local vision model: set it in Settings → Captions".to_owned());
     };
     let exe = Path::new(&dir).join(format!("llama-server{}", std::env::consts::EXE_SUFFIX));
     [exe, PathBuf::from(model), PathBuf::from(mmproj)]
@@ -216,8 +232,10 @@ impl Drop for Server {
 /// `AVE_VLM_MMPROJ` settings, or explains what is missing.
 fn start_server(agent: &ureq::Agent, url: &str) -> Result<Server> {
     let need = |k: &str| {
-        std::env::var(k).with_context(|| {
-            format!("the vision server at {url} is not answering and {k} is not set to start one")
+        setting(k).with_context(|| {
+            format!(
+                "the vision server at {url} is not answering and {k} is not set to start one (Settings → Captions)"
+            )
         })
     };
     let dir = PathBuf::from(need("AVE_LLAMA_DIR")?);

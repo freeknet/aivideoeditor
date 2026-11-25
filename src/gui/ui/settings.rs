@@ -26,11 +26,20 @@ const WIDTH: f32 = 560.0;
 pub fn draw(app: &App, ctx: &egui::Context, actions: &mut Vec<Action>) {
     let theme = app.theme.clone();
     let outcome = modal::show(ctx, &theme, "Settings", app.settings_open, WIDTH, |ui| {
-        appearance(app, ui, actions);
-        ui.add_space(SPACE_LG);
-        keyboard(app, ui, actions);
-        ui.add_space(SPACE_LG);
-        behaviour(app, ui, actions);
+        // The sections scroll in a short window; Done stays in view.
+        let room = (ui.ctx().content_rect().height() - 220.0).max(240.0);
+        egui::ScrollArea::vertical()
+            .max_height(room)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                appearance(app, ui, actions);
+                ui.add_space(SPACE_LG);
+                keyboard(app, ui, actions);
+                ui.add_space(SPACE_LG);
+                behaviour(app, ui, actions);
+                ui.add_space(SPACE_LG);
+                captions(app, ui, actions);
+            });
         ui.add_space(SPACE_LG);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             widgets::button(ui, &app.theme, "Done", widgets::Emphasis::Primary).clicked()
@@ -40,6 +49,89 @@ pub fn draw(app: &App, ctx: &egui::Context, actions: &mut Vec<Action>) {
     if outcome.dismissed || outcome.inner == Some(true) {
         actions.push(Action::CloseSettings);
     }
+}
+
+/// Captions: where the local vision model is, and whether it is ready.
+fn captions(app: &App, ui: &mut Ui, actions: &mut Vec<Action>) {
+    widgets::title(ui, &app.theme, "Captions");
+    ui.add_space(SPACE_SM);
+    widgets::muted(
+        ui,
+        &app.theme,
+        "Captions describe each shot with a local vision model (llama.cpp and a Qwen3-VL model). Point at them here; the AVE_* environment variables win when set.",
+    );
+    ui.add_space(SPACE_SM);
+    let rows: [(&str, Option<&String>, bool); 3] = [
+        (
+            "llama.cpp folder",
+            app.config.caption_llama_dir.as_ref(),
+            true,
+        ),
+        ("Model (.gguf)", app.config.caption_model.as_ref(), false),
+        (
+            "Projector (.gguf)",
+            app.config.caption_mmproj.as_ref(),
+            false,
+        ),
+    ];
+    let rows_set = rows.iter().filter(|(_, v, _)| v.is_some()).count();
+    for (i, (label, value, folder)) in rows.into_iter().enumerate() {
+        ui.horizontal(|ui| {
+            ui.allocate_ui_with_layout(
+                egui::vec2(120.0, super::theme::CONTROL_HEIGHT),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.set_min_width(120.0);
+                    ui.label(label);
+                },
+            );
+            let shown = value.map_or("Not set", String::as_str);
+            ui.add(
+                egui::Label::new(egui::RichText::new(shown).color(super::theme::rgb(
+                    if value.is_some() {
+                        app.theme.text
+                    } else {
+                        app.theme.text_muted
+                    },
+                )))
+                .truncate(),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if widgets::outline_button(ui, &app.theme, "Choose\u{2026}").clicked() {
+                    let dialog = rfd::FileDialog::new();
+                    let picked = if folder {
+                        dialog
+                            .set_title("The folder llama-server is in")
+                            .pick_folder()
+                    } else {
+                        dialog
+                            .set_title(label)
+                            .add_filter("GGUF model", &["gguf"])
+                            .pick_file()
+                    };
+                    if let Some(p) = picked {
+                        let mut paths = [None, None, None];
+                        if let Some(slot) = paths.get_mut(i) {
+                            *slot = Some(p.display().to_string());
+                        }
+                        actions.push(Action::SetCaptionPaths(paths));
+                    }
+                }
+            });
+        });
+    }
+    ui.add_space(SPACE_SM);
+    let none_set = rows_set == 0;
+    let (ok, line) = match crate::caption::not_set_up() {
+        None => (true, "Ready: Caption runs on this machine.".to_owned()),
+        Some(_) if none_set => (false, "Not ready: choose the three above.".to_owned()),
+        Some(why) => (false, format!("Not ready: {why}.")),
+    };
+    ui.label(egui::RichText::new(line).color(super::theme::rgb(if ok {
+        app.theme.success
+    } else {
+        app.theme.text_muted
+    })));
 }
 
 /// The width of one theme card in the picker.
