@@ -13,7 +13,8 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ### Added
 
 - NVENC (NVIDIA GPU) is an encoder choice for renders, beside x264 and AMF, and the 720p
-  preview is made on the same encoder as the render.
+  preview is made on the same encoder as the render. On a machine with an NVIDIA card,
+  the encoder settings offer it in one click (*Use NVENC*).
 - With nothing selected, the Inspector shows the open cut: shape, length and shot count,
   the shots the chat message points at (with *Clear them*), and the rules it keeps, saying
   when the drafter loosened the project's to fit the footage.

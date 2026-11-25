@@ -607,6 +607,7 @@ fn recipe_table(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
                 .collect();
             changed |= widgets::segmented(ui, theme, &mut loaded.recipe.encoder, &items);
         });
+        changed |= nvenc_hint(ui, theme, &mut loaded.recipe.encoder);
         ui.add_space(theme::SPACE_XS + 2.0);
         parts::form_row(ui, theme, "Timeline", |ui| {
             ui.allocate_ui(egui::vec2(360.0, theme::CONTROL_HEIGHT), |ui| {
@@ -641,6 +642,31 @@ fn recipe_table(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
     }
     let editing = ui.ctx().egui_wants_keyboard_input() || ui.ctx().egui_is_using_pointer();
     state.save_if_done(editing);
+}
+
+/// With an NVIDIA card and the CPU encoder chosen: a line offering NVENC,
+/// several times faster. Returns whether it switched.
+pub(crate) fn nvenc_hint(
+    ui: &mut egui::Ui,
+    theme: &crate::theme::Palette,
+    encoder: &mut recipe::EncoderChoice,
+) -> bool {
+    if *encoder != recipe::EncoderChoice::X264 || !crate::media::gpu_decode() {
+        return false;
+    }
+    let mut switched = false;
+    ui.horizontal_wrapped(|ui| {
+        ui.label(
+            egui::RichText::new("NVIDIA card found: NVENC is several times faster.")
+                .font(theme::font(theme::SMALL_SIZE))
+                .color(theme::rgb(theme.text_muted)),
+        );
+        if widgets::ghost_button(ui, theme, "Use NVENC").clicked() {
+            *encoder = recipe::EncoderChoice::Nvenc;
+            switched = true;
+        }
+    });
+    switched
 }
 
 /// The measures the shot browser can show as bars, by recipe name.

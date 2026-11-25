@@ -715,10 +715,12 @@ fn options(ctx: &PageCtx<'_>, state: &mut State, ui: &mut egui::Ui, out: &Path) 
     row(ui, "Encoder", &mut |ui| {
         let items: Vec<(recipe::EncoderChoice, &str)> = recipe::EncoderChoice::ALL
             .iter()
-            .map(|c| (*c, c.label()))
+            .map(|c| (*c, c.short_label()))
             .collect();
         changed |= widgets::segmented(ui, theme, &mut loaded.recipe.encoder, &items);
     });
+    changed |=
+        crate::gui::pages::night::settings::nvenc_hint(ui, theme, &mut loaded.recipe.encoder);
     row(ui, "Timeline", &mut |ui| {
         changed |=
             widgets::switch(ui, theme, &mut loaded.recipe.otio, "OTIO for Resolve").changed();

@@ -77,6 +77,15 @@ impl EncoderChoice {
         }
     }
 
+    /// The name a narrow picker shows.
+    pub(crate) fn short_label(self) -> &'static str {
+        match self {
+            Self::X264 => "x264",
+            Self::Amf => "AMF",
+            Self::Nvenc => "NVENC",
+        }
+    }
+
     /// The name a picker shows.
     pub(crate) fn label(self) -> &'static str {
         match self {
