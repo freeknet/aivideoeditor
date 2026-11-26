@@ -43,10 +43,19 @@
 //!
 //! Consequences worth knowing before you edit the file by hand:
 //!
-//! - **Released sections are rewritten on every run.** Prose added to one
-//!   is lost the next time this runs. If a release needs a human summary,
-//!   the place for it is the GitHub release body, which
-//!   `.github/workflows/release.yml` owns.
+//! - **Released sections are rewritten on every run, except their
+//!   summary.** The `### ` lists under a release heading are regenerated
+//!   from the history, and edits to them are lost. Prose between the
+//!   heading and its first `### ` is the release's summary: it is read back
+//!   from the file and kept, so a release can open with a paragraph a
+//!   person wrote. `release.yml` publishes the whole section, summary and
+//!   lists, as the release notes.
+//! - **Releases from before the generator are kept whole.** A version in
+//!   [`PRE_GENERATOR`] was released with a hand-written section; that
+//!   section, heading and all, is copied from the file as it stands rather
+//!   than regenerated, because what shipped in the tag is what it says.
+//! - **A wrong subject is corrected in `CHANGELOG.corrections`**, never by
+//!   rewording a pushed commit. See [`corrections`].
 //! - **`--check` compares released sections only.** The `Unreleased`
 //!   section is deliberately exempt, because its content changes with
 //!   every merge — and a squash or rebase rewrites the very hashes it
@@ -61,6 +70,7 @@
 //! An example rather than a test because it writes into the source tree.
 //! It is still built by `cargo clippy --all-targets` so it cannot rot silently.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -76,6 +86,19 @@ const REPO: &str = "https://github.com/freeknet/aivideoeditor";
 
 /// Heading for commits that have not shipped in a tagged release yet.
 const UNRELEASED: &str = "## [Unreleased]";
+
+/// Versions released before this file was generated. Their sections were
+/// written by hand and shipped that way in the tag, so they are kept
+/// verbatim, heading included, rather than regenerated from the history.
+/// Nothing is ever added here: every release after these is generated.
+const PRE_GENERATOR: &[&str] = &["0.1.0"];
+
+/// The file of corrected subjects, at the crate root.
+const CORRECTIONS: &str = "CHANGELOG.corrections";
+
+/// The line the generator writes for a tag with nothing under it. It is
+/// output, not a summary, so it is never read back as one.
+const NO_COMMITS: &str = "No commits recorded against this tag.";
 
 /// Field separator for `git log --format`. `%x1f` is the ASCII unit
 /// separator, which cannot occur in a commit subject.
@@ -113,6 +136,16 @@ struct Commit {
     scope: Option<String>,
     /// The subject with the `type(scope):` prefix stripped.
     summary: String,
+}
+
+/// What the committed file holds for a release that a regeneration keeps.
+#[derive(Debug, PartialEq, Eq)]
+enum Kept {
+    /// A [`PRE_GENERATOR`] section: its heading line and body, as written.
+    Verbatim { heading: String, body: String },
+    /// The prose between a generated section's heading and its first
+    /// `### `.
+    Summary(String),
 }
 
 /// One tagged release and everything that landed since the previous tag.
@@ -155,6 +188,11 @@ fn main() -> Result<()> {
     }
 
     let mut releases = releases()?;
+    // What the file already says that a regeneration keeps: summaries, and
+    // the sections of releases older than the generator. A missing file
+    // keeps nothing.
+    let existing = fs::read_to_string(CHANGELOG).ok();
+    let kept = existing.as_deref().map(kept_sections).unwrap_or_default();
 
     // An orphaned tag makes every range below wrong, so it is reported
     // before any mismatch it would itself have caused.
@@ -164,9 +202,9 @@ fn main() -> Result<()> {
         if !orphaned.is_empty() {
             bail!("{}", orphan_report(&orphaned));
         }
-        let existing = fs::read_to_string(CHANGELOG).with_context(|| {
-            format!("{CHANGELOG} is missing; run `cargo run --example changelog`")
-        })?;
+        let Some(existing) = existing else {
+            bail!("{CHANGELOG} is missing; run `cargo run --example changelog`");
+        };
         // A leading section whose tag does not exist yet is the pre-tag
         // release flow in progress, not drift — but it only passes if it
         // is exactly the release about to be cut: version newer than the
@@ -180,7 +218,7 @@ fn main() -> Result<()> {
             })?;
             releases.insert(0, pending);
         }
-        let generated = render(&releases, &[]);
+        let generated = render(&releases, &[], &kept);
         if released_only(&existing) == released_only(&generated) {
             println!("{CHANGELOG} matches the git history.");
             return Ok(());
@@ -204,7 +242,7 @@ fn main() -> Result<()> {
             None => commits("HEAD")?,
         },
     };
-    let generated = render(&releases, &unreleased);
+    let generated = render(&releases, &unreleased, &kept);
 
     // A warning rather than an error on this path: the file still gets
     // written, so you are not locked out of regenerating while you sort the
@@ -502,6 +540,7 @@ fn commits(range: &str) -> Result<Vec<Commit>> {
         ":(exclude)CHANGELOG.md",
     ])?;
 
+    let corrected = corrections()?;
     let mut commits = Vec::new();
     for line in log.lines() {
         let mut fields = line.split(SEP);
@@ -510,9 +549,101 @@ fn commits(range: &str) -> Result<Vec<Commit>> {
         else {
             continue;
         };
+        let subject = corrected.get(hash).map_or(subject, String::as_str);
         commits.push(parse_subject(hash, short, subject));
     }
     Ok(commits)
+}
+
+/// Subjects to use instead of a commit's own, by full hash. A pushed
+/// commit cannot be reworded without rewriting every hash after it, which
+/// the release rules forbid, so a subject that is wrong is corrected here
+/// instead. One correction per line, `<40-hex hash> <subject>`; `#` starts
+/// a comment. No file means no corrections.
+fn corrections() -> Result<BTreeMap<String, String>> {
+    let Ok(text) = fs::read_to_string(CORRECTIONS) else {
+        return Ok(BTreeMap::new());
+    };
+    parse_corrections(&text)
+}
+
+/// [`corrections`]'s parser.
+fn parse_corrections(text: &str) -> Result<BTreeMap<String, String>> {
+    let mut out = BTreeMap::new();
+    for (number, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((hash, subject)) = line.split_once(' ') else {
+            bail!("{CORRECTIONS}:{}: expected `<hash> <subject>`", number + 1);
+        };
+        if hash.len() != 40 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+            bail!(
+                "{CORRECTIONS}:{}: `{hash}` is not a full commit hash",
+                number + 1
+            );
+        }
+        out.insert(hash.to_ascii_lowercase(), subject.trim().to_owned());
+    }
+    Ok(out)
+}
+
+/// What a regeneration keeps from the committed file, by version: the
+/// whole section of a [`PRE_GENERATOR`] release, and the summary prose of
+/// any other release that has one.
+fn kept_sections(text: &str) -> BTreeMap<String, Kept> {
+    let mut sections: Vec<(String, String, Vec<&str>)> = Vec::new();
+    for line in text.lines() {
+        // The link references that close the file end the last section.
+        if line.starts_with("[Unreleased]:") {
+            break;
+        }
+        if let Some(rest) = line.strip_prefix("## [") {
+            let version = rest.split_once(']').map_or("", |(version, _)| version);
+            sections.push((version.to_owned(), line.to_owned(), Vec::new()));
+            continue;
+        }
+        if let Some((_, _, body)) = sections.last_mut() {
+            body.push(line);
+        }
+    }
+
+    let mut kept = BTreeMap::new();
+    for (version, heading, body) in sections {
+        if version == "Unreleased" || version.is_empty() {
+            continue;
+        }
+        if PRE_GENERATOR.contains(&version.as_str()) {
+            let body = trim_blank_lines(&body);
+            kept.insert(version, Kept::Verbatim { heading, body });
+            continue;
+        }
+        let prose: Vec<&str> = body
+            .iter()
+            .take_while(|line| !line.starts_with("### "))
+            .filter(|line| line.trim() != NO_COMMITS)
+            .copied()
+            .collect();
+        let summary = trim_blank_lines(&prose);
+        if !summary.is_empty() {
+            kept.insert(version, Kept::Summary(summary));
+        }
+    }
+    kept
+}
+
+/// `lines` joined, without the blank lines at either end.
+fn trim_blank_lines(lines: &[&str]) -> String {
+    let start = lines.iter().position(|line| !line.trim().is_empty());
+    let end = lines.iter().rposition(|line| !line.trim().is_empty());
+    match (start, end) {
+        (Some(start), Some(end)) => lines
+            .get(start..=end)
+            .map(|kept| kept.join("\n"))
+            .unwrap_or_default(),
+        _ => String::new(),
+    }
 }
 
 /// Splits a `type(scope)!: summary` subject into its parts, falling back to
@@ -575,15 +706,19 @@ fn parse_subject(hash: &str, short: &str, subject: &str) -> Commit {
 }
 
 /// The full file, preamble through link references.
-fn render(releases: &[Release], unreleased: &[Commit]) -> String {
+fn render(releases: &[Release], unreleased: &[Commit], kept: &BTreeMap<String, Kept>) -> String {
     let mut out = String::new();
 
     out.push_str("# Changelog\n\n");
-    out.push_str("All notable changes to aivideoeditor, newest first.\n\n");
+    out.push_str("All notable changes to AI Video Editor, newest first.\n\n");
     out.push_str(
-        "**This file is generated.** It is rebuilt from the git history by\n\
-         `cargo run --example changelog`, so released sections are rewritten in\n\
-         place and edits to them do not survive. See `CONTRIBUTING.md`.\n\n",
+        "**This file is generated** from the conventional-commit subjects in the\n\
+         git history by `cargo run --example changelog`, and CI checks it. The\n\
+         lists under a release are rewritten on every run; a paragraph between a\n\
+         release's heading and its first list is its summary, and is kept. A\n\
+         wrong subject is corrected in `CHANGELOG.corrections`. Releases from\n\
+         before the generator keep the section they shipped with. See\n\
+         `CONTRIBUTING.md`.\n\n",
     );
     out.push_str(
         "The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),\n\
@@ -600,7 +735,21 @@ fn render(releases: &[Release], unreleased: &[Commit]) -> String {
     }
 
     for release in releases {
+        let summary = match kept.get(&release.version) {
+            Some(Kept::Verbatim { heading, body }) => {
+                out.push_str(&format!("\n{heading}\n"));
+                if !body.is_empty() {
+                    out.push_str(&format!("\n{body}\n"));
+                }
+                continue;
+            }
+            Some(Kept::Summary(summary)) => Some(summary),
+            None => None,
+        };
         out.push_str(&format!("\n## [{}] - {}\n", release.version, release.date));
+        if let Some(summary) = summary {
+            out.push_str(&format!("\n{summary}\n"));
+        }
         if release.commits.is_empty() {
             out.push_str("\nNo commits recorded against this tag.\n");
         } else {
@@ -720,5 +869,130 @@ fn undated_heading(line: &str) -> &str {
         line.split(" - ").next().unwrap_or(line)
     } else {
         line
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn commit_of(subject: &str) -> Commit {
+        parse_subject("0123456789abcdef", "0123456", subject)
+    }
+
+    fn release_of(version: &str, subjects: &[&str]) -> Release {
+        Release {
+            tag: format!("v{version}"),
+            version: version.to_owned(),
+            date: "2026-12-01".to_owned(),
+            previous: None,
+            commits: subjects.iter().map(|subject| commit_of(subject)).collect(),
+        }
+    }
+
+    #[test]
+    fn corrections_map_full_hashes_to_subjects_and_refuse_short_ones() -> Result<()> {
+        let parsed = parse_corrections(
+            "# a comment\n\n81404F1E2ED2EDD1087F6B209B60517C2F13F105 fix: right\n",
+        )?;
+        assert_eq!(
+            parsed
+                .get("81404f1e2ed2edd1087f6b209b60517c2f13f105")
+                .map(String::as_str),
+            Some("fix: right"),
+            "a full hash, lower-cased, to its subject"
+        );
+        assert!(
+            parse_corrections("81404f1 fix: short").is_err(),
+            "an abbreviated hash would be ambiguous one day"
+        );
+        assert!(
+            parse_corrections("81404f1e2ed2edd1087f6b209b60517c2f13f105").is_err(),
+            "a hash without a subject corrects nothing"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_pre_generator_section_is_kept_whole_and_a_summary_is_kept() {
+        let file = "# Changelog\n\n## [Unreleased]\n\nNothing yet.\n\n\
+                    ## [0.2.0] - 2026-12-01\n\nA summary.\n\nTwo lines.\n\n### Fixed\n\n- x\n\n\
+                    ## [0.1.0] - 2026-11-25\n\nHand-written.\n\n### Added\n\n- **A**: b\n\n\
+                    [Unreleased]: https://example.invalid\n";
+        let kept = kept_sections(file);
+        assert_eq!(
+            kept.get("0.2.0"),
+            Some(&Kept::Summary("A summary.\n\nTwo lines.".to_owned())),
+            "the prose before the first list is the summary"
+        );
+        assert_eq!(
+            kept.get("0.1.0"),
+            Some(&Kept::Verbatim {
+                heading: "## [0.1.0] - 2026-11-25".to_owned(),
+                body: "Hand-written.\n\n### Added\n\n- **A**: b".to_owned(),
+            }),
+            "a release older than the generator keeps its heading and every line"
+        );
+        assert!(
+            !kept.contains_key("Unreleased"),
+            "Unreleased is regenerated, never kept"
+        );
+    }
+
+    #[test]
+    fn a_section_without_prose_keeps_no_summary() {
+        let file = "## [0.3.0] - 2026-12-01\n\nNo commits recorded against this tag.\n\n\
+                    ## [0.2.0] - 2026-12-01\n\n### Fixed\n\n- x\n";
+        let kept = kept_sections(file);
+        assert!(
+            kept.is_empty(),
+            "the generator's own placeholder and a bare list are not summaries: {kept:?}"
+        );
+    }
+
+    #[test]
+    fn rendering_keeps_what_was_kept_and_regenerates_the_rest() {
+        let releases = [
+            release_of("0.2.0", &["fix: a fix"]),
+            release_of("0.1.0", &["feat: lost in the hand-written section"]),
+        ];
+        let mut kept = BTreeMap::new();
+        kept.insert("0.2.0".to_owned(), Kept::Summary("Summary.".to_owned()));
+        kept.insert(
+            "0.1.0".to_owned(),
+            Kept::Verbatim {
+                heading: "## [0.1.0] - 2026-11-25".to_owned(),
+                body: "As shipped.".to_owned(),
+            },
+        );
+        let out = render(&releases, &[], &kept);
+        assert!(
+            out.contains("## [0.2.0] - 2026-12-01\n\nSummary.\n\n### Fixed\n\n- a fix"),
+            "the summary leads the generated lists: {out}"
+        );
+        assert!(
+            out.contains("## [0.1.0] - 2026-11-25\n\nAs shipped.\n\n[Unreleased]:"),
+            "the hand-written section is copied as it is: {out}"
+        );
+        assert!(
+            !out.contains("lost in the hand-written section"),
+            "a kept section is not regenerated: {out}"
+        );
+        assert_eq!(
+            kept_sections(&out),
+            kept,
+            "rendering then reading back keeps the same things"
+        );
+    }
+
+    #[test]
+    fn the_unreleased_section_and_release_dates_are_ignored_by_the_check() {
+        let committed = "# C\n\n## [Unreleased]\n\n- new\n\n## [0.1.0] - 2026-11-25\n\nx\n";
+        let generated = "# C\n\n## [Unreleased]\n\nNothing yet.\n\n## [0.1.0] - 2026-11-26\n\nx\n";
+        assert_eq!(
+            released_only(committed),
+            released_only(generated),
+            "only released sections, without their dates, are compared"
+        );
     }
 }

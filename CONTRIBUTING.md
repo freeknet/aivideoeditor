@@ -121,23 +121,45 @@ version:
 
 ## Changelog
 
-`CHANGELOG.md` follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-Add a line under `## [Unreleased]` in the same pull request as the change,
-in the section its commit prefix implies: `feat:` under Added, `fix:` under
-Fixed, and so on.
+`CHANGELOG.md` is **generated** from the conventional-commit subjects in
+the git history, in the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
+layout: `feat:` under Added, `fix:` under Fixed, and so on. Don't edit its
+lists by hand; the commit subject is the entry, so write it for someone
+reading the release notes.
+
+```bash
+cargo run --example changelog                    # regenerate
+cargo run --example changelog -- --check         # what CI runs
+cargo run --example changelog -- --release v0.2.0
+```
+
+`--check` compares the released sections only; `Unreleased` moves with
+every merge and is not gated. Two things are kept by hand:
+
+- **A release summary.** Prose between a release's `## [x.y.z]` heading and
+  its first `### ` survives every regeneration, and the release workflow
+  publishes the whole section as the release notes.
+- **Corrections.** A pushed commit is never reworded (that rewrites every
+  hash after it). Put `<full hash> <corrected subject>` in
+  `CHANGELOG.corrections` instead.
+
+v0.1.0 was released before the changelog was generated, and its
+hand-written section is kept as it shipped.
 
 ## Cutting a release
 
-1. On a release branch off `main`: bump `version` in `Cargo.toml`, move the
-   `Unreleased` entries under a new `## [x.y.z] - YYYY-MM-DD` heading in
-   `CHANGELOG.md`, and commit.
+1. On a release branch off `main`: bump `version` in `Cargo.toml` and
+   commit. Then run `cargo run --example changelog -- --release v0.2.0`,
+   write a summary paragraph under the new heading if the release wants
+   one, and commit `CHANGELOG.md`.
 2. Open the pull request and let the checks pass.
 3. Merge (a merge commit, so the history the changelog describes survives),
    then tag the merge commit, annotated:
    `git tag -a v0.2.0 -m "aivideoeditor v0.2.0"`, and push the tag.
 4. The push triggers `.github/workflows/release.yml`: it checks the tag
    against `Cargo.toml`, builds the release archive with an SBOM and
-   checksums, attests them, and publishes the GitHub release.
+   checksums, attests them, and publishes the GitHub release with that
+   version's `CHANGELOG.md` section as its notes.
 
 **Never amend or rebase a commit after tagging it.** The tag keeps pointing
 at the copy you discarded, which then sits on no branch at all.

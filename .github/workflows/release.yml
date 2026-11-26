@@ -78,11 +78,25 @@ jobs:
           set -euo pipefail
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG already exists, reusing it."
+            exit 0
+          fi
+          # The notes are this release's section of CHANGELOG.md, which
+          # `cargo run --example changelog -- --release` wrote before the
+          # tag existed, so the page says exactly what the changelog in the
+          # tagged tree says, summary included. GitHub's generated notes are
+          # the fallback for a tag cut without that step.
+          version="${TAG#v}"
+          awk -v v="## [${version}]" '
+            index($0, v) == 1 { on = 1; next }
+            on && /^## / { exit }
+            on && /^\[Unreleased\]:/ { exit }
+            on { print }
+          ' CHANGELOG.md > notes.md
+          if [ -s notes.md ] && grep -q '[^[:space:]]' notes.md; then
+            gh release create "$TAG" --draft --title "AI Video Editor $TAG" --notes-file notes.md
           else
-            gh release create "$TAG" \
-              --draft \
-              --title "AI Video Editor $TAG" \
-              --generate-notes
+            echo "No [${version}] section in CHANGELOG.md; using generated notes."
+            gh release create "$TAG" --draft --title "AI Video Editor $TAG" --generate-notes
           fi
 
   build:

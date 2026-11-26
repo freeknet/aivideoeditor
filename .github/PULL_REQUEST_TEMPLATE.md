@@ -23,7 +23,8 @@ change to anything drawn wants a screenshot.
       contains only the one call, and carries a `// SAFETY:` comment
 - [ ] UI changes include a screenshot
 - [ ] Commit messages use the `feat:` / `fix:` / `perf:` / `refactor:` / `docs:` /
-      `test:` / `build:` / `ci:` prefixes
+      `test:` / `build:` / `ci:` prefixes, and read as changelog entries
+      (`CHANGELOG.md` is generated from them)
 
 Full guidelines, including how to build and what CI enforces, are in
 [`CONTRIBUTING.md`](https://github.com/freeknet/aivideoeditor/blob/main/CONTRIBUTING.md).

@@ -24,6 +24,7 @@ cargo test --all-features
 cargo run                                       # the app, debug
 cargo run --release                             # the app, as shipped
 cargo deny check                                # licences, advisories, sources
+cargo run --example changelog -- --check        # CHANGELOG.md matches the history
 ```
 
 All of these are clean on `main` and enforced by CI
@@ -120,12 +121,20 @@ under a licence not on the list is a decision, not a fix: add it to
 `deny.toml` in its own commit, saying why. An ignored advisory carries a
 note saying what would clear it.
 
-### `CHANGELOG.md` moves with the code
+### `CHANGELOG.md` is generated from the commit subjects
 
-Every user-visible change adds a line under `## [Unreleased]` in the same
-commit, in the section its prefix implies (`feat:` under Added, `fix:`
-under Fixed). A release moves those lines under its version heading
-before the tag is cut. **Never amend or rebase a commit after tagging it.**
+Do not hand-edit its lists. `cargo run --example changelog` rebuilds it
+from the conventional-commit subjects in the git history (`feat:` under
+Added, `fix:` under Fixed), and CI runs it with `--check`, so the subject
+*is* the changelog entry: write it for a user. Before a release,
+`cargo run --example changelog -- --release vX.Y.Z` writes the section
+for the tag about to be cut; a paragraph between that heading and its
+first `### ` is the release's summary, kept on every regeneration and
+published as the release notes. A pushed subject that is wrong is
+corrected in `CHANGELOG.corrections` (`<full hash> <subject>`), never by
+rewriting history. v0.1.0 predates the generator and keeps its
+hand-written section (`PRE_GENERATOR` in `examples/changelog.rs`).
+**Never amend or rebase a commit after tagging it.**
 
 ### Constants live with what they govern
 

@@ -223,4 +223,5 @@ cargo test --all-features
 
 Plus: every new `.rs` file has the header banner (`src/header_check.rs`), no `unsafe`
 outside `src/win/` (`src/unsafe_check.rs`), no `unwrap/expect/panic`, `#[expect(..., reason)]` never `#[allow]`.
-Add a `CHANGELOG.md` line under `## [Unreleased]` → `### Added` for what you built.
+`CHANGELOG.md` is generated from commit subjects: give the commit a `feat:` subject
+that says what you built, and leave the file alone.

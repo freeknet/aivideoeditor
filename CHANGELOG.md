@@ -2,13 +2,26 @@
 
 All notable changes to AI Video Editor, newest first.
 
-Entries follow the conventional-commit subjects in the git history
-(`feat:` under Added, `fix:` under Fixed, and so on). See `CONTRIBUTING.md`.
+**This file is generated** from the conventional-commit subjects in the
+git history by `cargo run --example changelog`, and CI checks it. The
+lists under a release are rewritten on every run; a paragraph between a
+release's heading and its first list is its summary, and is kept. A
+wrong subject is corrected in `CHANGELOG.corrections`. Releases from
+before the generator keep the section they shipped with. See
+`CONTRIBUTING.md`.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+### Fixed
+
+- ave.exe starts on a machine without the Visual C++ runtime ([`2123a17`](https://github.com/freeknet/aivideoeditor/commit/2123a17d722174a8239e16ad8ddb5736e98222d7))
+
+### Internal
+
+- release builds keep line tables and ship ave.pdb as a symbols archive ([`ed9e7e5`](https://github.com/freeknet/aivideoeditor/commit/ed9e7e584a0d1fcb07f465fbe2303bacca965e34))
 
 ## [0.1.0] - 2026-11-25
 

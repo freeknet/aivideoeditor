@@ -68,6 +68,13 @@ jobs:
     # this is the only runner that links and runs the whole of it.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # fetch-depth: 0 for the changelog check below, which reads
+          # `git tag` and walks the whole history. The default checkout is
+          # shallow and fetches no tags at all, so every release would come
+          # back missing and the check would fail for a reason that has
+          # nothing to do with the changelog.
+          fetch-depth: 0
 
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10
         with:
@@ -85,6 +92,15 @@ jobs:
 
       - name: Test
         run: cargo test --all-features
+
+      # CHANGELOG.md is generated from the git history by
+      # examples/changelog.rs, so a released section that disagrees with
+      # the tags is a mistake, not a style choice. Released sections only:
+      # `Unreleased` moves with every merge and a squash rewrites the very
+      # hashes it pins, so gating pull requests on it would fail all of
+      # them for no signal.
+      - name: Changelog
+        run: cargo run --example changelog -- --check
 
       # Release is where `panic = "abort"`, LTO and one codegen unit apply.
       # Those change what compiles: a `catch_unwind` that builds in debug
