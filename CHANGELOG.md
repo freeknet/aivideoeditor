@@ -444,6 +444,9 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- A night with no `recipe.toml` (and no saved default) took the General template, so a
+  night cut for Flow Night showed its plans as matching nothing. It now takes whichever
+  template's deliverables name the most of its plans.
 - The encoder pickers (export panel, project settings) offered NVENC and AMF on any PC.
   Each encoder is now tried once in the background; one that does not work here is greyed
   out with the reason on hover, and a project set to one says a render would fail and
