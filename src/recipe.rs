@@ -1007,6 +1007,56 @@ mod tests {
     use super::*;
 
     #[test]
+    fn any_recipe_text_parses_to_a_usable_recipe() -> anyhow::Result<()> {
+        // recipe.toml is hand-edited. Whatever it holds, parsing never
+        // fails or panics, and the recipe it gives has a file name to
+        // render to and no two deliverables with one id.
+        use proptest::prelude::*;
+        let value = prop_oneof![
+            "\"[^\"\\\\]{0,12}\"",
+            any::<i32>().prop_map(|n| n.to_string()),
+            any::<f32>().prop_map(|n| format!("{n:?}")),
+            Just("true".to_owned()),
+            Just("nan".to_owned()),
+            Just("-inf".to_owned()),
+            Just("[]".to_owned()),
+            Just("[\"a\", 1]".to_owned()),
+        ];
+        let key = prop_oneof![
+            Just("filename"),
+            Just("output_dir"),
+            Just("encoder"),
+            Just("otio"),
+            Just("template"),
+            Just("about"),
+            Just("id"),
+            Just("aspect"),
+            Just("seconds"),
+        ];
+        let table = proptest::collection::vec((key, value), 0..8).prop_map(|pairs| {
+            let mut text = String::new();
+            for (index, (key, value)) in pairs.iter().enumerate() {
+                if index % 3 == 2 {
+                    text.push_str("[[deliverable]]\n");
+                }
+                text.push_str(&format!("{key} = {value}\n"));
+            }
+            text
+        });
+        let text = prop_oneof![table, ".{0,64}"];
+        crate::test_support::property(text, |text| {
+            let (recipe, _warnings) = parse(&text);
+            prop_assert!(!recipe.filename.trim().is_empty(), "{text:?}: no file name");
+            let mut ids: Vec<&str> = recipe.deliverables.iter().map(|d| d.id.as_str()).collect();
+            let count = ids.len();
+            ids.sort_unstable();
+            ids.dedup();
+            prop_assert_eq!(ids.len(), count, "{:?}: a repeated deliverable id", text);
+            Ok(())
+        })
+    }
+
+    #[test]
     fn an_old_flow_night_recipe_keeps_cutting_the_way_it_did() -> anyhow::Result<()> {
         let (old, _) = parse(
             "[[deliverable]]

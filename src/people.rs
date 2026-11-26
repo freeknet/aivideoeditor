@@ -115,7 +115,10 @@ fn unnamed(clip: &str, t: f32) -> String {
 /// The clip and, for a range entry, the range (`from`, `to`) of a key.
 ///
 /// A key whose range does not parse comes back with `None`, like a whole
-/// clip, but under the full key text, so it never matches a real clip.
+/// clip, but under the full key text, so it never matches a real clip. So
+/// does a range that is not two finite times in order: `f32` parses `nan`
+/// and `inf`, and a hand-edited `clip@nan-inf` or `clip@20-10` would
+/// otherwise reach every comparison with a segment's times.
 pub(crate) fn parse_key(key: &str) -> (&str, Option<(f32, f32)>) {
     let Some((clip, range)) = key.split_once('@') else {
         return (key, None);
@@ -123,7 +126,7 @@ pub(crate) fn parse_key(key: &str) -> (&str, Option<(f32, f32)>) {
     let parsed = range.split_once('-').and_then(|(a, b)| {
         let a = a.trim().parse::<f32>().ok()?;
         let b = b.trim().parse::<f32>().ok()?;
-        Some((a, b))
+        (a.is_finite() && b.is_finite() && a <= b).then_some((a, b))
     });
     match parsed {
         Some(r) => (clip, Some(r)),
@@ -772,12 +775,60 @@ mod tests {
             "range"
         );
         assert_eq!(parse_key("MVI_1@x"), ("MVI_1@x", None), "bad range");
+        for odd in ["MVI_1@nan-5", "MVI_1@0-inf", "MVI_1@20-10"] {
+            assert_eq!(parse_key(odd), (odd, None), "{odd} is not a usable range");
+        }
         assert_eq!(range_key("MVI_1", 26.0, 45.5), "MVI_1@26-45.5", "trimmed");
         assert_eq!(
             range_key("MVI_1", 12.339, 20.0),
             "MVI_1@12.33-20",
             "rounded down"
         );
+    }
+
+    use crate::test_support::property;
+
+    #[test]
+    fn any_key_parses_to_a_finite_ordered_range_or_none() -> anyhow::Result<()> {
+        // `people.toml` is hand-edited and its keys are outside input: a
+        // `clip@from-to` whose numbers are `nan`, `inf` or backwards must
+        // not reach the code that compares segment times with them.
+        property(".*", |key| {
+            let (clip, range) = parse_key(&key);
+            if let Some((a, b)) = range {
+                proptest::prop_assert!(a.is_finite() && b.is_finite(), "{key:?} gave {a}-{b}");
+                proptest::prop_assert!(a <= b, "{key:?} gave a backwards range {a}-{b}");
+                proptest::prop_assert!(key.starts_with(clip), "{key:?} gave clip {clip:?}");
+            } else {
+                proptest::prop_assert_eq!(clip, key.as_str(), "an unparsed key is kept whole");
+            }
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn a_written_range_key_reads_back_rounded_down() -> anyhow::Result<()> {
+        let strategy = ("[A-Za-z0-9_]{1,12}", 0.0_f32..36_000.0, 0.0_f32..36_000.0);
+        property(strategy, |(clip, x, y)| {
+            let (from, to) = if x <= y { (x, y) } else { (y, x) };
+            let key = range_key(&clip, from, to);
+            let (read_clip, range) = parse_key(&key);
+            proptest::prop_assert_eq!(read_clip, clip.as_str(), "the clip of {}", key);
+            let Some((a, b)) = range else {
+                return Err(proptest::test_runner::TestCaseError::fail(format!(
+                    "{key} did not read back as a range"
+                )));
+            };
+            for (written, read) in [(from, a), (to, b)] {
+                // Two decimals, rounded down; f32 holds about seven digits,
+                // so ten hours in hundredths sits at its edge.
+                proptest::prop_assert!(
+                    read <= written + 0.01 && written - read < 0.02,
+                    "{key}: {written} read back as {read}"
+                );
+            }
+            Ok(())
+        })
     }
 
     #[test]

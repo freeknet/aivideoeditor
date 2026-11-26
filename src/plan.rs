@@ -307,6 +307,7 @@ pub(crate) struct Shot {
     #[serde(rename = "in")]
     pub(crate) t_in: f32,
     /// Length in beats.
+    #[serde(deserialize_with = "count")]
     pub(crate) beats: usize,
     /// Horizontal crop centre, 0..1 of the source width.
     #[serde(default = "half")]
@@ -320,6 +321,24 @@ pub(crate) struct Shot {
     /// Why this shot, for the human reading the plan.
     #[serde(default)]
     pub(crate) note: String,
+}
+
+/// The most a bar number or a shot's beat count may be. Far beyond any
+/// track (a hundred thousand bars is hours of music), and small enough
+/// that the beat arithmetic over a whole plan cannot overflow.
+pub(crate) const MAX_COUNT: usize = 100_000;
+
+/// Serde reader for a bar or beat count: a plan file is outside input, and
+/// a count near `usize::MAX` overflowed the timing arithmetic. One past
+/// [`MAX_COUNT`] is refused with the file's own error, naming the field.
+fn count<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<usize, D::Error> {
+    let value = <usize as serde::Deserialize>::deserialize(deserializer)?;
+    if value > MAX_COUNT {
+        return Err(serde::de::Error::custom(format!(
+            "{value} is more than {MAX_COUNT}, the most a bar or beat count can be"
+        )));
+    }
+    Ok(value)
 }
 
 /// Serde default for a centred crop.
@@ -337,12 +356,16 @@ pub(crate) struct Plan {
     /// Music file.
     pub(crate) music: String,
     /// Bar the edit starts on (index into the music map's bars).
+    #[serde(deserialize_with = "count")]
     pub(crate) start_bar: usize,
     /// Bar the drop lands on (the hero shot starts here).
+    #[serde(deserialize_with = "count")]
     pub(crate) drop_bar: usize,
     /// Bar the end card starts on.
+    #[serde(deserialize_with = "count")]
     pub(crate) card_bar: usize,
     /// Bar the edit ends on (exclusive).
+    #[serde(deserialize_with = "count")]
     pub(crate) end_bar: usize,
     /// End card image, shown from `card_bar` to `end_bar`.
     #[serde(default)]
@@ -434,7 +457,7 @@ impl Plan {
             .iter()
             .map(|s| {
                 let a = map.beat_time(self.start_bar, beat) - origin;
-                beat += s.beats;
+                beat = beat.saturating_add(s.beats);
                 let b = map.beat_time(self.start_bar, beat) - origin;
                 (a, b - a)
             })
@@ -455,7 +478,12 @@ impl Plan {
 
     /// Beats of footage before the end card.
     pub(crate) fn footage_beats(&self) -> usize {
-        (self.card_bar - self.start_bar) * 4
+        // Saturating: a hand-edited plan can put the card before the start
+        // (the check reports it), and a bar near `usize::MAX` must not
+        // overflow on the way there.
+        self.card_bar
+            .saturating_sub(self.start_bar)
+            .saturating_mul(4)
     }
 
     /// The key a finding is accepted by: its id, where it is, and the shots
@@ -807,7 +835,10 @@ pub(crate) fn check_with(
     };
     let r = &plan.rules;
 
-    let beats: usize = plan.shots.iter().map(|s| s.beats).sum();
+    let beats = plan
+        .shots
+        .iter()
+        .fold(0_usize, |sum, s| sum.saturating_add(s.beats));
     if beats != plan.footage_beats() {
         push(
             "beat-count",
@@ -843,7 +874,10 @@ pub(crate) fn check_with(
     }
 
     let timing = plan.timing(map);
-    let drop_beat = plan.drop_bar.saturating_sub(plan.start_bar) * 4;
+    let drop_beat = plan
+        .drop_bar
+        .saturating_sub(plan.start_bar)
+        .saturating_mul(4);
     let (rate, frames) = frame_counts(plan, index, &timing, plan.card_span(map).0);
     let mut beat = 0;
     let mut hit_drop = false;
@@ -1205,6 +1239,7 @@ pub(crate) fn report(plan: &Plan, problems: &[Finding]) -> String {
     } else {
         String::new()
     };
+    // writeln! into a String cannot fail.
     let _ = match (hard, soft) {
         (0, 0) => writeln!(s, "{}: ok ({shots} shots){tail}", plan.name),
         (0, _) => writeln!(s, "{}: ok ({shots} shots), {soft} soft{tail}", plan.name),
@@ -1257,6 +1292,79 @@ beats = 4
         let again: Plan = toml::from_str(&toml::to_string_pretty(&plan)?)?;
         assert_eq!(again, plan, "round trip");
         Ok(())
+    }
+
+    #[test]
+    fn a_count_past_any_track_is_refused_when_the_plan_loads() {
+        // Found by the property below: `start_bar = 9223372036854775807`
+        // loaded, then overflowed `footage_beats` and the beat timing.
+        let text = "name = \"p\"\naspect = \"9x16\"\nmusic = \"\"\nstart_bar = 9223372036854775807\n\
+                    drop_bar = 0\ncard_bar = 0\nend_bar = 0\n[[shot]]\nclip = \"A\"\nin = 0.0\nbeats = 4\n";
+        let error = toml::from_str::<Plan>(text).err().map(|e| e.to_string());
+        assert!(
+            error.as_deref().is_some_and(|e| e.contains("100000")),
+            "refused, naming the limit: {error:?}"
+        );
+    }
+
+    #[test]
+    fn any_plan_file_loads_or_errors_and_checks_without_panicking() -> anyhow::Result<()> {
+        // A plan file is edited by people, the assistant and other tools.
+        // TOML can say `nan`, `inf` and huge integers; whatever loads must
+        // go through the rule check (the timeline runs it on every edit)
+        // without a panic.
+        use proptest::prelude::*;
+        let float = prop_oneof![
+            -100.0_f32..400.0,
+            Just(f32::NAN),
+            Just(f32::INFINITY),
+            Just(f32::NEG_INFINITY),
+            Just(f32::MAX),
+        ]
+        .prop_map(|f| {
+            if f.is_nan() {
+                "nan".to_owned()
+            } else if f.is_infinite() {
+                if f > 0.0 { "inf" } else { "-inf" }.to_owned()
+            } else {
+                format!("{f:?}")
+            }
+        });
+        let count = prop_oneof![0_u64..64, Just(u64::from(u32::MAX)), Just(i64::MAX as u64)];
+        let clip = prop_oneof![Just("MVI_1"), Just("MVI_2"), Just("missing")];
+        let shot = (clip, float.clone(), count.clone(), float);
+        let plan = (
+            proptest::collection::vec(count, 4),
+            proptest::collection::vec(shot, 0..6),
+            any::<bool>(),
+        );
+        let people = crate::people::People::default();
+        let index = tiny_index();
+        let map = tiny_map();
+        let paced = crate::beats::MusicMap::paced();
+        crate::test_support::property(plan, |(bars, shots, music)| {
+            let mut text = format!(
+                "name = \"p\"\naspect = \"9x16\"\nmusic = \"{}\"\n",
+                if music { "track.wav" } else { "" }
+            );
+            for (key, bar) in ["start_bar", "drop_bar", "card_bar", "end_bar"]
+                .iter()
+                .zip(&bars)
+            {
+                text.push_str(&format!("{key} = {bar}\n"));
+            }
+            for (clip, t_in, beats, cx) in &shots {
+                text.push_str(&format!(
+                    "[[shot]]\nclip = \"{clip}\"\nin = {t_in}\nbeats = {beats}\ncx = {cx}\n"
+                ));
+            }
+            if let Ok(plan) = toml::from_str::<Plan>(&text) {
+                let map = if music { &map } else { &paced };
+                let findings = super::check(&plan, &index, map, &people);
+                prop_assert!(findings.len() < 10_000, "{} findings", findings.len());
+            }
+            Ok(())
+        })
     }
 
     /// A two-clip index whose clips are long, bright and well focused.

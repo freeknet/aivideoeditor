@@ -268,8 +268,11 @@ impl MusicMap {
     /// past the last detected beat at the track tempo.
     pub(crate) fn beat_time(&self, bar: usize, k: usize) -> f32 {
         let period = 60.0 / self.bpm;
-        let first = bar * 4;
-        let i = first + k;
+        // Saturating: a plan file can name any bar, and one near
+        // `usize::MAX` must extrapolate (to a time past the track), not
+        // overflow.
+        let first = bar.saturating_mul(4);
+        let i = first.saturating_add(k);
         match self.beats.get(i) {
             Some(t) => *t,
             None => {

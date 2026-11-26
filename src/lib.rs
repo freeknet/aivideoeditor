@@ -146,4 +146,6 @@ mod tests {
 #[cfg(test)]
 mod header_check;
 #[cfg(test)]
+mod test_support;
+#[cfg(test)]
 mod unsafe_check;

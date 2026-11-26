@@ -328,8 +328,11 @@ pub(crate) fn apply(
             EditOp::SetBeats { index, beats } => {
                 let i = slot(*index)?;
                 in_scope(i)?;
-                if *beats == 0 {
-                    return Err(err("a shot needs at least one beat".to_owned()));
+                if *beats == 0 || *beats > crate::plan::MAX_COUNT {
+                    return Err(err(format!(
+                        "a shot needs between 1 and {} beats",
+                        crate::plan::MAX_COUNT
+                    )));
                 }
                 let before = plan.shots[i].clone();
                 plan.shots[i].beats = *beats;
@@ -453,7 +456,11 @@ pub(crate) fn apply(
             }
         }
     }
-    let total = |p: &Plan| p.shots.iter().map(|s| s.beats).sum::<usize>();
+    let total = |p: &Plan| {
+        p.shots
+            .iter()
+            .fold(0_usize, |sum, s| sum.saturating_add(s.beats))
+    };
     let (was, now) = (total(base), total(&plan));
     if was != now {
         return Err(OpError {

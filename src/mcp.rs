@@ -983,6 +983,54 @@ pub(crate) mod tests {
     use serde_json::json;
 
     #[test]
+    fn any_message_gets_one_well_formed_reply_or_none() -> anyhow::Result<()> {
+        // What an MCP client sends is outside input: whatever its shape, a
+        // message with an id gets exactly one reply carrying that id and
+        // either a result or an error, and one without an id gets none.
+        use proptest::prelude::*;
+        let dir = tempfile::tempdir()?;
+        let method = prop_oneof![
+            Just(serde_json::Value::from("initialize")),
+            Just(serde_json::Value::from("ping")),
+            Just(serde_json::Value::from("tools/list")),
+            Just(serde_json::Value::from("tools/call")),
+            crate::test_support::any_json(),
+        ];
+        let message = (
+            proptest::option::of(crate::test_support::any_json()),
+            method,
+            crate::test_support::any_json(),
+        );
+        crate::test_support::property(message, |(id, method, params)| {
+            let mut msg = json!({"jsonrpc": "2.0", "method": method, "params": params});
+            if let Some(id) = &id {
+                msg["id"] = id.clone();
+            }
+            let reply = handle(dir.path(), &msg);
+            match (&id, reply) {
+                (None, reply) => prop_assert!(reply.is_none(), "a notification got {reply:?}"),
+                (Some(id), None) => {
+                    return Err(TestCaseError::fail(format!("id {id} got no reply")));
+                }
+                (Some(id), Some(reply)) => {
+                    prop_assert_eq!(&reply["id"], id, "the reply names the request");
+                    let result = reply.get("result").is_some();
+                    let error = reply.get("error").is_some();
+                    prop_assert!(result != error, "result xor error: {reply}");
+                }
+            }
+            Ok(())
+        })?;
+        // Not a JSON object at all: no id, so no reply.
+        crate::test_support::property(crate::test_support::any_json(), |msg| {
+            if msg.get("id").is_none() {
+                prop_assert!(handle(dir.path(), &msg).is_none(), "{msg} has no id");
+            }
+            Ok(())
+        })
+    }
+
+    #[test]
     fn it_speaks_the_handshake_and_lists_tools() -> anyhow::Result<()> {
         let dir = tempfile::tempdir()?;
         let init = handle(
