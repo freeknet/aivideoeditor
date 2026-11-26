@@ -371,43 +371,40 @@ pub fn button(ui: &mut Ui, theme: &Palette, label: &str, emphasis: Emphasis) -> 
 /// An on/off switch with its label to the left. Returns the response; the
 /// value is flipped in place when clicked.
 pub fn switch(ui: &mut Ui, theme: &Palette, on: &mut bool, label: &str) -> Response {
-    // Selects' menu switch: a 32 x 18 track, key when on, ink 20 % when
-    // off; a 14 px knob in the panel colour.
-    let track = Vec2::new(32.0, 18.0);
+    // Material's switch (52 x 32: a primary track and an on-primary thumb
+    // when on, an outlined surface track when off) at the right end of a
+    // full-width row; a click on the label toggles it too.
+    const SWITCH: Vec2 = Vec2::new(52.0, 32.0);
     let width = ui.available_width();
-    let (rect, mut response) =
-        ui.allocate_exact_size(Vec2::new(width, theme::CONTROL_HEIGHT), Sense::click());
-    if response.clicked() {
-        *on = !*on;
-        response.mark_changed();
-    }
-    let value = *on;
-    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Switch, true, value, label));
-    let t = fade(ui.ctx(), response.id, value);
-    let lift = hover_t(ui, response.id.with("hover"), response.hovered());
-    let painter = ui.painter();
-    painter.text(
+    let height = theme::CONTROL_HEIGHT.max(SWITCH.y);
+    let (rect, mut response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
+    ui.painter().text(
         rect.left_center(),
         Align2::LEFT_CENTER,
         label,
         theme::font(theme::BODY_SIZE),
         theme::rgb(theme.text),
     );
-    let track_rect =
-        Rect::from_center_size(rect.right_center() - Vec2::new(track.x / 2.0, 0.0), track);
-    let off = theme.panel.lerp(theme.text, (0.2 + 0.08 * lift).min(1.0));
-    painter.rect_filled(
-        track_rect,
-        CornerRadius::same(9),
-        blend(off, theme.accent, t),
+    let slot = Rect::from_center_size(rect.right_center() - Vec2::new(SWITCH.x / 2.0, 0.0), SWITCH);
+    let enabled = ui.is_enabled();
+    let switch = ui.put(
+        slot,
+        egui_material3::MaterialSwitch::new(on).enabled(enabled),
     );
-    let knob_x = egui::lerp((track_rect.left() + 9.0)..=(track_rect.right() - 9.0), t);
-    painter.circle_filled(
-        egui::pos2(knob_x, track_rect.center().y),
-        7.0,
-        theme::rgb(theme.panel),
-    );
-    focus_ring(ui, theme, &response);
+    if response.clicked() {
+        *on = !*on;
+        response.mark_changed();
+    }
+    if switch.changed() {
+        response.mark_changed();
+    }
+    let value = *on;
+    let info = || egui::WidgetInfo::selected(egui::Role::Switch, enabled, value, label);
+    response.widget_info(info);
+    // The library's switch takes its accessible name from its own text,
+    // which would also draw beside it; the row's label names it instead.
+    switch.widget_info(info);
+    let response = response | switch;
     super::hint::auto(&response, label);
     response
 }
@@ -483,14 +480,19 @@ pub fn grid_layout(available: f32, minimum: f32, gap: f32, count: usize) -> (usi
 
 /// A horizontal meter, `fraction` full, that settles rather than jumps.
 pub fn meter(ui: &mut Ui, theme: &Palette, id: egui::Id, fraction: f32, fill: Rgb) -> Response {
+    // Material's linear progress indicator (active track, gap, inactive
+    // track, stop dot), fed the settled value so it still glides.
     let width = ui.available_width();
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 6.0), Sense::hover());
     let shown = level(ui.ctx(), id, fraction.clamp(0.0, 1.0));
-    let painter = ui.painter();
-    painter.rect_filled(rect, CornerRadius::same(3), theme::rgb(theme.hover));
-    let filled = Rect::from_min_size(rect.min, Vec2::new(rect.width() * shown, rect.height()));
-    painter.rect_filled(filled, CornerRadius::same(3), theme::rgb(fill));
-    response
+    ui.add(
+        egui_material3::MaterialProgress::linear()
+            .value(shown)
+            .max(1.0)
+            .width(width)
+            .height(6.0)
+            .active_color(theme::rgb(fill))
+            .track_color(theme::rgb(theme.hover)),
+    )
 }
 
 /// A colour swatch with a hairline, so a swatch matching its surface still
@@ -680,9 +682,12 @@ pub enum ButtonKind {
     Destructive,
 }
 
-/// A button: `kind`, an optional leading Lucide icon, and a label. 28 px
-/// tall, label in SemiBold 12, 8 px corners, as Selects' `xs` buttons.
-/// An empty `label` with an icon makes a square icon button.
+/// A button: `kind`, an optional leading Lucide icon, and a label, drawn
+/// by egui-material3's `MaterialButton` (Ghost is a text button, Outline
+/// outlined, Secondary filled tonal, Primary and Key filled, Destructive
+/// filled in the error colour). 28 px tall in panels, fully rounded, label
+/// in Material's label-medium. An empty `label` with an icon makes a
+/// square icon button.
 pub fn button_with(
     ui: &mut Ui,
     theme: &Palette,
@@ -704,98 +709,61 @@ pub fn button_sized(
     label: &str,
     height: f32,
 ) -> Response {
-    let font = theme::semibold(ui.ctx(), theme::BODY_SIZE);
-    let galley = (!label.is_empty()).then(|| {
-        ui.painter()
-            .layout_no_wrap(label.to_owned(), font, Color32::PLACEHOLDER)
-    });
-    let icon_size = if galley.is_some() {
-        icons::SMALL
-    } else {
-        icons::SIZE
-    };
-    let text_width = galley.as_ref().map_or(0.0, |g| g.size().x);
-    let width = match (icon.is_some(), galley.is_some()) {
-        (true, false) | (false, false) => height,
-        (false, true) => text_width + SPACE_MD * 2.0 - 2.0,
-        (true, true) => text_width + icon_size + SPACE_XS + 2.0 + SPACE_MD * 2.0 - 2.0,
-    };
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
-    let lift = hover_t(ui, response.id, response.hovered());
-    let pressed = response.is_pointer_button_down_on();
-    let (fill, text, stroke) = match kind {
-        ButtonKind::Ghost => (
-            theme::accent_fill(theme).gamma_multiply(lift),
-            blend(theme.text_muted, theme.text, lift),
-            Stroke::NONE,
-        ),
-        ButtonKind::Outline => (
-            if lift > 0.0 {
-                theme::ink(
-                    theme,
-                    egui::lerp(f32::from(theme::INK_05)..=f32::from(theme::INK_15), lift).round()
-                        as u8,
-                )
-            } else {
-                theme::ink(theme, theme::INK_05)
-            },
-            theme::rgb(theme.text),
-            theme::input_line(theme),
-        ),
-        ButtonKind::Secondary => (
-            blend(theme.raised, theme.raised.lerp(theme.hover, 0.6), lift),
-            theme::rgb(theme.text),
-            Stroke::NONE,
-        ),
-        ButtonKind::Primary => {
-            let rest = theme::primary_fill(theme);
-            (
-                blend(rest, rest.lerp(theme.text_muted, 0.25), lift),
-                theme::primary_text(theme),
-                Stroke::NONE,
-            )
-        }
-        ButtonKind::Key => (
-            blend(theme.accent, theme.accent.lerp(theme.panel, 0.1), lift),
-            theme::rgb(theme.text_on_accent),
-            Stroke::NONE,
-        ),
-        ButtonKind::Destructive => (
-            blend(theme.danger, theme.danger_hover, lift),
-            theme::rgb(theme.text_on_danger),
-            Stroke::NONE,
-        ),
-    };
-    let rect_drawn = if pressed { rect.shrink(0.5) } else { rect };
-    let painter = ui.painter();
-    painter.rect(
-        rect_drawn,
-        CornerRadius::same(theme::RADIUS_MD),
-        fill,
-        stroke,
-        egui::StrokeKind::Inside,
-    );
-    let content = text_width
-        + match (icon.is_some(), galley.is_some()) {
-            (true, true) => icon_size + SPACE_XS + 2.0,
-            (true, false) => icon_size,
-            (false, true) | (false, false) => 0.0,
-        };
-    let mut x = rect.center().x - content / 2.0;
+    use egui_material3::MaterialButton;
+    // The label is one layout job, ave's Lucide glyph and then the text in
+    // Material's label-medium style, so the library's button keeps the
+    // app's icons (it only knows Material Symbols by name) and lays the
+    // pair out as one centred line in its own content colour.
+    let mut job = egui::text::LayoutJob::default();
+    let colour = Color32::PLACEHOLDER;
     if let Some(glyph) = icon {
-        let slot = Rect::from_min_size(
-            egui::pos2(x, rect.center().y - icon_size / 2.0),
-            Vec2::splat(icon_size),
+        let size = if label.is_empty() {
+            icons::SIZE
+        } else {
+            icons::SMALL
+        };
+        job.append(
+            &glyph.to_string(),
+            0.0,
+            egui::TextFormat::simple(
+                crate::gui::font::weight(ui.ctx(), crate::gui::font::ICONS, size),
+                colour,
+            ),
         );
-        icons::paint(painter, slot, glyph, icon_size, text);
-        x += icon_size + SPACE_XS + 2.0;
     }
-    if let Some(galley) = galley {
-        let y = rect.center().y - galley.size().y / 2.0;
-        painter.galley(egui::pos2(x, y), galley, text);
+    if !label.is_empty() {
+        let style = egui_material3::tokens::TypeRole::LabelMedium.style();
+        let leading = if icon.is_some() { SPACE_SM } else { 0.0 };
+        job.append(
+            label,
+            leading,
+            egui::TextFormat {
+                font_id: style.font_id(ui.ctx()),
+                extra_letter_spacing: style.tracking,
+                color: colour,
+                ..egui::TextFormat::default()
+            },
+        );
     }
-    focus_ring(ui, theme, &response);
+    let content_width = ui.painter().layout_job(job.clone()).size().x;
+    let width = if label.is_empty() {
+        height
+    } else {
+        content_width + SPACE_LG * 2.0
+    };
+    let button = match kind {
+        ButtonKind::Ghost => MaterialButton::text(job),
+        ButtonKind::Outline => MaterialButton::outlined(job),
+        ButtonKind::Secondary => MaterialButton::filled_tonal(job),
+        ButtonKind::Primary | ButtonKind::Key => MaterialButton::filled(job),
+        ButtonKind::Destructive => MaterialButton::filled(job)
+            .fill(theme::rgb(theme.danger))
+            .text_color(theme::rgb(theme.text_on_danger)),
+    };
+    // `small` drops Material's 40 px minimum so the button fits the dense
+    // rows (28 px in a panel header); the width keeps M3's 16 px sides.
+    let response = ui.add(button.small().min_size(Vec2::new(width, height)));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
     super::hint::auto(&response, label);
     response
 }
@@ -1118,25 +1086,58 @@ pub fn kbd(ui: &mut Ui, theme: &Palette, keys: &str) -> Response {
     response
 }
 
-/// Views of one panel (Shots / People / Music): text tabs, the open one
-/// filled with Selects' `accent`. Returns whether the choice changed.
+/// Views of one panel (Shots / People / Music): Material secondary tabs,
+/// the open one underlined in primary. Returns whether the choice changed.
 pub fn tab_strip<T: PartialEq + Copy>(
     ui: &mut Ui,
-    theme: &Palette,
+    _theme: &Palette,
     current: &mut T,
     items: &[(T, &str)],
 ) -> bool {
-    let mut changed = false;
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 2.0;
-        for &(value, label) in items {
-            if tab(ui, theme, label, *current == value).clicked() && *current != value {
-                *current = value;
-                changed = true;
-            }
-        }
+    // Material's secondary tabs (an on-surface label and a primary
+    // underline on the open one). The library spreads its tabs over the
+    // whole width it is given, so it gets a box just wide enough for
+    // equal tabs that fit the longest label, and the header row keeps its
+    // other controls.
+    if items.is_empty() {
+        return false;
+    }
+    let font = egui::FontId::proportional(14.0);
+    let widest = items
+        .iter()
+        .map(|&(_, label)| {
+            ui.painter()
+                .layout_no_wrap(label.to_owned(), font.clone(), Color32::PLACEHOLDER)
+                .size()
+                .x
+        })
+        .fold(0.0_f32, f32::max);
+    let width = (widest + SPACE_LG * 2.0) * items.len() as f32;
+    let height = theme::CONTROL_HEIGHT + SPACE_XS;
+    let before = items.iter().position(|&(value, _)| value == *current);
+    let mut index = before.unwrap_or(0);
+    let salt = items
+        .iter()
+        .map(|&(_, label)| label)
+        .collect::<Vec<_>>()
+        .join("|");
+    let tabs = items.iter().fold(
+        egui_material3::MaterialTabs::secondary(&mut index)
+            .id_salt(salt)
+            .height(height),
+        |tabs, &(_, label)| tabs.tab(label),
+    );
+    ui.allocate_ui(Vec2::new(width, height), |ui| {
+        ui.set_width(width);
+        ui.add(tabs)
     });
-    changed
+    match items.get(index) {
+        Some(&(value, _)) if Some(index) != before => {
+            *current = value;
+            true
+        }
+        Some(_) | None => false,
+    }
 }
 
 /// A segmented control, as shadcn's Tabs: a muted track, the chosen
@@ -1597,54 +1598,12 @@ pub fn paint_tick_box(
 /// A checkbox with a label, a drop-in for `ui.checkbox` that is readable:
 /// see [`paint_tick_box`]. Clicking the box or the label toggles `on` and
 /// marks the response changed; `label` may be empty.
-pub fn checkbox(ui: &mut Ui, theme: &Palette, on: &mut bool, label: &str) -> Response {
+pub fn checkbox(ui: &mut Ui, _theme: &Palette, on: &mut bool, label: &str) -> Response {
+    // Material's checkbox: primary fill and an on-primary check when ticked,
+    // an on-surface-variant outline when not, its own state layer. It
+    // takes its colours from the scheme `theme::apply` installed.
     let enabled = ui.is_enabled();
-    let galley = (!label.is_empty()).then(|| {
-        ui.painter().layout_no_wrap(
-            label.to_owned(),
-            theme::font(theme::BODY_SIZE),
-            theme::rgb(theme.text),
-        )
-    });
-    let text_w = galley.as_ref().map_or(0.0, |g| g.size().x + SPACE_SM);
-    let height = CHECKBOX_SIZE.max(galley.as_ref().map_or(0.0, |g| g.size().y));
-    let (rect, mut response) =
-        ui.allocate_exact_size(Vec2::new(CHECKBOX_SIZE + text_w, height), Sense::click());
-    if response.clicked() {
-        *on = !*on;
-        response.mark_changed();
-    }
-    let checked = *on;
-    response
-        .widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, enabled, checked, label));
-    let painter = ui.painter();
-    let tick = Rect::from_min_size(
-        egui::pos2(rect.left(), rect.center().y - CHECKBOX_SIZE / 2.0),
-        Vec2::splat(CHECKBOX_SIZE),
-    );
-    if response.hovered() && enabled {
-        painter.rect_filled(
-            tick.expand(2.0),
-            CornerRadius::same(theme::RADIUS),
-            theme::ink_hover(theme),
-        );
-    }
-    paint_tick_box(painter, theme, tick, checked, enabled);
-    if let Some(galley) = galley {
-        let ink = if enabled {
-            theme::rgb(theme.text)
-        } else {
-            theme::rgb(theme.text_faint)
-        };
-        painter.galley(
-            egui::pos2(
-                tick.right() + SPACE_SM,
-                rect.center().y - galley.size().y / 2.0,
-            ),
-            galley,
-            ink,
-        );
-    }
+    let response = ui.add(egui_material3::MaterialCheckbox::new(on, label).enabled(enabled));
     super::hint::auto(&response, label);
     response
 }

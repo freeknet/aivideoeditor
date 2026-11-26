@@ -18,7 +18,7 @@
 //! Escape and a click on the scrim both dismiss, because a dialog that can
 //! only be closed with the mouse is a dialog that interrupts typing.
 
-use super::theme::{self, SPACE_LG, SPACE_MD};
+use super::theme::{self, SPACE_MD};
 use super::widgets;
 use crate::theme::Palette;
 use egui::{Align2, CornerRadius, Ui, Vec2};
@@ -72,9 +72,10 @@ pub fn show<R>(
             ui.set_opacity(progress);
             egui::Frame::new()
                 .fill(theme::rgb(theme.raised))
-                .stroke(egui::Stroke::new(1.0, theme::rgb(theme.border)))
-                .corner_radius(CornerRadius::same(theme::RADIUS_LG))
-                .inner_margin(theme::margin(SPACE_LG))
+                // Material's dialog: the high container, no outline, the
+                // extra-large shape and 24 px insets.
+                .corner_radius(CornerRadius::same(theme::RADIUS_DIALOG))
+                .inner_margin(theme::margin(theme::SPACE_XL))
                 .shadow(egui::epaint::Shadow {
                     offset: [0, 10],
                     blur: 28,
