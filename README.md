@@ -7,7 +7,7 @@
 [![CI](https://github.com/freeknet/aivideoeditor/actions/workflows/ci.yml/badge.svg)](https://github.com/freeknet/aivideoeditor/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/freeknet/aivideoeditor?sort=semver)](https://github.com/freeknet/aivideoeditor/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![MSRV](https://img.shields.io/badge/rust-1.99%2B-orange.svg)](rust-toolchain.toml)
+[![MSRV](https://img.shields.io/badge/MSRV-1.98-orange.svg)](Cargo.toml)
 [![Platform: Windows](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6.svg)](#install-on-windows)
 [![Supply chain: cargo-deny](https://img.shields.io/badge/supply%20chain-cargo--deny-success.svg)](deny.toml)
 
