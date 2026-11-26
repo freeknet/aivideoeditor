@@ -240,7 +240,10 @@ fn owner(licence: &str) -> Option<String> {
     let line = licence
         .lines()
         .find_map(|line| line.trim().strip_prefix("Copyright"))?;
-    let rest = line.trim().trim_start_matches("(c)").trim_start_matches('©');
+    let rest = line
+        .trim()
+        .trim_start_matches("(c)")
+        .trim_start_matches('©');
     // The year (or a range of years) comes before the name.
     let name = rest
         .trim()
@@ -359,9 +362,21 @@ fn list(people: &[(String, &str)], packages: &[Package]) -> Result<String> {
     writeln!(out, "| Font | Licence | Source |\n|---|---|---|")?;
     for (font, licence, source) in [
         ("Inter", "OFL-1.1", "https://github.com/rsms/inter"),
-        ("Lucide", "ISC (icons from Feather: MIT)", "https://github.com/lucide-icons/lucide"),
-        ("Mona Sans", "OFL-1.1", "https://github.com/github/mona-sans"),
-        ("Roboto Mono", "OFL-1.1", "https://github.com/googlefonts/RobotoMono"),
+        (
+            "Lucide",
+            "ISC (icons from Feather: MIT)",
+            "https://github.com/lucide-icons/lucide",
+        ),
+        (
+            "Mona Sans",
+            "OFL-1.1",
+            "https://github.com/github/mona-sans",
+        ),
+        (
+            "Roboto Mono",
+            "OFL-1.1",
+            "https://github.com/googlefonts/RobotoMono",
+        ),
     ] {
         writeln!(out, "| {font} | {licence} | {source} |")?;
     }
