@@ -48,3 +48,7 @@ deny = []
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
+# The desktop editor's Material 3 widgets come from the maintainer's own fork of
+# egui-material3, which carries fixes (M3 tokens, state layers, AccessKit roles)
+# not yet merged upstream. Cargo.toml pins it to a full commit.
+allow-git = ["https://github.com/freeknet/egui-material3"]
