@@ -231,7 +231,11 @@ jobs:
       # that changes the code generated or the size of ave.exe: the symbols
       # live in the separate .pdb, published below as the `-symbols`
       # archive and never shipped to users.
+      # AVE_REQUIRE_RESOURCES: a release without its icon, manifest and
+      # version resource fails here instead of shipping.
       - name: Build
+        env:
+          AVE_REQUIRE_RESOURCES: "1"
         run: cargo build --release --locked --bins --target ${{ matrix.target }}
 
       # Staged by the same example CI's Windows job runs on every pull

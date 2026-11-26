@@ -132,7 +132,12 @@ jobs:
       # Those change what compiles: a `catch_unwind` that builds in debug
       # does not build under `panic = "abort"`, and this is the step that
       # says so before a tag does.
+      # AVE_REQUIRE_RESOURCES: the binary the package check below unpacks
+      # must carry its icon, manifest and version resource; a build that
+      # could not embed them fails here instead of warning.
       - name: Build release binaries
+        env:
+          AVE_REQUIRE_RESOURCES: "1"
         run: cargo build --release --locked --bins
 
       # The zip a release would ship, built by the same example the release

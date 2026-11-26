@@ -25,6 +25,10 @@
 //! - **The version information** the Properties dialog and Task Manager
 //!   read, taken from `Cargo.toml` so it cannot disagree with the crate.
 //!
+//! A build that cannot embed them (no Windows SDK resource compiler) warns
+//! and goes on, unless `AVE_REQUIRE_RESOURCES=1`, which CI and the release
+//! set: a package without its manifest is not a valid release.
+//!
 //! The build identity (`AVE_BUILD_GIT_HASH`, `AVE_BUILD_GIT_DIRTY`,
 //! `AVE_BUILD_TARGET`, `AVE_BUILD_PROFILE`) is what `ave --diagnose`
 //! prints, so a report from a user's copy names the exact source. A
@@ -115,6 +119,10 @@ fn profile() -> String {
         .unwrap_or(broad)
 }
 
+/// Set by a packaging build (CI, the release): a resource that cannot be
+/// embedded fails it rather than warning.
+const REQUIRE: &str = "AVE_REQUIRE_RESOURCES";
+
 /// Compiles the icon, manifest and version block into the executable.
 fn resources() {
     // The *target*, not the host: `cfg(windows)` in a build script describes
@@ -132,11 +140,16 @@ fn resources() {
     resource.set("Comments", env!("CARGO_PKG_DESCRIPTION"));
     resource.set("LegalCopyright", "Copyright (c) 2026 Lawrence Norton");
 
+    // A package must carry its icon, manifest and version, so CI and the
+    // release set AVE_REQUIRE_RESOURCES and a failure stops them. A
+    // developer's release build without the Windows SDK's resource
+    // compiler still builds, with a warning.
+    println!("cargo:rerun-if-env-changed={REQUIRE}");
     if let Err(error) = resource.compile() {
-        if std::env::var("PROFILE").as_deref() == Ok("release") {
-            eprintln!("could not embed the Windows resources: {error}");
+        if std::env::var_os(REQUIRE).is_some_and(|value| value == "1") {
+            eprintln!("could not embed the Windows resources, and {REQUIRE}=1 is set: {error}");
             std::process::exit(1);
         }
-        println!("cargo:warning=could not embed the Windows resources: {error}");
+        println!("cargo:warning=ave.exe gets no icon, manifest or version: {error}");
     }
 }
