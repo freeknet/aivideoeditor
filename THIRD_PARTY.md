@@ -22,7 +22,7 @@ Compiled into `ave.exe`. Where each came from is in [`assets/fonts/NOTICE`](asse
 
 ## Crates
 
-Every crate compiled into `ave.exe` (`aivideoeditor` for `x86_64-pc-windows-msvc`), 249 in all, with the licence its authors published it under. The release zip's `THIRD-PARTY-NOTICES.txt` has each one's version and full licence text.
+Every crate compiled into `ave.exe` (`aivideoeditor` for `x86_64-pc-windows-msvc`), 246 in all, with the licence its authors published it under. The release zip's `THIRD-PARTY-NOTICES.txt` has each one's version and full licence text.
 
 | Crate | Licence | Source |
 |---|---|---|
@@ -84,7 +84,6 @@ Every crate compiled into `ave.exe` (`aivideoeditor` for `x86_64-pc-windows-msvc
 | either | MIT OR Apache-2.0 | https://github.com/rayon-rs/either |
 | emath | MIT OR Apache-2.0 | https://github.com/emilk/egui/tree/main/crates/emath |
 | env_filter | MIT OR Apache-2.0 | https://github.com/rust-cli/env_logger |
-| env_logger | MIT OR Apache-2.0 | https://github.com/rust-cli/env_logger |
 | epaint | MIT OR Apache-2.0 | https://github.com/emilk/egui/tree/main/crates/epaint |
 | epaint_default_fonts | (MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0 | https://github.com/emilk/egui/tree/main/crates/epaint_default_fonts |
 | equivalent | Apache-2.0 OR MIT | https://github.com/indexmap-rs/equivalent |
@@ -126,8 +125,6 @@ Every crate compiled into `ave.exe` (`aivideoeditor` for `x86_64-pc-windows-msvc
 | is_terminal_polyfill | MIT OR Apache-2.0 | https://github.com/polyfill-rs/is_terminal_polyfill |
 | itertools | MIT OR Apache-2.0 | https://github.com/rust-itertools/itertools |
 | itoa | MIT OR Apache-2.0 | https://github.com/dtolnay/itoa |
-| jiff | Unlicense OR MIT | https://github.com/BurntSushi/jiff |
-| jiff-core | Unlicense OR MIT | https://github.com/BurntSushi/jiff |
 | khronos-egl | MIT OR Apache-2.0 | https://github.com/timothee-haudebourg/khronos-egl |
 | kurbo | Apache-2.0 OR MIT | https://github.com/linebender/kurbo |
 | libc | MIT OR Apache-2.0 | https://github.com/rust-lang/libc |
