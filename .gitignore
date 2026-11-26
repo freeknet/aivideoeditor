@@ -6,6 +6,7 @@
 /.idea
 /.vscode
 /.claude/worktrees
+/.claude/settings.local.json
 .DS_Store
 Thumbs.db
 # Credentials stay out of version control; a documented example may be committed.
