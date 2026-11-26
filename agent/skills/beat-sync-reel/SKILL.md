@@ -41,7 +41,15 @@ answer ("timing is from the measurements").
 
 ## The JaJa rules
 
-- No repeated shots; no repeated performers within the person gap.
+- Structure (`rules.structure`): Flow Night cuts are `sections`, one run
+  per performer (`section_bars` long, changing on whole pairs of bars),
+  shots in recording order, jump-cutting forward past the slow stretches
+  (at least `min_skip` seconds within one take). The breakdown is one calm
+  performer, the drop opens the strongest fire performer's section, the
+  rest follow in recording order. Nobody comes back after their section.
+  `mix` (the General default) interleaves everyone instead.
+- No repeated shots (with sections: never the same frames twice); with
+  mix, no repeated performers within the person gap.
 - Best moments only: nothing dark, soft, shaky, whip or blown; no
   transitions or idle moments; no blocked views.
 - The drop lands on the hero fire shot.

@@ -25,7 +25,8 @@ src/
   beats.rs           the music map: tempo, beats, bars, sections, drops -> music.json
   people.rs          who is in which clip: people.toml
   plan.rs            the plan (a TOML storyboard), its timing and the rule check
-  draft.rs           drafts a plan from the index and the music map
+  draft/             drafts a plan from the index and the music map; sections.rs:
+                     the one-section-per-performer structure
   alternatives.rs    ranked replacements for one plan slot
   fix.rs             automatic fixes and plain-words advice for check findings
   search.rs          the shot-log query language; search/marks.rs: pick / reject / rating

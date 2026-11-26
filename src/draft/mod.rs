@@ -46,7 +46,9 @@ use crate::analyze::segments::{Camera, median};
 use crate::beats::MusicMap;
 use crate::index::{Index, Scored};
 use crate::people::People;
-use crate::plan::{Aspect, Finish, Memory, Plan, Rules, Shot};
+use crate::plan::{Aspect, Finish, Memory, Plan, Rules, Shot, Structure};
+
+mod sections;
 
 /// What a slot wants to show.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -750,6 +752,9 @@ pub(crate) fn draft(
     music: &str,
 ) -> Result<Plan> {
     let memory = Memory::for_index(index);
+    if spec.rules.structure == Structure::Sections {
+        return sections::draft(index, map, people, spec, music, &memory);
+    }
     let mut last = None;
     // The rules as set first, easing the pace; then, if the footage still
     // runs out, the repeat rules loosened a step at a time (a few long takes
@@ -797,16 +802,19 @@ pub(crate) fn draft(
 /// shot beats it, above zero so the slot is filled.
 const STAND_IN_FIT: f32 = 0.05;
 
-/// One drafting attempt at pacing ease `ease`.
-fn draft_paced(
-    index: &Index,
-    map: &MusicMap,
-    people: &People,
-    spec: &Spec,
-    music: &str,
-    memory: &Memory,
-    ease: usize,
-) -> Result<Plan> {
+/// Where a cut sits on the track: the bars it starts and drops on, and how
+/// many bars (whole phrases) follow the drop before the end card.
+#[derive(Clone, Copy, Debug)]
+struct Layout {
+    start_bar: usize,
+    drop_bar: usize,
+    after: usize,
+}
+
+/// The [`Layout`] for `spec` on `map`: a 2-bar lead for short cuts and 4
+/// otherwise, the first drop (or the biggest rise standing in for one), and
+/// as many whole phrases after it as fit the target length.
+fn layout(map: &MusicMap, spec: &Spec) -> Result<Layout> {
     let lead = if spec.seconds <= 20.0 { 2 } else { 4 };
     let stand_in;
     let drop = match map.drops.first() {
@@ -838,11 +846,32 @@ fn draft_paced(
     {
         after += 4;
     }
-    let start_bar = drop.bar.saturating_sub(lead);
-    let lead = drop.bar - start_bar;
-    let card_bar = drop.bar + after;
+    Ok(Layout {
+        start_bar: drop.bar.saturating_sub(lead),
+        drop_bar: drop.bar,
+        after,
+    })
+}
+
+/// One drafting attempt at pacing ease `ease`.
+fn draft_paced(
+    index: &Index,
+    map: &MusicMap,
+    people: &People,
+    spec: &Spec,
+    music: &str,
+    memory: &Memory,
+    ease: usize,
+) -> Result<Plan> {
+    let Layout {
+        start_bar,
+        drop_bar,
+        after,
+    } = layout(map, spec)?;
+    let lead = drop_bar - start_bar;
+    let card_bar = drop_bar + after;
     let rules = spec.rules.clone();
-    let slots = grid(map, lead, after, drop.bar, ease);
+    let slots = grid(map, lead, after, drop_bar, ease);
 
     let mut placed: Vec<Option<Shot>> = vec![None; slots.len()];
     let mut order: Vec<usize> = (0..slots.len()).collect();
@@ -921,7 +950,7 @@ fn draft_paced(
         aspect: spec.aspect,
         music: music.to_owned(),
         start_bar,
-        drop_bar: drop.bar,
+        drop_bar,
         card_bar,
         end_bar: card_bar + spec.card_bars,
         end_card: spec.end_card.clone(),
@@ -1027,7 +1056,7 @@ mod tests {
     }
 
     /// A 140 BPM map whose bar energies are `low`.
-    fn map(low: &[f32]) -> MusicMap {
+    pub(super) fn map(low: &[f32]) -> MusicMap {
         MusicMap {
             path: String::new(),
             duration: 100.0,
@@ -1120,7 +1149,7 @@ mod tests {
 
     /// Fourteen 60 s fire clips, each with one fireball; clip F07's is the
     /// biggest. Returns the index and F07's fireball onset.
-    fn fireball_night() -> (crate::index::Index, f32) {
+    pub(super) fn fireball_night() -> (crate::index::Index, f32) {
         use crate::analyze::{ClipIndex, Sample, moments, segments};
         let mut clips = Vec::new();
         for c in 0..14 {

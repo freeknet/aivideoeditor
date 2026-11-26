@@ -92,6 +92,43 @@ pub(crate) struct Rules {
     pub(crate) reject_moments: Vec<String>,
     /// Whether a caption saying the view is blocked fails the check.
     pub(crate) reject_blocked: bool,
+    /// How performers are laid out over the cut (see [`Structure`]).
+    pub(crate) structure: Structure,
+    /// With [`Structure::Sections`]: the bars a performer's section aims
+    /// for. Performers with more good footage get more, weaker ones less;
+    /// sections change on whole pairs of bars.
+    pub(crate) section_bars: usize,
+    /// With [`Structure::Sections`]: two shots of one clip cut together
+    /// must skip forward at least this many seconds. The skip is the
+    /// point (the cut jumps past the lull to the next trick); under it the
+    /// picture only stutters.
+    pub(crate) min_skip: f32,
+}
+
+/// How a cut lays its performers out.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum Structure {
+    /// The best shots of everyone, interleaved: the same performer at
+    /// least `person_gap` shots apart. A montage.
+    #[default]
+    Mix,
+    /// One section per performer, each a few bars long and changing on
+    /// the phrase: inside a section the shots run in recording order and
+    /// cut forward past the slow stretches (beat-synced jump cuts), so
+    /// every performer gets a run that reads as their set, sped up. A
+    /// performer never comes back after their section.
+    Sections,
+}
+
+impl Structure {
+    /// The word the recipe and the plan's `[rules]` use.
+    pub(crate) fn key(self) -> &'static str {
+        match self {
+            Self::Mix => "mix",
+            Self::Sections => "sections",
+        }
+    }
 }
 
 impl Default for Rules {
@@ -105,9 +142,17 @@ impl Default for Rules {
             drop_subject: "fire".into(),
             reject_moments: vec!["transition".into(), "idle".into()],
             reject_blocked: true,
+            structure: Structure::Mix,
+            section_bars: 4,
+            min_skip: MIN_SKIP,
         }
     }
 }
+
+/// Default [`Rules::min_skip`]: two seconds is about one move of a fire
+/// routine, so a forward cut of at least that lands on a different move
+/// rather than the same one a few frames on.
+pub(crate) const MIN_SKIP: f32 = 2.0;
 
 /// Default look-alike threshold on segment-signature distance.
 ///
@@ -677,7 +722,7 @@ pub(crate) const IDS: [(&str, Severity, &str); 21] = [
     (
         "repeat-performer",
         Severity::Soft,
-        "the same performer within person_gap shots",
+        "the same performer within person_gap shots (with sections: back after their section)",
     ),
     (
         "lookalike",
@@ -692,7 +737,7 @@ pub(crate) const IDS: [(&str, Severity, &str); 21] = [
     (
         "jump-cut",
         Severity::Soft,
-        "a cut within one clip that skips a few seconds",
+        "a cut within one clip that skips a few seconds (with sections: under min_skip, or back)",
     ),
     (
         "exposure-jump",
@@ -1002,8 +1047,38 @@ pub(crate) fn check_with(
             }
         }
         // Repeats against every earlier shot.
+        let sections = r.structure == Structure::Sections;
+        if sections && let Some(left) = left_section(plan, people, k) {
+            push(
+                "repeat-performer",
+                n,
+                format!(
+                    "`{}` comes back after their section ended at shot {left}",
+                    people.who(shot)
+                ),
+            );
+        }
         for (j, prev) in plan.shots[..k].iter().enumerate() {
-            if prev.clip == shot.clip && (prev.t_in - shot.t_in).abs() < r.same_clip_gap {
+            if sections {
+                // Sections cut one take forward on purpose; only shots
+                // showing the same frames repeat.
+                let (first, len) = if prev.t_in <= shot.t_in {
+                    (prev.t_in, timing[j].1)
+                } else {
+                    (shot.t_in, *dur)
+                };
+                if prev.clip == shot.clip && (prev.t_in - shot.t_in).abs() < len.max(0.0) {
+                    push(
+                        "same-stretch",
+                        n,
+                        format!(
+                            "shows the same frames of {} as shot {} (from {first:.1}s)",
+                            shot.clip,
+                            j + 1
+                        ),
+                    );
+                }
+            } else if prev.clip == shot.clip && (prev.t_in - shot.t_in).abs() < r.same_clip_gap {
                 push(
                     "same-stretch",
                     n,
@@ -1017,7 +1092,7 @@ pub(crate) fn check_with(
                 );
             }
             let (a, b) = (people.who(shot), people.who(prev));
-            if !a.is_empty() && a == b && k - j <= r.person_gap {
+            if !sections && !a.is_empty() && a == b && k - j <= r.person_gap {
                 push(
                     "repeat-performer",
                     n,
@@ -1031,6 +1106,7 @@ pub(crate) fn check_with(
             }
             if r.lookalike > 0.0
                 && prev.clip != shot.clip
+                && !(sections && !a.is_empty() && a == b)
                 && let Some(d) = lookalike(index, people, (shot, *dur), (prev, timing[j].1))
                 && d < r.lookalike
             {
@@ -1069,6 +1145,25 @@ pub(crate) fn check_with(
     problems
 }
 
+/// With sections: when shot `k`'s performer already had a run that a
+/// different performer ended, the shot number (1-based) that run ended on.
+fn left_section(plan: &Plan, people: &People, k: usize) -> Option<usize> {
+    let shots = &plan.shots;
+    let me = people.who(shots.get(k)?);
+    if me.is_empty() {
+        return None;
+    }
+    // Walk back over this run of `me`, then find `me` before another face.
+    let mut j = k;
+    while j > 0 && people.who(&shots[j - 1]) == me {
+        j -= 1;
+    }
+    (0..j)
+        .rev()
+        .find(|&i| people.who(&shots[i]) == me)
+        .map(|i| i + 1)
+}
+
 /// The seam checks: what happens across each cut (shot `n` out, shot
 /// `n + 1` in). Jump cuts within one clip, then exposure and colour jumps
 /// between the edge samples. The cut onto the drop is spared the exposure
@@ -1096,12 +1191,23 @@ fn seams(plan: &Plan, index: &Index, timing: &[(f32, f32)], drop_beat: usize) ->
         if a.clip == b.clip {
             let gap = b.t_in - a_out;
             // A gap within half a sample step is the same moment carried on.
-            if gap.abs() < JUMP_CUT_GAP && gap.abs() > 0.05 {
+            // Sections skip forward on purpose: only a skip too small to
+            // land on a new move, or one going back, is a jump there.
+            let limit = if plan.rules.structure == Structure::Sections {
+                if gap < 0.0 {
+                    JUMP_CUT_GAP
+                } else {
+                    plan.rules.min_skip
+                }
+            } else {
+                JUMP_CUT_GAP
+            };
+            if gap.abs() < limit && gap.abs() > 0.05 {
                 push(
                     "jump-cut",
                     n,
                     format!(
-                        "{} cuts to itself {} {:.1}s: reads as a jump cut (under {JUMP_CUT_GAP:.0}s)",
+                        "{} cuts to itself {} {:.1}s: reads as a jump cut (under {limit:.0}s)",
                         a.clip,
                         if gap > 0.0 { "skipping" } else { "back" },
                         gap.abs()
@@ -1807,6 +1913,56 @@ beats = 4
             text.trim_end()
                 .ends_with(&format!("t: ok (2 shots), {} soft", got.len())),
             "passes with the soft count: {text}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sections_judge_runs_and_forward_skips() -> anyhow::Result<()> {
+        let mut plan = two_shots();
+        plan.rules.structure = super::Structure::Sections;
+        // One take cut forward: A 10-12, then A from 14.5 (a 2.5 s skip).
+        plan.shots[1].clip = "A".into();
+        plan.shots[1].t_in = 14.5;
+        let got = findings(&plan, &tiny_index());
+        assert!(
+            !got.iter()
+                .any(|f| matches!(f.id, "jump-cut" | "same-stretch" | "repeat-performer")),
+            "a forward skip past min_skip is the structure working: {got:?}"
+        );
+        // A skip too small to land on a new move still stutters.
+        plan.shots[1].t_in = 13.0;
+        assert!(
+            findings(&plan, &tiny_index())
+                .iter()
+                .any(|f| f.id == "jump-cut" && f.message.contains("under 2s")),
+            "under min_skip"
+        );
+        // The same frames twice repeat.
+        plan.shots[1].t_in = 11.0;
+        assert!(
+            findings(&plan, &tiny_index())
+                .iter()
+                .any(|f| f.id == "same-stretch"),
+            "overlapping frames"
+        );
+        // x, y, x: x comes back after their section.
+        let mut back = two_shots();
+        back.rules.structure = super::Structure::Sections;
+        back.shots[0].beats = 4;
+        back.shots[1].beats = 2;
+        let mut third = back.shots[1].clone();
+        third.clip = "A".into();
+        back.shots.push(third);
+        for (s, who) in back.shots.iter_mut().zip(["x", "y", "x"]) {
+            s.who = who.into();
+        }
+        let got = findings(&back, &tiny_index());
+        assert!(
+            got.iter().any(|f| f.id == "repeat-performer"
+                && f.shot == Some(3)
+                && f.message.contains("comes back")),
+            "back after their section: {got:?}"
         );
         Ok(())
     }

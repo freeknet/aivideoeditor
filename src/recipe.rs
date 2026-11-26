@@ -267,8 +267,8 @@ impl Default for Recipe {
 
 impl Recipe {
     /// The Flow Night template: the weekly promo set (three reels, a story,
-    /// a feed cut, a wide cut and a recap), fire on the drop, and captions
-    /// that know the props.
+    /// a feed cut, a wide cut and a recap), fire on the drop, a section per
+    /// performer, and captions that know the props.
     pub(crate) fn flow_night() -> Self {
         Self {
             deliverables: vec![
@@ -280,7 +280,12 @@ impl Recipe {
                 Deliverable::new("wide-60", Aspect::Wide, 60.0),
                 Deliverable::new("recap", Aspect::Wide, 180.0),
             ],
-            rules: crate::plan::Rules::default(),
+            // A section per performer: on a night of a few turns each, a
+            // run per performer reads as the night; a montage reads random.
+            rules: crate::plan::Rules {
+                structure: crate::plan::Structure::Sections,
+                ..crate::plan::Rules::default()
+            },
             template: "Flow Night".to_owned(),
             about: "a night of fire spinning, LED props, aerial silks and DJs".to_owned(),
             props: [

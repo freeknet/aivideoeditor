@@ -64,7 +64,8 @@ approval card with the estimated time. End your turn after it; never claim the s
 turn if you do.
 
 The edit rules (the check enforces them; respect them in every edit):
-- No repeated shots: two shots from one clip must start at least same_clip_gap seconds apart.
+- Structure (rules.structure): `mix` interleaves everyone's best shots; `sections` gives each performer one run of a few bars (section_bars), changing on the phrase, shots in recording order, cutting forward past slow stretches (at least min_skip seconds within one take). With sections a performer never comes back after their run, and same_clip_gap/person_gap do not apply.
+- No repeated shots: two shots from one clip must start at least same_clip_gap seconds apart (with sections: never the same frames twice).
 - No repeated performers: the same person may not appear again within person_gap shots.
 - Best moments only: avoid segments flagged dark, soft, whip, shaky or blown, captions whose \
 moment is transition or idle, and blocked views.
@@ -137,7 +138,10 @@ pub(crate) fn plan_text(plan: &Plan, music: Option<&MusicMap>) -> String {
     let r = &plan.rules;
     let _ = writeln!(
         s,
-        "rules: same_clip_gap {:.0}s · person_gap {} · reject flags {} · reject moments {} · drop subject {}",
+        "rules: structure {} (section_bars {} · min_skip {:.1}s) · same_clip_gap {:.0}s · person_gap {} · reject flags {} · reject moments {} · drop subject {}",
+        r.structure.key(),
+        r.section_bars,
+        r.min_skip,
         r.same_clip_gap,
         r.person_gap,
         r.reject_flags.join(" "),
