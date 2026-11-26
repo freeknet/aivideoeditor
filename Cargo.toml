@@ -2,11 +2,11 @@
 name = "aivideoeditor"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.98"
+rust-version = "1.99"
 description = "Index footage, plan beat-synced edits, render and export timelines."
 authors = ["Lawrence Norton"]
 license = "MIT"
-repository = "https://github.com/lnorton89/aivideoeditor"
+repository = "https://github.com/freeknet/aivideoeditor"
 readme = "README.md"
 publish = false
 

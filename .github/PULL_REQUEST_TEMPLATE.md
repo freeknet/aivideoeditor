@@ -26,4 +26,4 @@ change to anything drawn wants a screenshot.
       `test:` / `build:` / `ci:` prefixes
 
 Full guidelines, including how to build and what CI enforces, are in
-[`CONTRIBUTING.md`](https://github.com/lnorton89/aivideoeditor/blob/main/CONTRIBUTING.md).
+[`CONTRIBUTING.md`](https://github.com/freeknet/aivideoeditor/blob/main/CONTRIBUTING.md).
