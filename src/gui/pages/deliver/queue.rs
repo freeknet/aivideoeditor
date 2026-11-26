@@ -14,6 +14,10 @@
 //! the recipe's output folder under its delivery name on a background
 //! thread while the next job starts. An OTIO export, when the recipe asks
 //! for one, follows its render.
+//!
+//! A delivery name already holding a file ave did not make (see
+//! [`files::Manifest`]) is left alone unless the task says the user agreed
+//! to replace it; each copy ave makes is noted in the manifest.
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -33,6 +37,11 @@ pub(crate) enum Kind {
         deliver: PathBuf,
         /// Whether it was rendered despite failing its check.
         forced: bool,
+        /// Whether it may replace a file at `deliver` that ave did not
+        /// make (the user said so); a file ave delivered is always replaced.
+        replace: bool,
+        /// The night, whose delivery manifest records the copy.
+        work: PathBuf,
     },
     /// An OTIO export, written to `timeline`.
     Otio {
@@ -72,8 +81,9 @@ pub(crate) struct Queue {
     pub(crate) pending: VecDeque<Task>,
     /// Running now: the job id and its task.
     pub(crate) current: Option<(u64, Task)>,
-    /// Copies in flight, with whether their render was forced.
-    copies: Vec<(files::Copying, bool)>,
+    /// Copies in flight, with whether their render was forced and the
+    /// night whose manifest records them.
+    copies: Vec<(files::Copying, bool, PathBuf)>,
     /// What finished, newest last.
     pub(crate) outputs: Vec<Output>,
     /// What failed, as one line each.
@@ -93,28 +103,37 @@ impl Queue {
 
     /// Copies still running, by destination.
     pub(crate) fn copying(&self) -> impl Iterator<Item = &PathBuf> {
-        self.copies.iter().map(|(c, _)| &c.to)
+        self.copies.iter().map(|(c, _, _)| &c.to)
     }
 
     /// Advances the queue: finishes the running job's follow-up, collects
     /// finished copies, starts the next job.
     pub(crate) fn tick(&mut self, jobs: &mut Jobs, ctx: Option<&egui::Context>) {
-        self.copies.retain(|(copy, forced)| match copy.poll() {
-            None => true,
-            Some(Ok(bytes)) => {
-                self.outputs.push(Output {
-                    path: copy.to.clone(),
-                    what: "video",
-                    bytes: Some(bytes),
-                    forced: *forced,
-                });
-                false
-            }
-            Some(Err(e)) => {
-                self.failures.push(e);
-                false
-            }
-        });
+        self.copies
+            .retain(|(copy, forced, work)| match copy.poll() {
+                None => true,
+                Some(Ok(bytes)) => {
+                    let mut manifest = files::Manifest::load(work);
+                    manifest.record(&copy.to);
+                    if let Err(e) = manifest.save(work) {
+                        self.failures.push(format!(
+                            "{} was delivered, but ave could not note it: {e:#}",
+                            copy.to.display()
+                        ));
+                    }
+                    self.outputs.push(Output {
+                        path: copy.to.clone(),
+                        what: "video",
+                        bytes: Some(bytes),
+                        forced: *forced,
+                    });
+                    false
+                }
+                Some(Err(e)) => {
+                    self.failures.push(e);
+                    false
+                }
+            });
         if let Some((id, task)) = &self.current {
             let status = jobs.get(*id).map(|j| j.status.clone());
             match status {
@@ -124,10 +143,24 @@ impl Queue {
                         video,
                         deliver,
                         forced,
+                        replace,
+                        work,
                     } => {
-                        let copy =
-                            files::Copying::start(video.clone(), deliver.clone(), ctx.cloned());
-                        self.copies.push((copy, *forced));
+                        // Checked again now: the file may have appeared
+                        // while the render ran.
+                        let owner = files::Manifest::load(work).owner(deliver);
+                        if owner == files::Owner::Other && !*replace {
+                            self.failures.push(format!(
+                                "{} is already in the folder and ave did not make it, so it \
+                                 was left alone; the render is in {}",
+                                deliver.display(),
+                                video.display()
+                            ));
+                        } else {
+                            let copy =
+                                files::Copying::start(video.clone(), deliver.clone(), ctx.cloned());
+                            self.copies.push((copy, *forced, work.clone()));
+                        }
                     }
                     Kind::Otio { timeline } => self.outputs.push(Output {
                         path: timeline.clone(),

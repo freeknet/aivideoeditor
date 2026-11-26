@@ -29,6 +29,13 @@
 //! the first shot selected, so the inspector's Facts show its recording
 //! time, camera and act.
 //!
+//! And the Export panel, with the timeline folded so all of it shows
+//! (`export.png`): the
+//! night's cuts by deliverable, the output options, Render and what is
+//! delivered. `export-overwrite.png` ticks the cuts whose delivery name
+//! already holds a file and presses Render, for the question it asks: put
+//! a dummy `reel-30.mp4` in the scratch night's `videos` folder first.
+//!
 //! `AVE_SCREENSHOT_ONLY` (comma-separated shot names) limits the run to
 //! those shots.
 //!
@@ -46,7 +53,7 @@
 use std::path::{Path, PathBuf};
 
 use aivideoeditor::gui::app::{Action, App, Page};
-use aivideoeditor::gui::ui::layout::ViewMode;
+use aivideoeditor::gui::ui::layout::{Region, ViewMode};
 use egui_kittest::kittest::Queryable;
 use serde_json::{Value, json};
 
@@ -77,6 +84,12 @@ const CHAT_LIST: &str = "chat-list";
 
 /// The shot with two chats open as tabs.
 const CHAT_TABS: &str = "chat-tabs";
+
+/// The shot of the Export panel, the timeline folded.
+const EXPORT: &str = "export";
+
+/// The Export panel asking before it replaces a file ave did not make.
+const EXPORT_OVERWRITE: &str = "export-overwrite";
 
 /// What one shot changed in the night: fixture logs to remove, and files
 /// (the chat index, `ave.toml`) to put back as they were (`None`: absent).
@@ -128,6 +141,9 @@ fn fixtures(work: &Path, shot: &str) -> anyhow::Result<Fixtures> {
     }
     if shot == ACTS {
         page_setting(work, "review", "sort", "acts".into())?;
+        return Ok(written);
+    }
+    if shot == EXPORT || shot == EXPORT_OVERWRITE {
         return Ok(written);
     }
     std::fs::create_dir_all(chat.join("chats"))?;
@@ -310,6 +326,36 @@ fn fold_first_act(harness: &mut egui_kittest::Harness<'_, Option<App>>) -> anyho
     Ok(())
 }
 
+/// Ticks every unticked cut (the auto-tick leaves out those whose delivery
+/// name already holds a file) and presses Render, so the panel asks what to
+/// do about the files ave did not make. Nothing renders: the question
+/// waits for an answer.
+fn render_over_a_file(harness: &mut egui_kittest::Harness<'_, Option<App>>) -> anyhow::Result<()> {
+    let ticks: Vec<_> = harness
+        .query_all_by(|node| {
+            node.role() == egui::accesskit::Role::CheckBox
+                && node.toggled() == Some(egui::accesskit::Toggled::False)
+        })
+        .collect();
+    if ticks.is_empty() {
+        anyhow::bail!("no unticked cut: put a file under a cut's delivery name first");
+    }
+    for tick in ticks {
+        tick.click();
+    }
+    harness.run_steps(4);
+    harness
+        .query_all_by(|node| node.label().is_some_and(|l| l.starts_with("Render ")))
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("no Render button"))?
+        .click();
+    for _ in 0..4 {
+        harness.run_steps(15);
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    Ok(())
+}
+
 /// Selects the second marker in the list (its timecode seeks and selects).
 fn select_marker(harness: &mut egui_kittest::Harness<'_, Option<App>>) -> anyhow::Result<()> {
     harness
@@ -410,6 +456,17 @@ fn main() -> anyhow::Result<()> {
             vec![Action::Go(Page::Review)],
             vec![(egui::Modifiers::NONE, egui::Key::ArrowRight)],
         ));
+        for name in [EXPORT, EXPORT_OVERWRITE] {
+            shots.push((
+                name.to_owned(),
+                vec![
+                    Action::Go(Page::Plan),
+                    Action::ToggleExport,
+                    Action::TogglePanel(Region::Timeline),
+                ],
+                Vec::new(),
+            ));
+        }
         for name in [PROPOSAL, APPROVAL, FIRST_CUT, CHAT_LIST, CHAT_TABS] {
             shots.push((name.to_owned(), vec![Action::Go(Page::Review)], Vec::new()));
         }
@@ -443,7 +500,15 @@ fn main() -> anyhow::Result<()> {
             None => None,
         };
         let mut harness = egui_kittest::Harness::builder()
-            .with_size(egui::vec2(width, height))
+            // The Export panel is tall: room for all of it in one picture.
+            .with_size(egui::vec2(
+                width,
+                if name == EXPORT || name == EXPORT_OVERWRITE {
+                    height + 500.0
+                } else {
+                    height
+                },
+            ))
             // Every input must be reachable by name; `run_steps` does not
             // run the check, so it is also called before each render below.
             .with_accessibility_check(true)
@@ -492,6 +557,9 @@ fn main() -> anyhow::Result<()> {
         }
         if name == ACTS {
             fold_first_act(&mut harness)?;
+        }
+        if name == EXPORT_OVERWRITE {
+            render_over_a_file(&mut harness)?;
         }
         if name == FIRST_CUT {
             harness

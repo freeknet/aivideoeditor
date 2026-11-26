@@ -86,6 +86,27 @@ impl EncoderChoice {
         }
     }
 
+    /// Why this encoder cannot render on this PC, for a picker to grey it
+    /// out with: `None` when it can, or (for x264) before the check is
+    /// done. A GPU encoder is off until the check says it works.
+    pub(crate) fn unavailable(self) -> Option<String> {
+        match crate::media::encoder_available(self.encoder()) {
+            Some(true) => None,
+            None if self == Self::X264 => None,
+            None => Some(format!(
+                "Checking whether this PC can encode with {}\u{2026}",
+                self.short_label()
+            )),
+            Some(false) => Some(match self {
+                Self::X264 => "ffmpeg here cannot encode with x264".to_owned(),
+                Self::Amf => "Needs an AMD graphics card and its driver: not found here".to_owned(),
+                Self::Nvenc => {
+                    "Needs an NVIDIA graphics card and its driver: not found here".to_owned()
+                }
+            }),
+        }
+    }
+
     /// The name a picker shows.
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -570,8 +591,9 @@ impl Recipe {
     }
 
     /// Loads the recipe for the night at `work`: its own `recipe.toml`, else
-    /// the user-level default, else the built-in week. Warnings say what was
-    /// skipped while parsing.
+    /// the user-level default, else the template its plans were cut for
+    /// (see [`Recipe::inferred`]). Warnings say what was skipped while
+    /// parsing.
     pub(crate) fn load(work: &Path) -> (Self, Vec<String>, Source) {
         if let Ok(text) = std::fs::read_to_string(work.join(FILE)) {
             let (recipe, warnings) = parse(&text);
@@ -581,7 +603,42 @@ impl Recipe {
             let (recipe, warnings) = parse(&text);
             return (recipe, warnings, Source::UserDefault);
         }
-        (Self::default(), Vec::new(), Source::BuiltIn)
+        (Self::inferred(work), Vec::new(), Source::BuiltIn)
+    }
+
+    /// The recipe for a night with no recipe on disk: the template whose
+    /// deliverables name the most of `<work>/plans/*.toml`, so a night cut
+    /// for Flow Night before it had a `recipe.toml` still lists its cuts
+    /// under their deliverables. General wins a tie (and a night with no
+    /// plans).
+    pub(crate) fn inferred(work: &Path) -> Self {
+        let stems: Vec<String> = std::fs::read_dir(work.join("plans"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "toml"))
+            .filter_map(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
+            .collect();
+        Self::for_plans(&stems, crate::template::catalog())
+    }
+
+    /// The recipe of whichever of `templates` names the most of the plan
+    /// `stems`; the first template (General) wins a tie, and stands when
+    /// there are no templates.
+    fn for_plans(stems: &[String], templates: Vec<crate::template::Template>) -> Self {
+        let fits = |recipe: &Self| {
+            let ids: Vec<&str> = recipe.deliverables.iter().map(|d| d.id.as_str()).collect();
+            stems.iter().filter(|s| assign(&ids, s).is_some()).count()
+        };
+        let mut best: Option<(usize, Self)> = None;
+        for t in templates {
+            let n = fits(&t.recipe);
+            if best.as_ref().is_none_or(|(m, _)| n > *m) {
+                best = Some((n, t.recipe));
+            }
+        }
+        best.map(|(_, r)| r).unwrap_or_default()
     }
 
     /// [`Recipe::load`] for screens that ask every frame: the file is read
@@ -1097,6 +1154,21 @@ person_gap = \"lots\"
         assert_eq!(source, Source::Night, "the night's own file");
         assert_eq!(back, recipe, "round trip");
         Ok(())
+    }
+
+    #[test]
+    fn a_night_without_a_recipe_takes_the_template_its_plans_were_cut_for() {
+        let stems =
+            |names: &[&str]| -> Vec<String> { names.iter().map(|n| (*n).to_owned()).collect() };
+        let flow = Recipe::for_plans(
+            &stems(&["feed-30", "reel-15", "reel-30", "reel-60", "wide-60"]),
+            crate::template::built_in(),
+        );
+        assert_eq!(flow.template, "Flow Night", "five Flow Night cuts");
+        let general = Recipe::for_plans(&stems(&["teaser"]), crate::template::built_in());
+        assert_eq!(general.template, "General", "nothing fits: General");
+        let empty = Recipe::for_plans(&[], crate::template::built_in());
+        assert_eq!(empty, Recipe::default(), "no plans: General");
     }
 
     #[test]

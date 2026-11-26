@@ -208,7 +208,7 @@ fn path_box_as(
     let room = (rect.right() - theme::SPACE_SM - x).max(0.0);
     let (text, color) = match path {
         Some(p) => {
-            let shown = p.display().to_string();
+            let shown = shown_path(p);
             let shown = if missing {
                 format!("{shown} (missing)")
             } else if absent {
@@ -238,8 +238,20 @@ fn path_box_as(
         color,
     );
     match path {
-        Some(p) => response.hint(p.display().to_string()),
+        Some(p) => response.hint(shown_path(p)),
         None => response,
+    }
+}
+
+/// A path as the file manager writes it: on Windows every separator a
+/// backslash, so a work folder saved with forward slashes does not show as
+/// `…/Flow Night/2026-11-11\videos`.
+pub(crate) fn shown_path(path: &std::path::Path) -> String {
+    let text = path.display().to_string();
+    if cfg!(windows) {
+        text.replace('/', "\\")
+    } else {
+        text
     }
 }
 
