@@ -61,6 +61,17 @@ jobs:
           toolchain: "1.99.1"
           components: rustfmt
       - run: cargo fmt --all -- --check
+      # actionlint checks every workflow's expressions, job graph and
+      # reusable-workflow inputs. No pinned action ships it, so it is built
+      # from its tag with the runner's Go, whose checksum database verifies
+      # the source. Its shellcheck pass over `run:` blocks is off until the
+      # existing scripts have been through it once.
+      - name: actionlint
+        shell: bash
+        run: |
+          set -euo pipefail
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          "$(go env GOPATH)/bin/actionlint" -shellcheck=
 
   deny:
     name: cargo-deny
