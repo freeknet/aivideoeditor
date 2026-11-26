@@ -1,0 +1,7 @@
+# The MSVC C runtime linked into every Windows binary rather than loaded
+# from vcruntime140.dll, which is not part of Windows: without this a clean
+# machine with no Visual C++ redistributable refuses to start ave.exe. Any
+# C code a dependency builds follows the same setting through the `cc`
+# crate, which compiles it /MT when this feature is on.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
