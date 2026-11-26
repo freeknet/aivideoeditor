@@ -47,6 +47,7 @@ pub mod command_palette;
 mod commands;
 pub mod config;
 mod draft;
+mod fix;
 pub mod gui;
 pub mod icon;
 mod index;

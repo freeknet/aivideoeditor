@@ -24,6 +24,9 @@
 //! every plan for the shot, the list open beside the tracks and the second
 //! marker selected, so its colour swatches show.
 //!
+//! The timeline's Findings list open (`plan-findings.png`), each finding
+//! with its Fix, Ask chat and Accept actions, after the fixes are worked out.
+//!
 //! And the Shots browser grouped by act (`review-acts.png`): `ave.toml`
 //! switched to *Group by → Acts* for the shot, the first act folded and
 //! the first shot selected, so the inspector's Facts show its recording
@@ -64,6 +67,8 @@ const COMPARE: &str = "plan-compare";
 const SHOT_LIST: &str = "plan-shot-list";
 /// The shot of the timeline's markers: pins on the ruler and the list.
 const MARKERS: &str = "plan-markers";
+/// The shot of the check bar's Findings list, open, with its actions.
+const FINDINGS: &str = "plan-findings";
 /// Two shots flagged into the chat.
 const FLAGGED: &str = "plan-flagged";
 
@@ -421,6 +426,11 @@ fn main() -> anyhow::Result<()> {
             Vec::new(),
         ));
         shots.push((MARKERS.to_owned(), vec![Action::Go(Page::Plan)], Vec::new()));
+        shots.push((
+            FINDINGS.to_owned(),
+            vec![Action::Go(Page::Plan)],
+            Vec::new(),
+        ));
         // Two shots of the first cut pointed at in the chat: their @ flags on
         // the timeline, the message's references and the inspector's summary.
         let first_plan = night.as_ref().and_then(|n| {
@@ -555,6 +565,9 @@ fn main() -> anyhow::Result<()> {
         if name == MARKERS {
             select_marker(&mut harness)?;
         }
+        if name == FINDINGS {
+            open_findings(&mut harness)?;
+        }
         if name == ACTS {
             fold_first_act(&mut harness)?;
         }
@@ -655,6 +668,24 @@ fn open_compare(harness: &mut egui_kittest::Harness<'_, Option<App>>) -> anyhow:
     for _ in 0..20 {
         harness.run_steps(15);
         std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+    Ok(())
+}
+
+/// Opens the check bar's Findings list and lets the fixes be worked out
+/// (one finding a frame).
+fn open_findings(harness: &mut egui_kittest::Harness<'_, Option<App>>) -> anyhow::Result<()> {
+    harness
+        .query_by_label("Findings")
+        .ok_or_else(|| anyhow::anyhow!("no Findings button: the open cut passes every rule"))?
+        .click();
+    for _ in 0..10 {
+        harness.run_steps(15);
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    if let Some(fix) = harness.query_by_label("Fix") {
+        fix.hover();
+        harness.run_steps(30);
     }
     Ok(())
 }

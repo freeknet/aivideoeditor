@@ -929,6 +929,7 @@ fn draft_paced(
         finish: Finish::default(),
         shots: placed.into_iter().flatten().collect(),
         comments: Vec::new(),
+        accepted: Vec::new(),
     })
 }
 

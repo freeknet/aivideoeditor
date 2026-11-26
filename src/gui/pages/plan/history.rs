@@ -203,6 +203,7 @@ mod tests {
             }],
             finish: Default::default(),
             comments: Vec::new(),
+            accepted: Vec::new(),
         }
     }
 

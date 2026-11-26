@@ -44,6 +44,7 @@
 mod comments;
 mod compare;
 mod edit;
+mod findings;
 mod history;
 mod storyboard;
 mod strips;
@@ -230,6 +231,8 @@ pub(crate) struct State {
     checked: Option<(u64, Option<u32>)>,
     /// `plan::check` on the shown plan.
     problems: Vec<Finding>,
+    /// Automatic fixes for `problems`, worked out while the list is open.
+    fixes: Option<findings::Fixes>,
     /// Zoom and scroll.
     view: View,
     /// The pointer tool.
@@ -831,7 +834,7 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
         state.checked = Some(key);
     }
     let mut issues: BTreeMap<usize, Vec<String>> = BTreeMap::new();
-    for p in &state.problems {
+    for p in state.problems.iter().filter(|p| !shown_plan.is_accepted(p)) {
         if let Some(n) = p.shot.filter(|&n| n > 0) {
             issues.entry(n - 1).or_default().push(p.text());
         }
@@ -2071,6 +2074,7 @@ mod tests {
             finish: Default::default(),
             shots,
             comments: Vec::new(),
+            accepted: Vec::new(),
         };
         plan(
             "reel-a",
@@ -2360,6 +2364,114 @@ mod tests {
             None,
             "no cut after the last shot"
         );
+        Ok(())
+    }
+
+    /// A night whose plan `reel-x` has one colour jump (a blue last shot
+    /// after two grey ones), indexed and mapped.
+    fn jumpy_night() -> anyhow::Result<(tempfile::TempDir, std::path::PathBuf)> {
+        let dir = tempfile::tempdir()?;
+        let work = dir.path().join("2026-11-13").join("_ave");
+        std::fs::create_dir_all(work.join("plans"))?;
+        let mut index = crate::fix::tests::index();
+        crate::fix::tests::paint(&mut index, "C", 0.3, [0.0, 0.05, 0.95]);
+        index.save(&work)?;
+        crate::fix::tests::map().save(&work)?;
+        let mut plan = crate::fix::tests::plan();
+        plan.name = "reel-x".into();
+        plan.save(&super::history::live_path(&work, "reel-x"))?;
+        Ok((dir, work))
+    }
+
+    #[test]
+    fn fix_in_the_findings_list_clears_a_colour_jump_as_one_undoable_edit() -> anyhow::Result<()> {
+        use egui_kittest::kittest::Queryable;
+        let (_dir, work) = jumpy_night()?;
+        let mut h = harness(work.clone());
+        h.run_steps(4);
+        let ids = |h: &egui_kittest::Harness<'static, Option<crate::gui::app::App>>| {
+            h.state()
+                .as_ref()
+                .map(|app| {
+                    app.pages
+                        .plan
+                        .problems
+                        .iter()
+                        .map(|f| f.id)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+        assert_eq!(ids(&h), vec!["colour-jump"], "one colour jump to fix");
+        // The soft count opens the list.
+        h.query_by_label_contains("soft: taste rules bent")
+            .ok_or_else(|| anyhow::anyhow!("no soft count"))?
+            .click();
+        h.run_steps(8);
+        assert!(
+            h.query_by_label("Ask chat").is_some() && h.query_by_label("Accept").is_some(),
+            "the list offers every action"
+        );
+        h.query_by_label("Fix")
+            .ok_or_else(|| anyhow::anyhow!("no Fix button"))?
+            .click();
+        h.run_steps(6);
+        assert!(ids(&h).is_empty(), "the jump is gone: {:?}", ids(&h));
+        let app = h
+            .state()
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("no app"))?;
+        let plan = app
+            .pages
+            .plan
+            .plan
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("no plan"))?;
+        assert_ne!(plan.shots[2].clip, "C", "the blue shot was swapped");
+        assert_eq!(
+            app.pages.plan.undo.undo_label(),
+            Some("fix colour-jump at cut 2|3"),
+            "one undoable edit"
+        );
+        assert!(app.pages.plan.dirty.is_some(), "saved as a version soon");
+        Ok(())
+    }
+
+    #[test]
+    fn accept_in_the_findings_list_stops_the_count_and_undo_brings_it_back() -> anyhow::Result<()> {
+        use egui_kittest::kittest::Queryable;
+        let (_dir, work) = jumpy_night()?;
+        let mut h = harness(work);
+        h.run_steps(4);
+        h.query_by_label("Findings")
+            .ok_or_else(|| anyhow::anyhow!("no Findings button"))?
+            .click();
+        h.run_steps(4);
+        h.query_by_label("Accept")
+            .ok_or_else(|| anyhow::anyhow!("no Accept button"))?
+            .click();
+        h.run_steps(4);
+        let accepted = |h: &egui_kittest::Harness<'static, Option<crate::gui::app::App>>| {
+            h.state()
+                .as_ref()
+                .and_then(|app| app.pages.plan.plan.as_ref())
+                .map(|p| p.accepted.clone())
+                .unwrap_or_default()
+        };
+        assert_eq!(
+            accepted(&h),
+            vec!["colour-jump@2 B@15.00x4 C@15.00x4".to_owned()],
+            "stored in the plan"
+        );
+        assert!(
+            h.query_by_label("0 soft: taste rules bent (repeats, flags, jump cuts, exposure and colour jumps); 1 accepted. Click to fix them").is_some(),
+            "no longer counted"
+        );
+        h.query_by_label("Undo")
+            .ok_or_else(|| anyhow::anyhow!("no Undo on the accepted row"))?
+            .click();
+        h.run_steps(4);
+        assert!(accepted(&h).is_empty(), "counted again");
         Ok(())
     }
 }

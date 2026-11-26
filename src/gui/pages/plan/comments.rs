@@ -590,6 +590,7 @@ mod tests {
             finish: Default::default(),
             shots: Vec::new(),
             comments: Vec::new(),
+            accepted: Vec::new(),
         }
     }
 

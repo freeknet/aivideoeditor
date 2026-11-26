@@ -4709,6 +4709,7 @@ mod tests {
             finish: Default::default(),
             shots: vec![shot("A", 1.0), shot("B", 2.0)],
             comments: Vec::new(),
+            accepted: Vec::new(),
         }
         .save(&work.join("plans").join("reel-a.toml"))?;
         if log {

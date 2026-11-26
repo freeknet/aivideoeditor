@@ -12,6 +12,18 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Every check finding can be solved from where it is shown. The timeline's Findings list
+  (also opened by clicking the soft or hard count) gives each finding *Fix*, the best
+  automatic fix, re-checked so it clears the finding without adding a hard one, with what
+  it does in its tooltip ("Swap shot 4 MVI_7925/3 → MVI_7990/1 (clears colour jump 0.43,
+  no new findings)"), applied as one undoable edit saved as a new version; *Ask chat*,
+  which puts a prompt naming the shots in the composer so the assistant proposes a fix
+  card; and, for soft findings, *Accept*, which stores the finding in the plan's
+  `accepted` list so it stops counting until its shots change (with an Undo). *Fix all*
+  applies every automatic fix in turn. Hard findings say in plain words what they mean
+  and what to do. The same fixes are `ave check --fix` (applies the safe ones, prints
+  each and saves a new version) and the assistant's `plan_fix` tool (each finding's fixes
+  as ops to stage with `plan_edit`).
 - ffmpeg's folder can be set in *Settings → Tools*, which also says whether ffmpeg runs;
   when it cannot be found the start page and the guide strip say so, with the install
   command and a way to Settings, instead of every step failing with "starting ffmpeg".
