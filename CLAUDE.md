@@ -25,7 +25,11 @@ cargo run                                       # the app, debug
 cargo run --release                             # the app, as shipped
 cargo deny check                                # licences, advisories, sources
 cargo run --example changelog -- --check        # CHANGELOG.md matches the history
+cargo run --example credits -- --check          # THIRD_PARTY.md matches Cargo.lock
 ```
+
+`THIRD_PARTY.md` is generated: after a dependency change, run
+`cargo run --example credits` and commit the result.
 
 All of these are clean on `main` and enforced by CI
 (`.github/workflows/ci.yml`). A warning is a build failure there.

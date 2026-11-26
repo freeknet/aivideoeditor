@@ -102,6 +102,13 @@ jobs:
       - name: Changelog
         run: cargo run --example changelog -- --check
 
+      # THIRD_PARTY.md is generated from Cargo.lock and the history by
+      # examples/credits.rs; a dependency bump that did not regenerate it
+      # fails here rather than shipping a stale list. It reads the whole
+      # history for the contributors, hence this job's full checkout.
+      - name: Credits
+        run: cargo run --example credits -- --check
+
       # Release is where `panic = "abort"`, LTO and one codegen unit apply.
       # Those change what compiles: a `catch_unwind` that builds in debug
       # does not build under `panic = "abort"`, and this is the step that

@@ -164,6 +164,13 @@ jobs:
           # MIT) require the notices to travel with the binary.
           mkdir -p "$staging/fonts"
           cp assets/fonts/NOTICE assets/fonts/*.txt "$staging/fonts/"
+          # The crates' credits, and the full notices their MIT, BSD and
+          # Apache licences ask to travel with the binary: every shipped
+          # crate at its exact version with its licence texts, generated
+          # from Cargo.lock here because it is large and moves with every
+          # bump.
+          cp THIRD_PARTY.md "$staging/"
+          cargo run --example credits -- --notices "$staging/THIRD-PARTY-NOTICES.txt"
 
           symbols="dist/${name}-symbols"
           mkdir -p "$symbols"
