@@ -67,6 +67,12 @@ cargo run --example package -- package --out dist
 cargo run --example package -- check dist/aivideoeditor-v<version>-dev-x86_64-pc-windows-msvc.zip
 ```
 
+Every job reports into one aggregate check, `ci-ok`, which passes only
+when all of them did; branch protection on `main` requires that one check.
+`.github/workflows/scheduled.yml` runs weekly on top: new RustSec
+advisories (which can turn red with no push), `cargo machete` for unused
+dependencies, and a line-coverage report of the library's tests.
+
 ### What a Linux run proves
 
 The app ships for Windows, and the platform layer under `src/win/` only

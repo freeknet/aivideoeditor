@@ -198,3 +198,33 @@ jobs:
       # the authority; this one just fails first, and cheaply.
       - name: Cross-check the Windows build
         run: cargo clippy --locked --all-targets --all-features --target x86_64-pc-windows-msvc -- -D warnings
+
+  # The one check branch protection requires. It passes only when every job
+  # above succeeded, so a job that is added, renamed or never started (a
+  # broken `if:`) cannot leave the merge button green: requiring each job by
+  # name would leave nothing to wait for. `always()` makes it report a
+  # failure instead of being skipped when a job it needs failed.
+  ci-ok:
+    name: ci-ok
+    if: always()
+    needs: [format, deny, windows, linux]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every required job passed
+        shell: bash
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          fail=0
+          for job in format deny windows linux; do
+            got=$(jq -r --arg j "$job" '.[$j].result' <<<"$NEEDS")
+            if [ "$got" = "success" ]; then
+              echo "ok      $job"
+            else
+              echo "FAILED  $job: $got"
+              fail=1
+            fi
+          done
+          exit "$fail"
