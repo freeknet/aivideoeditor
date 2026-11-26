@@ -86,6 +86,27 @@ impl EncoderChoice {
         }
     }
 
+    /// Why this encoder cannot render on this PC, for a picker to grey it
+    /// out with: `None` when it can, or (for x264) before the check is
+    /// done. A GPU encoder is off until the check says it works.
+    pub(crate) fn unavailable(self) -> Option<String> {
+        match crate::media::encoder_available(self.encoder()) {
+            Some(true) => None,
+            None if self == Self::X264 => None,
+            None => Some(format!(
+                "Checking whether this PC can encode with {}\u{2026}",
+                self.short_label()
+            )),
+            Some(false) => Some(match self {
+                Self::X264 => "ffmpeg here cannot encode with x264".to_owned(),
+                Self::Amf => "Needs an AMD graphics card and its driver: not found here".to_owned(),
+                Self::Nvenc => {
+                    "Needs an NVIDIA graphics card and its driver: not found here".to_owned()
+                }
+            }),
+        }
+    }
+
     /// The name a picker shows.
     pub(crate) fn label(self) -> &'static str {
         match self {

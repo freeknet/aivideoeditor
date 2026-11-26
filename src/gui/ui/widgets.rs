@@ -1148,6 +1148,19 @@ pub fn segmented<T: PartialEq + Copy>(
     current: &mut T,
     items: &[(T, &str)],
 ) -> bool {
+    segmented_gated(ui, theme, current, items, |_| None)
+}
+
+/// [`segmented`] with options that cannot be picked: `off` gives the reason
+/// an option is unavailable (`None`: available). An unavailable option is
+/// drawn faint, does not take a click, and says why on hover.
+pub fn segmented_gated<T: PartialEq + Copy>(
+    ui: &mut Ui,
+    theme: &Palette,
+    current: &mut T,
+    items: &[(T, &str)],
+    off: impl Fn(T) -> Option<String>,
+) -> bool {
     let font = theme::medium(ui.ctx(), theme::BODY_SIZE);
     let galleys: Vec<_> = items
         .iter()
@@ -1178,10 +1191,20 @@ pub fn segmented<T: PartialEq + Copy>(
         );
         x += width;
         let id = ui.scope_id().with(("segment", label));
-        let response = ui.interact(rect, id, Sense::click());
-        super::hint::auto(&response, label);
+        let why_off = off(value);
+        let enabled = why_off.is_none();
+        let sense = if enabled {
+            Sense::click()
+        } else {
+            Sense::hover()
+        };
+        let mut response = ui.interact(rect, id, sense);
+        match &why_off {
+            None => super::hint::auto(&response, label),
+            Some(why) => response = super::hint::Hint::hint(response, why),
+        }
         let on = *current == value;
-        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, on, label));
+        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, enabled, on, label));
         let lift = hover_t(ui, id, response.hovered());
         let painter = ui.painter();
         if on {
@@ -1197,14 +1220,16 @@ pub fn segmented<T: PartialEq + Copy>(
                 egui::StrokeKind::Inside,
             );
         }
-        let ink = if on {
+        let ink = if !enabled {
+            theme::rgb(theme.text_faint).gamma_multiply(0.55)
+        } else if on {
             theme::rgb(theme.text)
         } else {
             blend(theme.text_muted, theme.text, lift)
         };
         painter.galley(rect.center() - galley.size() / 2.0, galley, ink);
         focus_ring(ui, theme, &response);
-        if response.clicked() && !on {
+        if enabled && response.clicked() && !on {
             *current = value;
             changed = true;
         }

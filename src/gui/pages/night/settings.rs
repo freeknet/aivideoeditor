@@ -603,11 +603,7 @@ fn recipe_table(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
         });
         ui.add_space(theme::SPACE_XS + 2.0);
         parts::form_row(ui, theme, "Encoder", |ui| {
-            let items: Vec<(recipe::EncoderChoice, &str)> = recipe::EncoderChoice::ALL
-                .iter()
-                .map(|c| (*c, c.label()))
-                .collect();
-            changed |= widgets::segmented(ui, theme, &mut loaded.recipe.encoder, &items);
+            changed |= encoder_picker(ui, theme, &mut loaded.recipe.encoder, false);
         });
         changed |= nvenc_hint(ui, theme, &mut loaded.recipe.encoder);
         ui.add_space(theme::SPACE_XS + 2.0);
@@ -646,29 +642,69 @@ fn recipe_table(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
     state.save_if_done(editing);
 }
 
-/// With an NVIDIA card and the CPU encoder chosen: a line offering NVENC,
-/// several times faster. Returns whether it switched.
+/// A line under the encoder picker: with the chosen encoder not working on
+/// this PC, says so and offers x264; with an NVIDIA card and the CPU
+/// encoder chosen, offers NVENC, several times faster. Returns whether it
+/// switched.
 pub(crate) fn nvenc_hint(
     ui: &mut egui::Ui,
     theme: &crate::theme::Palette,
     encoder: &mut recipe::EncoderChoice,
 ) -> bool {
-    if *encoder != recipe::EncoderChoice::X264 || !crate::media::gpu_decode() {
+    let works = |e: recipe::EncoderChoice| crate::media::encoder_available(e.encoder());
+    let (text, to) = if works(*encoder) == Some(false) {
+        (
+            format!(
+                "{} does not work on this PC, so a render would fail.",
+                encoder.short_label()
+            ),
+            recipe::EncoderChoice::X264,
+        )
+    } else if *encoder == recipe::EncoderChoice::X264
+        && works(recipe::EncoderChoice::Nvenc) == Some(true)
+    {
+        (
+            "NVIDIA card found: NVENC is several times faster.".to_owned(),
+            recipe::EncoderChoice::Nvenc,
+        )
+    } else {
         return false;
-    }
+    };
     let mut switched = false;
     ui.horizontal_wrapped(|ui| {
+        ui.add_space(theme::SPACE_XS);
         ui.label(
-            egui::RichText::new("NVIDIA card found: NVENC is several times faster.")
+            egui::RichText::new(text)
                 .font(theme::font(theme::SMALL_SIZE))
                 .color(theme::rgb(theme.text_muted)),
         );
-        if widgets::ghost_button(ui, theme, "Use NVENC").clicked() {
-            *encoder = recipe::EncoderChoice::Nvenc;
+        if widgets::ghost_button(ui, theme, &format!("Use {}", to.short_label())).clicked() {
+            *encoder = to;
             switched = true;
         }
     });
     switched
+}
+
+/// The encoder picker: every encoder, those that do not work on this PC
+/// greyed out with the reason on hover. `short` uses the narrow labels.
+pub(crate) fn encoder_picker(
+    ui: &mut egui::Ui,
+    theme: &crate::theme::Palette,
+    encoder: &mut recipe::EncoderChoice,
+    short: bool,
+) -> bool {
+    let items: Vec<(recipe::EncoderChoice, &str)> = recipe::EncoderChoice::ALL
+        .iter()
+        .map(|c| (*c, if short { c.short_label() } else { c.label() }))
+        .collect();
+    widgets::segmented_gated(
+        ui,
+        theme,
+        encoder,
+        &items,
+        recipe::EncoderChoice::unavailable,
+    )
 }
 
 /// The measures the shot browser can show as bars, by recipe name.

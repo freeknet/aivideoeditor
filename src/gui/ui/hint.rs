@@ -160,7 +160,7 @@ pub fn describe(label: &str) -> Option<&'static str> {
         "Approve" => "Let the assistant run this",
         "Sign in" => "Sign in to Claude in the browser, for the chat",
         "Back to the template's rules" => "Put every drafting rule back to what the template sets",
-        "x264" => "Encode on the processor: slower, the most compatible",
+        "x264" | "Use x264" => "Encode on the processor: slower, the most compatible",
         "NVENC" | "Use NVENC" => "Encode on the NVIDIA graphics card: several times faster",
         "AMF" => "Encode on an AMD graphics card: faster",
         "x264 (CPU)" => "Encode on the processor: slower, the most compatible",

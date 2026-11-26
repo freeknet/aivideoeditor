@@ -122,6 +122,52 @@ pub(crate) fn gpu_decode() -> bool {
     })
 }
 
+/// Whether ffmpeg can encode with `encoder` on this machine: `None` until
+/// the check has run. The first call starts one background check of every
+/// encoder (each encodes one small frame, so a build that lists
+/// `h264_nvenc` on a PC without an NVIDIA card counts as without it), so a
+/// screen can ask every frame.
+pub(crate) fn encoder_available(encoder: crate::render::Encoder) -> Option<bool> {
+    type Found = std::sync::Mutex<Option<[bool; 3]>>;
+    static FOUND: std::sync::OnceLock<std::sync::Arc<Found>> = std::sync::OnceLock::new();
+    let slot = FOUND.get_or_init(|| {
+        let slot: std::sync::Arc<Found> = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let fill = std::sync::Arc::clone(&slot);
+        std::thread::spawn(move || {
+            let found = [
+                encodes("libx264"),
+                encodes("h264_amf"),
+                encodes("h264_nvenc"),
+            ];
+            if let Ok(mut s) = fill.lock() {
+                *s = Some(found);
+            }
+        });
+        slot
+    });
+    let found = (*slot.lock().ok()?)?;
+    let i = match encoder {
+        crate::render::Encoder::X264 => 0,
+        crate::render::Encoder::Amf => 1,
+        crate::render::Encoder::Nvenc => 2,
+    };
+    found.get(i).copied()
+}
+
+/// Whether ffmpeg encodes one 256 px black frame with the video codec
+/// `codec` (hardware encoders refuse anything much smaller).
+fn encodes(codec: &str) -> bool {
+    command("ffmpeg")
+        .args(["-v", "error", "-nostdin", "-f", "lavfi", "-i"])
+        .arg("color=c=black:s=256x256:d=0.1")
+        .args(["-frames:v", "1", "-c:v", codec, "-f", "null", "-"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
 /// A command for an ffmpeg-suite tool, already [`quiet`]: every ffmpeg and
 /// ffprobe the program runs is built here, so none can open a window.
 pub(crate) fn command(name: &str) -> Command {

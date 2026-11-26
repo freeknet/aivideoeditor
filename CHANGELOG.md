@@ -444,6 +444,10 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- The encoder pickers (export panel, project settings) offered NVENC and AMF on any PC.
+  Each encoder is now tried once in the background; one that does not work here is greyed
+  out with the reason on hover, and a project set to one says a render would fail and
+  offers x264. *Use NVENC* is offered only where NVENC really encodes.
 - Rendering a long cut of 4K footage needed about 12 GB of memory (one 4K decoder per shot,
   all open at once) and took 19 minutes for a 3-minute, 69-shot cut. Renders now run in two
   stages: each shot is conformed on its own, three at a time, into a near-lossless part
