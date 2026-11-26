@@ -444,6 +444,21 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- The export panel never replaces a file it did not make. ave notes each video it
+  delivers (`<work>/renders/delivered.json`, with size and time); a delivery name already
+  holding anything else (your own edit, say) shows *file exists*, and Render asks first,
+  listing the files: render beside them as `<name>-ave.mp4` (the default), replace them,
+  or cancel. Only ave's own files count as *delivered*.
+- The export panel lists every plan: one that fits no deliverable appears under *Other
+  cuts* with the shape and length read from the plan, tickable and rendered under its own
+  name, and the count reads "5 cuts · 7 deliverables" instead of "0 plans".
+- Export panel layout: Render sits right under the options (no gap), is grey and faded
+  when off with the reason beside it, and says before the press when it will ask about
+  files in the folder; the empty *Delivered* section says "Nothing rendered yet. Tick cuts
+  above and press Render." instead of showing a lone icon; long names are cut short
+  instead of pushing the status out of the panel; the output folder shows with Windows
+  separators throughout; the tick-all and clear buttons are off when there is nothing to
+  do; and status badges have accessible names.
 - A night with no `recipe.toml` (and no saved default) took the General template, so a
   night cut for Flow Night showed its plans as matching nothing. It now takes whichever
   template's deliverables name the most of its plans.

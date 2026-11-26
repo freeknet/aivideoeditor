@@ -1285,6 +1285,8 @@ pub fn pill(ui: &mut Ui, theme: &Palette, text: &str, tone: Tone) -> Response {
     );
     let size = Vec2::new(galley.size().x + SPACE_SM + SPACE_XS, SPACE_LG + SPACE_XS);
     let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
+    // Painted text: name it, so a screen reader reads the status.
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, text));
     ui.painter()
         .rect_filled(rect, CornerRadius::same(theme::RADIUS), fill);
     ui.painter()
