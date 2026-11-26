@@ -85,7 +85,9 @@ fn run(cli: Cli) -> anyhow::Result<()> {
     if let Some(font) = cli.font {
         config.font = Some(font);
     }
-    aivideoeditor::gui::run::run(config, cli.open)
+    let result = aivideoeditor::gui::run::run(config, cli.open);
+    aivideoeditor::flush_logs(std::time::Duration::from_secs(2));
+    result
 }
 
 /// Reports a startup failure somewhere the user will actually see it.

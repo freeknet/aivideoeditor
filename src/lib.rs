@@ -90,14 +90,23 @@ pub const ACCENT: color::Rgb = match color::Rgb::from_hex("#ff3fb4") {
 /// The application id: config directory, single-instance mutex, tray host.
 pub const APP_ID: &str = "aivideoeditor";
 
-/// Installs the logger (stderr, `RUST_LOG`, default info). The window
-/// calls this too, so engine and player warnings reach a terminal.
+/// Installs the window app's logger: `RUST_LOG`-filtered (default info)
+/// lines to stderr and to a session file under
+/// `%LOCALAPPDATA%\aivideoeditor\logs`, which keeps the last ten sessions.
 pub fn init_logging() {
-    logging::init();
+    logging::init_session();
 }
 
-/// Makes a panic in the window app visible: written to a crash log next to
-/// the config and shown in a dialog, before the abort closes the window.
+/// Writes out what the session log still holds in memory. Call before the
+/// process exits; it waits at most `timeout`.
+pub fn flush_logs(timeout: std::time::Duration) {
+    // A log that cannot be flushed at exit has nowhere left to say so.
+    logging::flush(timeout);
+}
+
+/// Makes a panic in the window app visible: appended to `crash.log` in
+/// `%LOCALAPPDATA%\aivideoeditor` with the last log lines, and shown in a
+/// dialog, before the abort closes the window.
 pub fn install_crash_report() {
     logging::install_crash_report();
 }

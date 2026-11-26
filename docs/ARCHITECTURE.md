@@ -8,7 +8,7 @@ src/
   main.rs            parse the command line; run a subcommand headless, or open the window
   lib.rs             module graph; NAME, TAGLINE, ACCENT, APP_ID; run_command
   cli.rs             the command line: window switches and the subcommands
-  logging.rs         stderr logging, and the crash report for the window app
+  logging.rs         RUST_LOG-filtered log: stderr, session files, ring; crash report
   color.rs           Rgb, OKLCh, the rainbow Ramp, WCAG contrast
   theme/             Palette (derived from a few stated colours) + readability rules
   motion.rs          the four durations, the easing curves, Tween

@@ -37,7 +37,9 @@ toml = "1.2"
 base64 = "0.23"
 cpal = "0.18"
 crossbeam-channel = "0.5"
-env_logger = "0.11"
+# RUST_LOG's directive syntax, without env_logger's formatting and
+# terminal stack: the logger in src/logging.rs writes its own lines.
+env_filter = { version = "2", default-features = false, features = ["std"] }
 rayon = "1"
 rfd = "0.18"
 rustfft = "6"
