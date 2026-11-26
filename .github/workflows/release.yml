@@ -117,9 +117,18 @@ jobs:
         with:
           key: release-${{ matrix.target }}
 
+      # The release profile keeps line tables and does not strip
+      # (Cargo.toml), so link.exe writes ave.pdb beside ave.exe. None of
+      # that changes the code generated or the size of ave.exe: the symbols
+      # live in the separate .pdb, published below as the `-symbols`
+      # archive and never shipped to users.
       - name: Build
         run: cargo build --release --bins --target ${{ matrix.target }}
 
+      # The symbols go in an archive of their own: the .pdb is several
+      # times the size of the program, and only symbolicates crash reports
+      # from this exact build, so it is kept as long as the release is
+      # supported.
       - name: Package
         shell: bash
         env:
@@ -142,8 +151,13 @@ jobs:
           mkdir -p "$staging/fonts"
           cp assets/fonts/NOTICE assets/fonts/*.txt "$staging/fonts/"
 
+          symbols="dist/${name}-symbols"
+          mkdir -p "$symbols"
+          cp "target/${TARGET}/release/ave.pdb" "$symbols/"
+
           cd dist
           7z a -tzip "${name}.zip" "$name" >/dev/null
+          7z a -tzip "${name}-symbols.zip" "${name}-symbols" >/dev/null
 
       # A CycloneDX SBOM naming every crate in the build, so a consumer can
       # audit what the binary contains without taking this workflow's word
@@ -226,11 +240,13 @@ jobs:
             dist/*.cdx.json
 
       # The SBOM again as a real SBOM attestation, so the CycloneDX document
-      # is cryptographically bound to the archive it describes.
+      # is cryptographically bound to the archive it describes. The glob
+      # ends in `-msvc.zip`, so it cannot match the `-symbols.zip`: the SBOM
+      # describes what is in ave.exe, and the symbols archive is not it.
       - name: Attest SBOM
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
         with:
-          subject-path: dist/*.zip
+          subject-path: dist/aivideoeditor-*-x86_64-pc-windows-msvc.zip
           sbom-path: dist/aivideoeditor-${{ needs.draft.outputs.tag }}-sbom.cdx.json
 
       - name: Upload and undraft
