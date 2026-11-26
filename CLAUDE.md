@@ -117,6 +117,15 @@ not `//!`; the reasoning belongs in the `//!` block below it.
 in their own commit. Never `@stable`: CI would move to each new release on
 its own, and a lint that does not exist locally cannot be caught locally.
 
+### Workflows are pinned, locked and timed
+
+`tests/workflow_hygiene.rs` fails the build for a workflow that uses an
+action by tag instead of a full commit SHA with a `# vX.Y.Z` comment, has
+no top-level `permissions:`, runs a resolving cargo command (`build`,
+`check`, `clippy`, `doc`, `install`, `metadata`, `run`, `test`) without
+`--locked`, or
+has a job without `timeout-minutes:`.
+
 ### Every dependency passes `cargo deny check`
 
 `deny.toml` allows a fixed list of permissive licences, denies unknown

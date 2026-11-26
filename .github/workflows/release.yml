@@ -137,7 +137,7 @@ jobs:
       # live in the separate .pdb, published below as the `-symbols`
       # archive and never shipped to users.
       - name: Build
-        run: cargo build --release --bins --target ${{ matrix.target }}
+        run: cargo build --release --locked --bins --target ${{ matrix.target }}
 
       # The symbols go in an archive of their own: the .pdb is several
       # times the size of the program, and only symbolicates crash reports
@@ -170,7 +170,7 @@ jobs:
           # from Cargo.lock here because it is large and moves with every
           # bump.
           cp THIRD_PARTY.md "$staging/"
-          cargo run --example credits -- --notices "$staging/THIRD-PARTY-NOTICES.txt"
+          cargo run --locked --example credits -- --notices "$staging/THIRD-PARTY-NOTICES.txt"
 
           symbols="dist/${name}-symbols"
           mkdir -p "$symbols"
