@@ -15,6 +15,22 @@ the next release.
 Only the latest release is supported. Fixes ship in a new release; there is
 no backport window for older versions.
 
+## Where secrets are kept
+
+- **The Anthropic API key**, if you paste one into the assistant's
+  settings, is stored **in plain text** in
+  `%APPDATA%\aivideoeditor\assistant.toml` (the roaming config folder; on
+  Linux `~/.config/aivideoeditor/assistant.toml`). Anyone who can read your
+  user profile, or a backup or roaming copy of it, can read the key. It is
+  not encrypted and not in the Windows credential store. To keep it out of
+  that file, set `ANTHROPIC_API_KEY` in your environment instead (it takes
+  precedence) and leave the field empty, or use the Claude Code engine,
+  which signs in through its own client and stores no key in ave.
+- ave's own log lines (`%LOCALAPPDATA%\aivideoeditor\logs`) do not
+  include the key. At `RUST_LOG=debug` or `trace` the HTTP library's own
+  logging is enabled too; check a log made at those levels before sharing
+  it.
+
 ## Scope
 
 What *is* in scope:
