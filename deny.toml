@@ -6,7 +6,23 @@ all-features = true
 
 [advisories]
 yanked = "warn"
-ignore = []
+ignore = [
+    # Unmaintained crates that egui-material3 pulls in unconditionally. None
+    # is a known vulnerability; each clears when the fork puts its parent
+    # behind an off-by-default feature (ave never asks the OS for its theme
+    # and draws no SVG through the library).
+    #
+    # dark-light (OS light/dark detection) -> async-std, pin-utils, and on
+    # Linux zbus's zbus_names / zvariant / zvariant_derive.
+    { id = "RUSTSEC-2025-0052", reason = "async-std via egui-material3's dark-light; clears when dark-light is optional in the fork" },
+    { id = "RUSTSEC-2026-0441", reason = "pin-utils via egui-material3's dark-light; clears when dark-light is optional in the fork" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names via egui-material3's dark-light; clears when dark-light is optional in the fork" },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant via egui-material3's dark-light; clears when dark-light is optional in the fork" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive via egui-material3's dark-light; clears when dark-light is optional in the fork" },
+    # resvg (SVG icons) -> rustybuzz, ttf-parser.
+    { id = "RUSTSEC-2026-0206", reason = "rustybuzz via egui-material3's resvg; clears when resvg is optional in the fork or moves off rustybuzz" },
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser via egui-material3's resvg; clears when resvg is optional in the fork or moves off ttf-parser" },
+]
 
 [licenses]
 allow = [
