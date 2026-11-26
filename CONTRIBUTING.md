@@ -160,10 +160,15 @@ hand-written section is kept as it shipped.
 3. Merge (a merge commit, so the history the changelog describes survives),
    then tag the merge commit, annotated:
    `git tag -a v0.2.0 -m "aivideoeditor v0.2.0"`, and push the tag.
-4. The push triggers `.github/workflows/release.yml`: it checks the tag
-   against `Cargo.toml`, builds the release archive with an SBOM and
+4. The push triggers `.github/workflows/release.yml`: it resolves the tag
+   to one commit (and refuses a tag that is not `vX.Y.Z` or a run not
+   started from it), checks the tag against `Cargo.toml`, runs the whole of
+   `ci.yml` on that commit, builds the release archive with an SBOM and
    checksums, attests them, and publishes the GitHub release with that
-   version's `CHANGELOG.md` section as its notes.
+   version's `CHANGELOG.md` section as its notes. A release that is already
+   published is never rebuilt: fix forward with the next patch version. To
+   re-run a failed release, dispatch it from the tag:
+   `gh workflow run release.yml --ref v0.2.0 -f tag=v0.2.0`.
 
 **Never amend or rebase a commit after tagging it.** The tag keeps pointing
 at the copy you discarded, which then sits on no branch at all.
