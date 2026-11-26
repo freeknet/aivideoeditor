@@ -46,6 +46,7 @@ pub mod color;
 pub mod command_palette;
 mod commands;
 pub mod config;
+mod diagnose;
 mod draft;
 mod fix;
 pub mod gui;
@@ -118,6 +119,10 @@ pub fn install_crash_report() {
 /// When there is no subcommand, or the command fails.
 pub fn run_command<W: std::io::Write>(cli: Cli, out: &mut W) -> anyhow::Result<()> {
     logging::init();
+    if cli.diagnose {
+        write!(out, "{}", diagnose::report())?;
+        return Ok(());
+    }
     let Some(command) = cli.command else {
         anyhow::bail!("no subcommand given");
     };

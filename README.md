@@ -286,7 +286,10 @@ model menu under the chat box:
 - **Anything else, or a crash:** each session of the app writes a log to
   `%LOCALAPPDATA%\aivideoeditor\logs` (the last ten are kept), and a crash
   is appended to `%LOCALAPPDATA%\aivideoeditor\crash.log`. `RUST_LOG=debug`
-  makes the log more detailed. Attach both to a bug report.
+  makes the log more detailed. Attach both to a bug report, with the
+  output of `ave --diagnose`: which build you have, your graphics adapters,
+  whether ffmpeg, llama-server and claude are found, and where ave keeps its
+  files.
 
 ## The command line (reference)
 

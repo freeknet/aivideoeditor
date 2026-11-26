@@ -14,14 +14,18 @@ publish = false
 name = "ave"
 path = "src/main.rs"
 
-# The changelog and credits generators carry unit tests for their parsers;
-# an example's tests only run under `cargo test` when it opts in.
+# The changelog, credits and package tools carry unit tests for their
+# parsers; an example's tests only run under `cargo test` when it opts in.
 [[example]]
 name = "changelog"
 test = true
 
 [[example]]
 name = "credits"
+test = true
+
+[[example]]
+name = "package"
 test = true
 
 [dependencies]

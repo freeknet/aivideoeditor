@@ -234,46 +234,31 @@ jobs:
       - name: Build
         run: cargo build --release --locked --bins --target ${{ matrix.target }}
 
-      # The symbols go in an archive of their own: the .pdb is several
-      # times the size of the program, and only symbolicates crash reports
-      # from this exact build, so it is kept as long as the release is
-      # supported.
+      # Staged by the same example CI's Windows job runs on every pull
+      # request: ave.exe, README, LICENSE, the theme catalog, the font
+      # licences, THIRD_PARTY.md and the full third-party notices,
+      # generated from Cargo.lock here because they are large and move with
+      # every bump. The symbols go in an archive of their own: the .pdb is
+      # several times the size of the program, and only symbolicates crash
+      # reports from this exact build, so it is kept as long as the release
+      # is supported.
       - name: Package
         shell: bash
         env:
           TAG: ${{ needs.draft.outputs.tag }}
           TARGET: ${{ matrix.target }}
-        run: |
-          set -euo pipefail
-          name="aivideoeditor-${TAG}-${TARGET}"
-          staging="dist/${name}"
-          mkdir -p "$staging"
+        run: cargo run --locked --example package -- package --target "$TARGET" --tag "$TAG" --out dist
 
-          cp "target/${TARGET}/release/ave.exe" "$staging/"
-          cp README.md LICENSE* "$staging/"
-          # The theme catalog travels with the binary. It is compiled in,
-          # so the app runs without it, but it is also the worked example
-          # anyone writing a theme starts from.
-          cp assets/themes.toml "$staging/"
-          # The bundled fonts are compiled in; their licences (OFL, ISC,
-          # MIT) require the notices to travel with the binary.
-          mkdir -p "$staging/fonts"
-          cp assets/fonts/NOTICE assets/fonts/*.txt "$staging/fonts/"
-          # The crates' credits, and the full notices their MIT, BSD and
-          # Apache licences ask to travel with the binary: every shipped
-          # crate at its exact version with its licence texts, generated
-          # from Cargo.lock here because it is large and moves with every
-          # bump.
-          cp THIRD_PARTY.md "$staging/"
-          cargo run --locked --example credits -- --notices "$staging/THIRD-PARTY-NOTICES.txt"
-
-          symbols="dist/${name}-symbols"
-          mkdir -p "$symbols"
-          cp "target/${TARGET}/release/ave.pdb" "$symbols/"
-
-          cd dist
-          7z a -tzip "${name}.zip" "$name" >/dev/null
-          7z a -tzip "${name}-symbols.zip" "${name}-symbols" >/dev/null
+      # The exact zip, unpacked outside the checkout: the file list, the
+      # notices, the version resource, the imports, the symbols, and
+      # `ave --version` and `ave --diagnose` running from the unpacked
+      # folder. A release that fails here stays a draft.
+      - name: Check the package
+        shell: bash
+        env:
+          TAG: ${{ needs.draft.outputs.tag }}
+          TARGET: ${{ matrix.target }}
+        run: cargo run --locked --example package -- check "dist/aivideoeditor-${TAG}-${TARGET}.zip" --symbols "dist/aivideoeditor-${TAG}-${TARGET}-symbols.zip"
 
       # A CycloneDX SBOM naming every crate in the build, so a consumer can
       # audit what the binary contains without taking this workflow's word

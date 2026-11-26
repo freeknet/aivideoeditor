@@ -196,7 +196,7 @@ impl Logger {
                 format!(
                     "=== {} {} session started {} (log times are seconds since start) ===",
                     crate::NAME,
-                    env!("CARGO_PKG_VERSION"),
+                    crate::diagnose::build_summary(),
                     utc_iso(SystemTime::now())
                 )
                 .into(),
@@ -598,7 +598,7 @@ pub(crate) fn install_crash_report() {
         let report = format!(
             "{} {} crashed on thread '{}': {info}\n\nLast log lines:\n{}\n\n{}",
             crate::NAME,
-            env!("CARGO_PKG_VERSION"),
+            crate::diagnose::build_summary(),
             thread.name().unwrap_or("unnamed"),
             recent.join("\n"),
             std::backtrace::Backtrace::force_capture()

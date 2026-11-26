@@ -55,8 +55,17 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-features
 ```
 
-CI runs all three on Windows and on Linux, plus `cargo deny check`. A
-warning is a build failure there.
+CI runs all three on Windows and on Linux, plus `cargo deny check`, the
+changelog and credits checks, and the package check. A warning is a build
+failure there. The package check builds the zip a release would ship,
+unpacks it outside the checkout and runs `ave --version` and
+`ave --diagnose` from it; to run it yourself on Windows:
+
+```bash
+cargo build --release --locked --bins
+cargo run --example package -- package --out dist
+cargo run --example package -- check dist/aivideoeditor-v<version>-dev-x86_64-pc-windows-msvc.zip
+```
 
 ### What a Linux run proves
 

@@ -30,16 +30,21 @@ pub struct Cli {
     /// Open this work folder (a night's `_ave` folder) on start.
     #[arg(long, value_name = "DIR")]
     pub open: Option<std::path::PathBuf>,
+    /// Print which build this is, what this machine has (GPU, ffmpeg,
+    /// llama-server, claude) and where ave keeps its files, then exit.
+    #[arg(long, conflicts_with_all = ["theme", "font", "reset", "open"])]
+    pub diagnose: bool,
     /// A pipeline step to run headless instead of opening the window.
     #[command(subcommand)]
     pub(crate) command: Option<crate::commands::Cmd>,
 }
 
 impl Cli {
-    /// Whether a headless subcommand was given (no window should open).
+    /// Whether a headless subcommand or `--diagnose` was given (no window
+    /// should open).
     #[must_use]
     pub fn is_headless(&self) -> bool {
-        self.command.is_some()
+        self.command.is_some() || self.diagnose
     }
 }
 
@@ -71,6 +76,18 @@ mod tests {
     fn a_subcommand_runs_headless() -> anyhow::Result<()> {
         let cli = parse(&["show", "--work", "x"]).map_err(|error| anyhow::anyhow!("{error}"))?;
         assert!(cli.is_headless(), "a pipeline step needs no window");
+        Ok(())
+    }
+
+    #[test]
+    fn diagnose_runs_headless_and_alone() -> anyhow::Result<()> {
+        let cli = parse(&["--diagnose"]).map_err(|error| anyhow::anyhow!("{error}"))?;
+        assert!(cli.diagnose, "--diagnose is a flag");
+        assert!(cli.is_headless(), "a diagnosis opens no window");
+        assert!(
+            parse(&["--diagnose", "--reset"]).is_err(),
+            "a window switch beside --diagnose would be silently ignored"
+        );
         Ok(())
     }
 

@@ -135,6 +135,24 @@ jobs:
       - name: Build release binaries
         run: cargo build --release --locked --bins
 
+      # The zip a release would ship, built by the same example the release
+      # workflow runs, so a missing file or a broken notice fails a pull
+      # request instead of a tag.
+      - name: Package
+        run: cargo run --locked --example package -- package --out dist
+
+      # That exact zip, unpacked outside the checkout: the file list, the
+      # notices, the version resource, the imports (no C runtime DLL), the
+      # symbols, and `ave --version` and `ave --diagnose` run from the
+      # unpacked folder.
+      - name: Check the package
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(awk '/^\[package\]/{in_pkg=1; next} /^\[/{in_pkg=0} in_pkg && /^version *=/{gsub(/[" ]/, "", $0); sub(/^version=/, "", $0); print; exit}' Cargo.toml)
+          name="dist/aivideoeditor-v${version}-dev-x86_64-pc-windows-msvc"
+          cargo run --locked --example package -- check "${name}.zip" --symbols "${name}-symbols.zip"
+
   linux:
     name: linux
     runs-on: ubuntu-latest

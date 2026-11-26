@@ -66,6 +66,12 @@ mod skills;
 pub(crate) mod store;
 mod tools;
 
+/// The `claude` executable the Claude Code engine would start, if one is
+/// installed (`AVE_CLAUDE`, else `PATH`). For `ave --diagnose`.
+pub(crate) fn claude_code_exe() -> Option<PathBuf> {
+    claude_code::find()
+}
+
 use crate::gui::ui::hint::Hint as _;
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
