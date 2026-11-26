@@ -5,8 +5,11 @@
 **Index footage, plan beat-synced edits, render and export timelines.**
 
 [![CI](https://github.com/freeknet/aivideoeditor/actions/workflows/ci.yml/badge.svg)](https://github.com/freeknet/aivideoeditor/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/freeknet/aivideoeditor?sort=semver)](https://github.com/freeknet/aivideoeditor/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![MSRV](https://img.shields.io/badge/rust-1.98%2B-orange.svg)](Cargo.toml)
+[![MSRV](https://img.shields.io/badge/rust-1.99%2B-orange.svg)](rust-toolchain.toml)
+[![Platform: Windows](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6.svg)](#install-on-windows)
+[![Supply chain: cargo-deny](https://img.shields.io/badge/supply%20chain-cargo--deny-success.svg)](deny.toml)
 
 </div>
 
@@ -25,6 +28,32 @@ Flow Night rules favour fire on the drop. Footage without fire, or music without
 still gets a cut, and every rule (repeats, people, footage to avoid, the
 drop) is the project's to change under *Rules* in the Home screen's settings.
 
+![The editor: chat, shot browser, viewer, inspector and the cut on the beat grid](docs/images/review.png)
+
+## What it does
+
+| | |
+|---|---|
+| **Index** | Measures every clip (exposure, focus, fire / LED / white light, camera moves, shot boundaries) into a readable shot log. Flags bad spans inside a shot (a focus hunt, a whip, a jolt), the best moment of each segment, recording time, camera, and the night's acts / sets. |
+| **Captions** | Describes each shot in words (people, what they are doing, framing) with a local vision model on your GPU. Optional. |
+| **Beats** | Tempo, a beat grid locked onto the kicks, bars, sections and drops. Or no music at all: shots paced on the clips' own sound. |
+| **People** | Works out who is in which clip; name, merge and split performers in the People tab. |
+| **Crowd cheers** | Measured from the camera audio, so the moments the crowd reacted to can be found and used. |
+| **Plans** | Drafts a cut per deliverable (15 s, 30 s, 60 s reels…) on the beat grid under the project's rules. Every shot carries a note saying why it is there. |
+| **Check findings** | A live rule check flags repeats, a performer twice in a row, a crop outside the frame, no fire on the drop. Each finding has **Fix** (the best automatic fix, as an undoable new version), **Ask chat** and, for soft findings, **Accept**. |
+| **Editing** | Timeline on the beat grid with versions, compare, undo, ranked alternatives per shot (`A`), **markers** and comments; a Shots browser with search and grouping by act. |
+| **Chat assistant** | Ask for changes in plain words; answers come back as diff cards with the predicted check. Runs on **Claude Code**, the **Claude API** or a **local model**. |
+| **Export** | Renders each cut to MP4 plus a 720p preview (x264, NVENC or AMF) under the names you chose, and **never overwrites a file it did not make**. **OTIO** timelines for Resolve or Kdenlive. |
+
+| | |
+|---|---|
+| ![Check findings with Fix, Ask chat and Accept](docs/images/plan-findings.png) | ![The Export panel](docs/images/export.png) |
+| Check findings, each with **Fix**, **Ask chat** and **Accept** | Export: every cut by deliverable, with an overwrite guard |
+| ![A staged edit from the chat assistant](docs/images/chat-proposal.png) | ![The Music tab: beat grid, sections and drops](docs/images/music.png) |
+| The chat assistant proposes an edit as a card | Music: beat grid, bars, sections and drops |
+
+<sub>Screenshots are rendered headlessly by `cargo run --example screenshot`.</sub>
+
 - [Install](#install-on-windows)
 - [Make a video](#make-a-video)
 - [Captions and the chat assistant (optional)](#optional-captions-and-the-chat-assistant)
@@ -32,6 +61,11 @@ drop) is the project's to change under *Rules* in the Home screen's settings.
 - [The command line (reference)](#the-command-line-reference)
 
 ## Install on Windows
+
+**The quick way:** download `ave.exe` from the
+[latest release](https://github.com/freeknet/aivideoeditor/releases/latest),
+unzip it anywhere, install ffmpeg ([step 2](#2-install-ffmpeg)) and run it.
+The steps below build it from source instead.
 
 Step by step on a fresh Windows 10 or 11 machine. Run the commands in
 **PowerShell**. You only do this once.
@@ -68,10 +102,6 @@ If you already have ffmpeg somewhere else, point `ave` at its folder in
 and guide strip when it cannot find ffmpeg.
 
 ### 3. Get the code
-
-The repository is private, so sign in to GitHub first. Either install the
-GitHub CLI and log in (`winget install --id GitHub.cli -e`, then
-`gh auth login`), or let Git ask for your credentials when you clone.
 
 ```powershell
 cd $HOME\Documents
@@ -319,15 +349,19 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the rest.
 - [`CLAUDE.md`](CLAUDE.md): the rules this codebase enforces, for people and agents
 - [`CHANGELOG.md`](CHANGELOG.md): what changed, release by release
 - [`SECURITY.md`](SECURITY.md): how to report a vulnerability privately
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): how the engine, the app and the files fit together
+- [`docs/GUI_CONTRACTS.md`](docs/GUI_CONTRACTS.md): what each screen promises
+- [`docs/DESIGN.md`](docs/DESIGN.md): the current visual design (being replaced by Material 3)
 
 ## Licence
 
 MIT. See [`LICENSE`](LICENSE).
 
-The desktop app bundles the [Inter](https://github.com/rsms/inter) typeface
-(`assets/fonts/Inter-Regular.ttf`), © The Inter Project Authors, under the SIL
-Open Font License 1.1; its licence text is in
-[`assets/fonts/OFL.txt`](assets/fonts/OFL.txt).
+The desktop app bundles the [Mona Sans](https://github.com/github/mona-sans),
+[Roboto Mono](https://github.com/googlefonts/RobotoMono) and
+[Inter](https://github.com/rsms/inter) typefaces (SIL Open Font License 1.1)
+and the [Lucide](https://lucide.dev) icon font (ISC). Where each came from and
+its licence text are in [`assets/fonts/`](assets/fonts/NOTICE).
 
 ---
 
