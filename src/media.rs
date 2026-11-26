@@ -189,6 +189,7 @@ pub(crate) fn quiet(cmd: &mut Command) {
     }
     #[cfg(not(windows))]
     {
+        // Nothing to configure off Windows.
         let _ = cmd;
     }
 }
@@ -666,6 +667,7 @@ impl Drop for FrameReader {
     fn drop(&mut self) {
         // The stream may be abandoned early; ffmpeg must not outlive it.
         let _ = self.child.kill();
+        // The child may have exited already, and it is being abandoned either way.
         let _ = self.child.wait();
     }
 }

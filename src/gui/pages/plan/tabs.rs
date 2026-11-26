@@ -185,7 +185,9 @@ fn set_hidden(project: &mut Project, hidden: &BTreeSet<String>) {
                 .collect(),
         ),
     );
-    let _ = project.save_settings();
+    if let Err(error) = project.save_settings() {
+        log::warn!("could not save the project settings: {error:#}");
+    }
 }
 
 /// Renames plan `old` to `new`: the live file, its history, and the plan's
@@ -544,6 +546,7 @@ pub(super) fn strip(
         .filter(|n| closed.contains(*n) && Some(n.as_str()) != state.name.as_deref())
         .collect();
     let mut draft = false;
+    // The response is not needed: drawing it is the point.
     let _ = egui::Popup::menu(&plus)
         .width(220.0)
         .gap(theme::SPACE_XS)

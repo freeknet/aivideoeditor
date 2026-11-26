@@ -109,6 +109,7 @@ impl Thumbs {
     pub(crate) fn set_work(&mut self, work: Option<&Path>) {
         let dir = work.map(|w| w.join("thumbs"));
         if let Some(d) = &dir {
+            // Best effort: the write that follows reports a folder that is still missing.
             let _ = std::fs::create_dir_all(d);
         }
         if let Ok(mut slot) = self.cache_dir.lock() {
@@ -135,6 +136,7 @@ impl Thumbs {
                     };
                     let dir = cache.lock().ok().and_then(|d| d.clone());
                     let decoded = load_or_decode(&key, dir.as_deref());
+                    // The receiver has gone when what asked was closed; nobody is left to tell.
                     let _ = done.send(
                         decoded
                             .map(|(size, rgb)| Decoded {
@@ -202,6 +204,7 @@ impl Thumbs {
             if let Ok(mut q) = self.queue.lock() {
                 q.push(key);
             }
+            // The receiver has gone when what asked was closed; nobody is left to tell.
             let _ = self.wake.send(());
         } else if let Ok(mut q) = self.queue.lock() {
             // Already queued: move it to the front (served next).
@@ -280,6 +283,7 @@ fn load_or_decode(key: &Key, cache: Option<&Path>) -> Option<([usize; 2], Vec<u8
         bytes.extend_from_slice(&(frame.width as u32).to_le_bytes());
         bytes.extend_from_slice(&(frame.height as u32).to_le_bytes());
         bytes.extend_from_slice(&frame.rgb);
+        // A cache: a failed write only means the thumbnail is decoded again next time.
         let _ = std::fs::write(f, bytes);
     }
     Some(([frame.width, frame.height], frame.rgb))

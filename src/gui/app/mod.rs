@@ -308,7 +308,9 @@ impl App {
         let _ = std::thread::Builder::new()
             .name("ave-tool-checks".into())
             .spawn(|| {
+                // Warming the cached answer; the value is read later.
                 let _ = crate::media::ffmpeg_status();
+                // Warming the cached answer; the value is read later.
                 let _ = crate::media::gpu_decode();
             });
         crate::gui::pages::night::pipeline::set_analysis_jobs(
@@ -544,7 +546,9 @@ impl App {
             Ok(mut project) => {
                 if project.settings.footage.is_none() && work != path {
                     project.settings.footage = Some(path.to_path_buf());
-                    let _ = project.save_settings();
+                    if let Err(error) = project.save_settings() {
+                        log::warn!("could not save the project settings: {error:#}");
+                    }
                 }
                 self.thumbs.set_work(Some(&work));
                 let key = work.display().to_string();

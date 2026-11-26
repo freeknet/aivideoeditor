@@ -142,6 +142,7 @@ fn spawn(path: String, ctx: egui::Context) -> Receiver<Result<Peaks, String>> {
         let result = crate::media::audio_mono(std::path::Path::new(&path), RATE)
             .map(|s| Peaks::from_samples(&s))
             .map_err(|e| format!("{e:#}"));
+        // The receiver has gone when what asked was closed; nobody is left to tell.
         let _ = tx.send(result);
         ctx.request_repaint();
     });

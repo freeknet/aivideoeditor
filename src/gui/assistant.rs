@@ -841,8 +841,10 @@ fn set_lock(state: &State, on: bool) {
     };
     let path = chat.work.join("plans").join(format!(".lock-{}", chat.plan));
     if on {
+        // Best effort: the lock only greys the timeline while the assistant edits.
         let _ = std::fs::write(&path, "assistant turn");
     } else {
+        // Best-effort cleanup: a leftover temporary file is harmless.
         let _ = std::fs::remove_file(&path);
     }
 }
@@ -1074,6 +1076,7 @@ fn claude_turn_over(state: &mut State) {
     let (work, chat) = session.key.clone();
     let file = claude_code::session_file(&work, &chat);
     if let Some(dir) = file.parent() {
+        // Best effort: the write that follows reports a folder that is still missing.
         let _ = std::fs::create_dir_all(dir);
     }
     if !session.alive() {
@@ -1653,6 +1656,7 @@ fn composer(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
 
     if !cands.is_empty() {
         let anchor = frame.response.rect;
+        // The response is not needed: drawing it is the point.
         let _ = egui::Area::new(id.with("ac"))
             .order(egui::Order::Foreground)
             .fixed_pos(anchor.left_top() + Vec2::new(SPACE_MD, -SPACE_SM))
@@ -2149,6 +2153,7 @@ fn input(ctx: &PageCtx<'_>, state: &mut State, ui: &mut Ui, id: egui::Id) {
             if output.response.changed() {
                 state.pick = 0;
             }
+            // The response is not needed: drawing it is the point.
             let _ = widgets::tip(output.response.response, theme, &tooltip, "Enter");
         });
 }
@@ -2274,6 +2279,7 @@ fn model_menu(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
     let allow = allow_commit(ctx);
     let mut pick: Option<&str> = None;
     let mut permission: Option<bool> = None;
+    // The response is not needed: drawing it is the point.
     let _ = egui::Popup::menu(&trigger)
         .id(id)
         .width(240.0)
@@ -2650,6 +2656,7 @@ fn add_menu(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
         open,
         32.0,
     );
+    // The response is not needed: drawing it is the point.
     let _ = egui::Popup::menu(&button)
         .id(id)
         .width(240.0)
@@ -3052,6 +3059,7 @@ fn start_loop(
             agent::run(
                 job,
                 &mut |e| {
+                    // The receiver has gone when what asked was closed; nobody is left to tell.
                     let _ = tx.send(e);
                     repaint.request_repaint();
                 },
@@ -3457,6 +3465,7 @@ fn conversation(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
         open_link(ctx, state, &r);
     }
     for job in stop {
+        // A job that already finished has nothing to cancel.
         let _ = ctx.jobs.cancel(job);
     }
     if first_cut {

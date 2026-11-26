@@ -1715,6 +1715,7 @@ fn headers(state: &mut State, s: &Shown<'_>, ui: &mut Ui, lay: &Layout, id: egui
     if state.locked {
         let r = Rect::from_center_size(pos2(left + 70.0, lay.v1.center().y), Vec2::splat(20.0));
         icons::paint(&painter, r, icons::LOCK, icons::SIZE, muted);
+        // The response is not needed: drawing it is the point.
         let _ = ui
             .interact(r, id.with("lock"), Sense::hover())
             .hint("Chat is editing this cut: read-only");
@@ -1990,6 +1991,7 @@ fn island(state: &mut State, s: &Shown<'_>, ui: &mut Ui, rect: Rect, lay: &Layou
         theme::ink_line(t),
         egui::StrokeKind::Inside,
     );
+    // The response is not needed: drawing it is the point.
     let _ = ui.interact(frame, id.with("island"), Sense::hover());
     for (k, (tool, glyph, label, command)) in tools.into_iter().enumerate() {
         // The keys come from the table, so a preset's keys show here too.

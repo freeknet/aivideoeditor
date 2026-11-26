@@ -95,6 +95,7 @@ impl Auth {
         let spawned = std::thread::Builder::new()
             .name("claude-auth-status".to_owned())
             .spawn(move || {
+                // The receiver has gone when what asked was closed; nobody is left to tell.
                 let _ = tx.send(auth_status(&exe));
                 on_done();
             });
@@ -124,7 +125,9 @@ impl Auth {
         std::thread::Builder::new()
             .name("claude-auth-login".to_owned())
             .spawn(move || {
+                // The child may have exited already, and it is being abandoned either way.
                 let _ = child.wait();
+                // The receiver has gone when what asked was closed; nobody is left to tell.
                 let _ = tx.send(auth_status(&exe));
                 on_done();
             })
@@ -157,6 +160,7 @@ fn own_console(cmd: &mut Command) {
     }
     #[cfg(not(windows))]
     {
+        // Nothing to configure off Windows.
         let _ = cmd;
     }
 }
@@ -703,6 +707,7 @@ impl Session {
         let tail = Arc::new(Mutex::new(Vec::<String>::new()));
         if let Some(err) = stderr {
             let tail = tail.clone();
+            // Without the thread only the extra logging is lost; the session runs on.
             let _ = std::thread::Builder::new()
                 .name("claude-code-stderr".to_owned())
                 .spawn(move || {
@@ -733,10 +738,12 @@ impl Session {
                         Err(_) => break,
                     };
                     for e in events {
+                        // The receiver has gone when what asked was closed; nobody is left to tell.
                         let _ = tx.send(e);
                     }
                     if stop {
                         if let Ok(mut c) = r_child.lock() {
+                            // The child may have exited already, and it is being abandoned either way.
                             let _ = c.kill();
                         }
                         break;
@@ -749,6 +756,7 @@ impl Session {
                     let why = tail.lock().map(|t| t.join(" ")).unwrap_or_default();
                     let stopped = r_stream.lock().map(|s| s.must_stop).unwrap_or(false);
                     if !stopped {
+                        // The receiver has gone when what asked was closed; nobody is left to tell.
                         let _ = tx.send(Event::Notice {
                             text: if why.trim().is_empty() {
                                 "Claude Code exited before it finished.".to_owned()
@@ -758,6 +766,7 @@ impl Session {
                             error: true,
                         });
                     }
+                    // The receiver has gone when what asked was closed; nobody is left to tell.
                     let _ = tx.send(Event::Done {
                         secs: 0.0,
                         model: "claude-code".to_owned(),
@@ -806,7 +815,9 @@ impl Session {
     /// Stops the process (Stop, a new chat, or the panel going away).
     pub(crate) fn kill(&self) {
         if let Ok(mut c) = self.child.lock() {
+            // The child may have exited already, and it is being abandoned either way.
             let _ = c.kill();
+            // The child may have exited already, and it is being abandoned either way.
             let _ = c.wait();
         }
         self.alive.store(false, Ordering::Relaxed);

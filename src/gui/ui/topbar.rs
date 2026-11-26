@@ -215,6 +215,7 @@ fn view_menu(app: &App, ui: &mut Ui, theme: &Palette, actions: &mut Vec<Action>)
         "",
         open,
     );
+    // The response is not needed: drawing it is the point.
     let _ = egui::Popup::menu(&response)
         .id(id)
         .width(220.0)

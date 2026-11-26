@@ -157,6 +157,7 @@ pub(super) fn popover(
         .map(|f| f.each.clone())
         .unwrap_or_else(|| vec![None; problems.len()]);
     let mut act = None;
+    // The response is not needed: drawing it is the point.
     let _ = Popup::menu(anchor)
         .id(id)
         .close_behavior(PopupCloseBehavior::CloseOnClickOutside)

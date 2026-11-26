@@ -247,8 +247,11 @@ fn encode(args: &[String], out: &Path, progress: &Progress) -> Result<()> {
         .context("starting ffmpeg")?;
     loop {
         if progress.cancelled() {
+            // The child may have exited already, and it is being abandoned either way.
             let _ = child.kill();
+            // The child may have exited already, and it is being abandoned either way.
             let _ = child.wait();
+            // Best-effort cleanup: a leftover temporary file is harmless.
             let _ = std::fs::remove_file(out);
             progress.check()?;
         }
@@ -259,8 +262,10 @@ fn encode(args: &[String], out: &Path, progress: &Progress) -> Result<()> {
             let mut err = String::new();
             if let Some(mut pipe) = child.stderr.take() {
                 use std::io::Read as _;
+                // Best effort: the error text is a nicety on top of the exit status.
                 let _ = pipe.read_to_string(&mut err);
             }
+            // Best-effort cleanup: a leftover temporary file is harmless.
             let _ = std::fs::remove_file(out);
             bail!(
                 "ffmpeg failed: {}",

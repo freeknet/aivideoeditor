@@ -34,6 +34,7 @@ fn main() -> std::process::ExitCode {
     // started from so subcommands, --help and argument errors can print.
     #[cfg(windows)]
     if std::env::args_os().len() > 1 {
+        // Started from Explorer there is no console to join; nothing to do.
         let _ = aivideoeditor::win::console::attach_parent();
     }
     let cli = {

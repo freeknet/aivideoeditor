@@ -89,6 +89,7 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
         |ui| {
             if count > 1 {
                 ui.add_space(theme::SPACE_XS);
+                // The response is not needed: drawing it is the point.
                 let _ = widgets::pill(
                     ui,
                     ctx.theme,

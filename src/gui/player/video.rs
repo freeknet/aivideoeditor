@@ -142,6 +142,7 @@ impl Job {
             .stderr(Stdio::null());
         let mut child = cmd.spawn()?;
         let Some(mut out) = child.stdout.take() else {
+            // The child may have exited already, and it is being abandoned either way.
             let _ = child.kill();
             anyhow::bail!("ffmpeg stdout was not captured");
         };
@@ -163,7 +164,9 @@ impl Job {
             }
             self.ctx.request_repaint();
         }
+        // The child may have exited already, and it is being abandoned either way.
         let _ = child.kill();
+        // The child may have exited already, and it is being abandoned either way.
         let _ = child.wait();
         Ok(())
     }

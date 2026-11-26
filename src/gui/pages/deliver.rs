@@ -530,6 +530,7 @@ fn matrix(
         }
     }
     if let Some((label, cmd)) = draft {
+        // The job's id is not needed: it shows in the job list by its label.
         let _ = ctx.jobs.spawn(label, cmd);
     }
 }

@@ -657,7 +657,9 @@ impl State {
             .or_default();
         if table.get("current").and_then(|v| v.as_str()) != Some(name) {
             table.insert("current".to_owned(), toml::Value::String(name.to_owned()));
-            let _ = project.save_settings();
+            if let Err(error) = project.save_settings() {
+                log::warn!("could not save the project settings: {error:#}");
+            }
         }
     }
 
@@ -683,13 +685,17 @@ impl State {
         if let Some(old) = self.plan.take() {
             if self.versions.is_empty()
                 && let Ok(text) = toml::to_string_pretty(&old)
+                && let Err(error) = history::record(&project.work, &name, &text, "original", unix)
             {
-                let _ = history::record(&project.work, &name, &text, "original", unix);
+                log::warn!("could not record the plan's history: {error:#}");
             }
             self.undo.push(old, "change on disk");
         }
-        if let Ok(text) = std::fs::read_to_string(&path) {
-            let _ = history::record(&project.work, &name, &text, "changed on disk", unix);
+        if let Ok(text) = std::fs::read_to_string(&path)
+            && let Err(error) =
+                history::record(&project.work, &name, &text, "changed on disk", unix)
+        {
+            log::warn!("could not record the plan's history: {error:#}");
         }
         self.plan = Some(fresh);
         self.load_error = None;
@@ -1082,8 +1088,10 @@ fn housekeeping(
             crate::jobs::Status::Done => {
                 state.pending_job = None;
                 if let Ok(text) = std::fs::read_to_string(history::live_path(&project.work, &name))
+                    && let Err(error) =
+                        history::record(&project.work, &name, &text, "draft", history::now())
                 {
-                    let _ = history::record(&project.work, &name, &text, "draft", history::now());
+                    log::warn!("could not record the plan's history: {error:#}");
                 }
                 project.reload_plans();
                 state.open(project, &name);
@@ -1384,6 +1392,7 @@ fn header_right(ui: &mut egui::Ui, t: &Palette, info: &HeaderInfo) -> HeaderOut 
         let resp = text_menu_button(ui, t, Some(icons::HISTORY), &label);
         let resp = widgets::tip(resp, t, "Versions: every save keeps a numbered copy", "");
         let latest = info.versions.last().map(|v| v.n);
+        // The response is not needed: drawing it is the point.
         let _ = egui::Popup::menu(&resp)
             .width(340.0)
             .gap(theme::SPACE_XS)
@@ -1421,6 +1430,7 @@ fn header_right(ui: &mut egui::Ui, t: &Palette, info: &HeaderInfo) -> HeaderOut 
         ui.add_enabled_ui(info.editable, |ui| {
             let resp = text_menu_button(ui, t, None, aspect_key(aspect));
             let resp = widgets::tip(resp, t, "Output aspect; crops follow each shot's cx", "");
+            // The response is not needed: drawing it is the point.
             let _ = egui::Popup::menu(&resp)
                 .width(180.0)
                 .gap(theme::SPACE_XS)
@@ -1579,7 +1589,9 @@ fn set_page_flag(project: &mut Project, key: &str, on: bool) {
         .entry(PAGE_KEY.to_owned())
         .or_default()
         .insert(key.to_owned(), toml::Value::Boolean(on));
-    let _ = project.save_settings();
+    if let Err(error) = project.save_settings() {
+        log::warn!("could not save the project settings: {error:#}");
+    }
 }
 
 /// The banner over the tracks while the assistant holds the plan's lock.
@@ -1789,7 +1801,9 @@ fn draft_window(
         } else if project.music.is_none() || project.index.is_none() {
             form.error = Some("Index the footage and map the music first.".to_owned());
         } else {
-            let _ = history::keep_original(&project.work, &name, history::now());
+            if let Err(error) = history::keep_original(&project.work, &name, history::now()) {
+                log::warn!("could not record the plan's history: {error:#}");
+            }
             let id = jobs.spawn(
                 format!("plan {name}"),
                 crate::commands::Cmd::Plan {

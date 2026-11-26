@@ -85,6 +85,39 @@ is what catches a new variant silently doing nothing), `missing_docs`,
 build when the lint stops firing, so a suppression cannot outlive the thing
 it was suppressing.
 
+### Unsafe Rust is a leaf boundary, without exceptions
+
+- First try to remove the unsafe operation. Prefer safe standard-library
+  APIs, checked slices, and RAII owners.
+- Required unsafe code belongs only under `src/win/`. Everything else calls
+  safe wrappers. `unsafe_code` is denied crate-wide in `Cargo.toml`, and
+  `mod win` in `lib.rs` is the one `#[expect(unsafe_code, reason = ...)]`.
+- Put each FFI call in its own small, named, private **safe** function.
+  That leaf contains one unsafe operation and nothing else.
+- Every unsafe operation needs an immediately relevant `// SAFETY:` proof.
+- Do not expose `unsafe fn`. Never add unsafe to a test.
+- Any resource with a matching close/free/destroy API gets one owning type
+  whose `Drop` releases it exactly once.
+- Never silence an unsafe lint any other way. `src/unsafe_check.rs` fails
+  the build for unsafe outside `src/win/`, in a test, as an `unsafe fn`, or
+  twice in one function.
+
+### A discarded result says why
+
+Outside tests, `let _ = f();` and a trailing `f().ok();` carry a `//`
+comment, on the line or directly above it, saying why there is nothing
+to do with the failure (a send to a thread that has gone, best-effort
+cleanup). `src/discarded_check.rs` fails the build otherwise. `write!` and
+`writeln!` are exempt. If you cannot write an honest reason, handle the
+error.
+
+### Parsers of outside input have property tests
+
+`people.toml` keys, `recipe.toml`, plan files and MCP messages come from
+people and other programs. Each parser has a `proptest` property (any
+input: no panic, and the invariants the rest of the code relies on). A new
+parser of outside input gets one too.
+
 ### Every source file opens with the header banner
 
 A ruled block naming `Module:`, `Description:` and `Dependencies:`, then a

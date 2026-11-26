@@ -697,7 +697,9 @@ fn footage_step(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
         && let Some(p) = ctx.project.as_mut()
     {
         p.settings.footage = Some(picked);
-        let _ = p.save_settings();
+        if let Err(error) = p.save_settings() {
+            log::warn!("could not save the project settings: {error:#}");
+        }
         state.generation += 1;
     }
     let scanned = state.scan.for_work(&state.work).cloned();
@@ -761,7 +763,9 @@ fn footage_step(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
             && let Some(p) = ctx.project.as_mut()
         {
             p.settings.footage = Some(sub);
-            let _ = p.save_settings();
+            if let Err(error) = p.save_settings() {
+                log::warn!("could not save the project settings: {error:#}");
+            }
             state.generation += 1;
         }
     }
@@ -844,7 +848,9 @@ fn music_step(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
         && let Some(p) = ctx.project.as_mut()
     {
         p.settings.track = Some(track);
-        let _ = p.save_settings();
+        if let Err(error) = p.save_settings() {
+            log::warn!("could not save the project settings: {error:#}");
+        }
     }
     if let Some(key) = pick_card
         && let Some(card) = rfd::FileDialog::new()
@@ -855,7 +861,9 @@ fn music_step(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
         && let Some(p) = ctx.project.as_mut()
     {
         p.settings.end_cards.insert(key, card);
-        let _ = p.save_settings();
+        if let Err(error) = p.save_settings() {
+            log::warn!("could not save the project settings: {error:#}");
+        }
     }
     let last: Option<project::Settings> = state.previous.as_ref().and_then(|w| {
         std::fs::read_to_string(w.join("ave.toml"))
@@ -895,7 +903,9 @@ fn music_step(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
                     .entry(k.clone())
                     .or_insert_with(|| v.clone());
             }
-            let _ = p.save_settings();
+            if let Err(error) = p.save_settings() {
+                log::warn!("could not save the project settings: {error:#}");
+            }
             state.notes.push(format!("track and end cards from {from}"));
         }
     }

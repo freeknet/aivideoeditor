@@ -70,6 +70,11 @@ mod template;
 pub mod theme;
 
 #[cfg(windows)]
+#[expect(
+    unsafe_code,
+    reason = "the Win32 layer is the one place unsafe Rust is allowed: each FFI call \
+              in its own safe leaf wrapper (src/unsafe_check.rs)"
+)]
 pub mod win;
 
 /// The product name, as it appears in the window title and the about page.
@@ -143,6 +148,8 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+mod discarded_check;
 #[cfg(test)]
 mod header_check;
 #[cfg(test)]

@@ -578,6 +578,7 @@ fn tempo_menu(
         "Tempo and grid",
         open,
     );
+    // The response is not needed: drawing it is the point.
     let _ = egui::Popup::menu(&response)
         .id(id)
         .width(220.0)

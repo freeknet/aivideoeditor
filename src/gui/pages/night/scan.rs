@@ -107,6 +107,7 @@ impl Scan {
                 clips,
                 error,
             };
+            // The receiver has gone when what asked was closed; nobody is left to tell.
             let _ = tx.send(found);
         });
         self.rx = Some(rx);

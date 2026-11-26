@@ -223,7 +223,9 @@ struct Server(Child);
 
 impl Drop for Server {
     fn drop(&mut self) {
+        // The child may have exited already, and it is being abandoned either way.
         let _ = self.0.kill();
+        // The child may have exited already, and it is being abandoned either way.
         let _ = self.0.wait();
     }
 }
@@ -290,6 +292,7 @@ fn caption_one(
         let file = tmp.join(format!("{}_{k}.jpg", seg.id.replace('/', "_")));
         media::still(Path::new(&clip.path), t, 576, None, &file)?;
         let b64 = base64::engine::general_purpose::STANDARD.encode(std::fs::read(&file)?);
+        // Best-effort cleanup: a leftover temporary file is harmless.
         let _ = std::fs::remove_file(&file);
         content.push(serde_json::json!({"type": "image_url",
             "image_url": {"url": format!("data:image/jpeg;base64,{b64}")}}));

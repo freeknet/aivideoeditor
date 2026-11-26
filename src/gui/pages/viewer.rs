@@ -271,6 +271,7 @@ fn settings(ui: &mut egui::Ui, theme: &Palette, state: &mut State, p: &mut Playe
     let open = egui::Popup::is_id_open(ui.ctx(), id);
     let response = transport::button(ui, theme, icons::SETTINGS, "Preview settings", "", open);
     let mut changed = false;
+    // The response is not needed: drawing it is the point.
     let _ = egui::Popup::menu(&response)
         .id(id)
         .width(240.0)

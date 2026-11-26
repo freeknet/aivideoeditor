@@ -198,6 +198,7 @@ impl Write for LineSink {
         self.partial.push_str(&String::from_utf8_lossy(buf));
         while let Some(pos) = self.partial.find('\n') {
             let line: String = self.partial.drain(..=pos).collect();
+            // The receiver has gone when what asked was closed; nobody is left to tell.
             let _ = self
                 .tx
                 .send(Event::Line(self.id, line.trim_end().to_owned()));
@@ -211,6 +212,7 @@ impl Write for LineSink {
     fn flush(&mut self) -> std::io::Result<()> {
         if !self.partial.is_empty() {
             let line = std::mem::take(&mut self.partial);
+            // The receiver has gone when what asked was closed; nobody is left to tell.
             let _ = self.tx.send(Event::Line(self.id, line));
         }
         Ok(())
@@ -256,6 +258,7 @@ impl Jobs {
         let report_tx = tx.clone();
         let report_ctx = ctx.clone();
         let progress = Progress::default().tee(move |report| {
+            // The receiver has gone when what asked was closed; nobody is left to tell.
             let _ = report_tx.send(Event::Line(id, report.line()));
             if let Some(ctx) = &report_ctx {
                 ctx.request_repaint();
@@ -271,7 +274,9 @@ impl Jobs {
             };
             let result = crate::commands::execute_with(thread_cmd, &mut sink, &progress)
                 .map_err(|e| format!("{e:#}"));
+            // The sink writes to a channel, and its receiver may have gone.
             let _ = sink.flush();
+            // The receiver has gone when what asked was closed; nobody is left to tell.
             let _ = tx.send(Event::End(id, result));
             if let Some(ctx) = ctx {
                 ctx.request_repaint();

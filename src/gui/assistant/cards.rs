@@ -415,10 +415,13 @@ pub(super) fn first_cut(
         });
         rule(ui, theme);
         ui.spacing_mut().item_spacing.y = 0.0;
+        // The response is not needed: drawing it is the point.
         let _ = widgets::switch(ui, theme, &mut card.no_repeats, "No repeated shots")
             .hint("Two shots from one clip start far apart; look-alike shots count as repeats");
+        // The response is not needed: drawing it is the point.
         let _ = widgets::switch(ui, theme, &mut card.people_spacing, "People spacing")
             .hint("The same performer does not come back within a few shots");
+        // The response is not needed: drawing it is the point.
         let _ = widgets::switch(ui, theme, &mut card.drop_on_hero, "Drop on the hero").hint(
             "The shot on the drop is the hero: the one you picked, else the strongest fire shot",
         );
@@ -491,6 +494,7 @@ fn hero_chip(ui: &mut Ui, theme: &Palette, card: &mut FirstCut, selection: &[Ref
 /// A card's buttons: one control-high row, laid out from the right (a bare
 /// right-to-left layout would take all the height left).
 fn button_row(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
+    // The response is not needed: drawing it is the point.
     let _ = ui.allocate_ui_with_layout(
         Vec2::new(ui.available_width(), theme::CONTROL_HEIGHT),
         Layout::right_to_left(Align::Center),
@@ -821,10 +825,12 @@ pub(super) fn progress(
                         stop = true;
                     }
                     if run.auto {
+                        // The response is not needed: drawing it is the point.
                         let _ = widgets::pill(ui, theme, "Auto-approved", widgets::Tone::Neutral);
                     }
                 });
             });
+            // The response is not needed: drawing it is the point.
             let _ = widgets::meter(
                 ui,
                 theme,

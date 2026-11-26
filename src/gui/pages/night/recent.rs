@@ -275,6 +275,7 @@ pub(crate) fn refresh(ctx: &PageCtx<'_>, state: &mut State, force: bool) {
     let (tx, rx) = crossbeam_channel::bounded(1);
     std::thread::spawn(move || {
         let list: Vec<Summary> = candidates(&inputs).iter().map(|w| summarize(w)).collect();
+        // The receiver has gone when what asked was closed; nobody is left to tell.
         let _ = tx.send(list);
     });
     state.scanning = Some(rx);

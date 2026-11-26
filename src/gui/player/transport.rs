@@ -158,6 +158,7 @@ pub(crate) fn bar(
     let id = ui.scope_id().with("transport-timecode");
     let response = ui.interact(shown, id, Sense::hover());
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, &text));
+    // The response is not needed: drawing it is the point.
     let _ = response.hint("Playhead position / length");
 
     scrub_bar(p, ui, theme, strip, fps);
@@ -291,6 +292,7 @@ fn speed(ui: &mut Ui, theme: &Palette, p: &mut Player) {
         widgets::blend(rest, theme.text, lift),
     );
     let response = widgets::tip(response, theme, "Speed", "J / K / L");
+    // The response is not needed: drawing it is the point.
     let _ = egui::Popup::menu(&response)
         .width(120.0)
         .gap(theme::SPACE_XS)
@@ -477,6 +479,7 @@ fn scrub_bar(p: &mut Player, ui: &mut Ui, theme: &Palette, strip: Rect, fps: f64
             track.y_range(),
             egui::Stroke::new(1.0, theme::rgb(theme.text_muted)),
         );
+        // The response is not needed: drawing it is the point.
         let _ = response.on_hover_text_at_pointer(clock::timecode(t, fps));
     }
 }
@@ -490,6 +493,7 @@ pub(crate) fn volume_menu(ui: &mut Ui, theme: &Palette, p: &mut Player) {
         icons::VOLUME
     };
     let response = button(ui, theme, glyph, "Volume", "", false);
+    // The response is not needed: drawing it is the point.
     let _ = egui::Popup::menu(&response)
         .width(220.0)
         .gap(theme::SPACE_XS)

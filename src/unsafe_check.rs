@@ -5,11 +5,11 @@
 // Dependencies: anyhow, std::fs (walks Rust sources during tests)
 // ============================================================================
 
-//! Structural checks for the unsafe boundary documented in `AGENTS.md`.
+//! Structural checks for the unsafe boundary documented in `CLAUDE.md`.
 //!
 //! Compiler lints verify local mechanics such as safety comments. This
 //! test enforces repository-level rules the compiler cannot express:
-//! unsafe stays under `src/win/` or `src/gui/run/`, tests never need it, and unsafe APIs
+//! unsafe stays under `src/win/`, tests never need it, unsafe APIs
 //! are forbidden, and one function cannot accumulate multiple unsafe
 //! operations.
 
@@ -84,10 +84,8 @@ mod tests {
                     continue;
                 }
                 let location = format!("{relative}:{}", index + 1);
-                if !relative.starts_with("src/win/") && !relative.starts_with("src/gui/run/") {
-                    failures.push(format!(
-                        "{location}: unsafe code must live under src/win/ or src/gui/run/"
-                    ));
+                if !relative.starts_with("src/win/") {
+                    failures.push(format!("{location}: unsafe code must live under src/win/"));
                 }
                 if test_start.is_some_and(|start| index > start) {
                     failures.push(format!("{location}: test code must use safe wrappers"));

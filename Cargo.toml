@@ -79,6 +79,9 @@ unreachable_patterns = "forbid"
 unreachable_pub = "forbid"
 missing_docs = "deny"
 unsafe_op_in_unsafe_fn = "deny"
+# Unsafe Rust is denied everywhere; `src/win/` is the one module allowed it,
+# and says so with `#[expect(unsafe_code)]` on its `mod` line in lib.rs.
+unsafe_code = "deny"
 
 [lints.clippy]
 unwrap_used = "deny"

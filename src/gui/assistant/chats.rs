@@ -444,6 +444,7 @@ pub(super) fn menu(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
     }
     let hint = keymap::command("chat-new").map_or_else(String::new, |c| c.hint(ctx.keymap));
     let button = widgets::icon_toggle_sized(ui, theme, icons::MENU, "Chats", "", open, 32.0);
+    // The response is not needed: drawing it is the point.
     let _ = egui::Popup::menu(&button)
         .id(id)
         .width(320.0)

@@ -125,7 +125,10 @@ version:
   function per FFI call; the `unsafe` block contains the call and nothing
   else; a `// SAFETY:` comment stating the reasoning; an owning `Drop` type
   wherever there is a matching close/free/destroy. Required unsafe lives
-  only under `src/win/`, and `src/unsafe_check.rs` enforces it.
+  only under `src/win/`: `unsafe_code` is denied everywhere else, and
+  `src/unsafe_check.rs` enforces the rest.
+- **A discarded result says why.** `let _ = f();` and `f().ok();` outside
+  tests carry a comment giving the reason; `src/discarded_check.rs` checks.
 - **One toolchain.** `rust-toolchain.toml` pins it, every workflow's
   `toolchain:` line names the same version, and `tests/toolchain_pin.rs`
   fails the build if they drift.

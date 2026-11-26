@@ -1053,6 +1053,7 @@ fn filter_menu(
         "",
         open || active,
     );
+    // The response is not needed: drawing it is the point.
     let _ = egui::Popup::menu(&response)
         .id(id)
         .width(240.0)
@@ -1125,6 +1126,7 @@ fn sort_menu(ui: &mut egui::Ui, theme: &Palette, state: &mut State, label: &str)
     let id = ui.make_persistent_id("review-sort");
     let open = egui::Popup::is_id_open(ui.ctx(), id);
     let response = widgets::dropdown_button(ui, theme, label, "Order", open);
+    // The response is not needed: drawing it is the point.
     let _ = egui::Popup::menu(&response)
         .id(id)
         .width(200.0)
@@ -1163,6 +1165,7 @@ fn smart_menu(ui: &mut egui::Ui, theme: &Palette, dos: &mut Vec<Do>, lit: bool) 
     let id = ui.make_persistent_id("review-smart");
     let open = egui::Popup::is_id_open(ui.ctx(), id);
     let response = widgets::icon_toggle(ui, theme, icons::SPARKLES, "Smart searches", "", open);
+    // The response is not needed: drawing it is the point.
     let _ = egui::Popup::menu(&response)
         .id(id)
         .width(220.0)
@@ -1202,6 +1205,7 @@ fn modes_menu(ui: &mut egui::Ui, theme: &Palette, state: &State, dos: &mut Vec<D
         "",
         open || kind != Kind::Browse,
     );
+    // The response is not needed: drawing it is the point.
     let _ = egui::Popup::menu(&response)
         .id(id)
         .width(240.0)

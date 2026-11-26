@@ -29,10 +29,12 @@ fn native(path: &Path) -> String {
 /// Opens `dir` in the file manager.
 pub(crate) fn open_folder(dir: &Path) {
     #[cfg(windows)]
+    // Opening the folder is a convenience; if it fails the app is as it was.
     let _ = std::process::Command::new("explorer")
         .arg(native(dir))
         .spawn();
     #[cfg(not(windows))]
+    // Opening the folder is a convenience; if it fails the app is as it was.
     let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
 }
 
@@ -41,6 +43,7 @@ pub(crate) fn reveal(file: &Path) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt as _;
+        // Opening the folder is a convenience; if it fails the app is as it was.
         let _ = std::process::Command::new("explorer")
             .raw_arg(format!("/select,\"{}\"", native(file)))
             .spawn();
@@ -69,6 +72,7 @@ impl Copying {
         let dest = to.clone();
         std::thread::spawn(move || {
             let result = copy(&from, &dest).map_err(|e| format!("{e:#}"));
+            // The receiver has gone when what asked was closed; nobody is left to tell.
             let _ = tx.send(result);
             if let Some(ctx) = ctx {
                 ctx.request_repaint();
