@@ -456,6 +456,7 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- A cut tab with only soft findings shows a warning triangle and count, not the red error cross; its tooltip says it still renders.
 - The export panel never replaces a file it did not make. ave notes each video it
   delivers (`<work>/renders/delivered.json`, with size and time); a delivery name already
   holding anything else (your own edit, say) shows *file exists*, and Render asks first,

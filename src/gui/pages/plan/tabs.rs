@@ -57,6 +57,8 @@ pub(super) struct Tab {
     pub(super) dirty: bool,
     /// Problems `plan::check` finds (0 when it passes).
     pub(super) errors: usize,
+    /// Whether any of them is hard (else they are all soft warnings).
+    pub(super) hard: bool,
 }
 
 /// What is known about a plan file between frames.
@@ -68,6 +70,8 @@ pub(super) struct Info {
     pub(super) seen: Option<SystemTime>,
     /// Problems the check found at `stamp`.
     pub(super) errors: usize,
+    /// Whether any of them is hard.
+    pub(super) hard: bool,
 }
 
 /// The rename / duplicate form.
@@ -96,7 +100,7 @@ pub(super) fn model(
     hidden: &BTreeSet<String>,
     current: Option<&str>,
     current_dirty: bool,
-    current_errors: usize,
+    current_errors: (usize, bool),
     info: &BTreeMap<String, Info>,
 ) -> Vec<Tab> {
     stems
@@ -114,9 +118,14 @@ pub(super) fn model(
                     known.is_some_and(|i| i.stamp.is_some() && i.stamp != i.seen)
                 },
                 errors: if is_current {
-                    current_errors
+                    current_errors.0
                 } else {
                     known.map_or(0, |i| i.errors)
+                },
+                hard: if is_current {
+                    current_errors.1
+                } else {
+                    known.is_some_and(|i| i.hard)
                 },
             }
         })
@@ -237,20 +246,25 @@ pub(super) fn refresh(state: &mut State, project: &mut Project) {
             stamp: None,
             seen: if first { stamp } else { None },
             errors: 0,
+            hard: false,
         });
         if info.stamp != stamp {
             info.stamp = stamp;
-            info.errors = match (
+            (info.errors, info.hard) = match (
                 Plan::load(&history::live_path(&project.work, name)),
                 project.index.as_ref(),
                 project.music.as_ref(),
             ) {
                 (Ok(plan), Some(index), Some(map)) => {
                     let found = crate::plan::check(&plan, index, map, &project.people);
-                    found.len() - crate::plan::accepted_count(&plan, &found)
+                    (
+                        found.len() - crate::plan::accepted_count(&plan, &found),
+                        found.iter().any(crate::plan::Finding::is_hard),
+                    )
                 }
-                (Ok(_), _, _) => 0,
-                (Err(_), _, _) => 1,
+                (Ok(_), _, _) => (0, false),
+                // A plan that does not load is an error.
+                (Err(_), _, _) => (1, true),
             };
         }
         if state.name.as_deref() == Some(name.as_str()) {
@@ -282,12 +296,14 @@ pub(super) fn strip(
     let names = stems(project);
     let mut closed = hidden(project);
     // Accepted soft findings do not count.
+    let any_hard = state.problems.iter().any(crate::plan::Finding::is_hard);
     let current_errors = match (&state.viewing, &state.plan) {
-        (None, Some(plan)) => {
-            state.problems.len() - crate::plan::accepted_count(plan, &state.problems)
-        }
-        (None, None) => state.problems.len(),
-        (Some(_), _) => 0,
+        (None, Some(plan)) => (
+            state.problems.len() - crate::plan::accepted_count(plan, &state.problems),
+            any_hard,
+        ),
+        (None, None) => (state.problems.len(), any_hard),
+        (Some(_), _) => (0, false),
     };
     let tabs = model(
         &names,
@@ -400,19 +416,24 @@ pub(super) fn strip(
         }
         if let Some(g) = count_galley {
             x += GAP;
-            let red = theme::rgb(t.danger);
+            // Hard findings are errors (red cross); soft ones only warn.
+            let (glyph, tone) = if tab.hard {
+                (icons::CIRCLE_X, theme::rgb(t.danger))
+            } else {
+                (icons::TRIANGLE_ALERT, theme::rgb(t.warning))
+            };
             icons::paint(
                 p,
                 Rect::from_min_size(
                     pos2(x, rect.center().y - (icons::SMALL - 2.0) / 2.0),
                     Vec2::splat(icons::SMALL - 2.0),
                 ),
-                icons::CIRCLE_X,
+                glyph,
                 icons::SMALL - 2.0,
-                red,
+                tone,
             );
             x += icons::SMALL;
-            p.galley(pos2(x, rect.center().y - g.size().y / 2.0), g, red);
+            p.galley(pos2(x, rect.center().y - g.size().y / 2.0), g, tone);
         }
         let tip = format!(
             "plans/{}.toml{}{}",
@@ -426,8 +447,10 @@ pub(super) fn strip(
             } else {
                 ""
             },
-            if tab.errors > 0 {
-                format!(" · check fails ({} problems)", tab.errors)
+            if tab.errors > 0 && tab.hard {
+                format!(" · check fails ({} findings)", tab.errors)
+            } else if tab.errors > 0 {
+                format!(" · {} warning(s), still renders", tab.errors)
             } else {
                 String::new()
             }
@@ -732,6 +755,7 @@ mod tests {
                 stamp: Some(t1),
                 seen: Some(t0),
                 errors: 3,
+                hard: false,
             },
         );
         info.insert(
@@ -740,9 +764,10 @@ mod tests {
                 stamp: Some(t0),
                 seen: Some(t0),
                 errors: 9,
+                hard: true,
             },
         );
-        let tabs = model(&stems, &hidden, Some("wide-60"), true, 0, &info);
+        let tabs = model(&stems, &hidden, Some("wide-60"), true, (0, false), &info);
         assert_eq!(
             tabs,
             vec![
@@ -750,19 +775,22 @@ mod tests {
                     name: "feed-30".into(),
                     current: false,
                     dirty: true,
-                    errors: 3
+                    errors: 3,
+                    hard: false
                 },
                 Tab {
                     name: "reel-30".into(),
                     current: false,
                     dirty: false,
-                    errors: 9
+                    errors: 9,
+                    hard: true
                 },
                 Tab {
                     name: "wide-60".into(),
                     current: true,
                     dirty: true,
-                    errors: 0
+                    errors: 0,
+                    hard: false
                 },
             ],
             "closed tabs hidden except the open one; dirt from disk or from unsaved edits"
@@ -774,9 +802,17 @@ mod tests {
                 stamp: Some(t1),
                 seen: None,
                 errors: 0,
+                hard: false,
             },
         );
-        let tabs = model(&names(&["new"]), &BTreeSet::new(), None, false, 0, &info);
+        let tabs = model(
+            &names(&["new"]),
+            &BTreeSet::new(),
+            None,
+            false,
+            (0, false),
+            &info,
+        );
         assert!(
             tabs.first().is_some_and(|t| t.dirty),
             "a new plan file shows a dot"
