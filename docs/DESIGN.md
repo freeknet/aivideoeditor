@@ -1,5 +1,9 @@
 # Design system
 
+> **Being replaced.** The visual theme is moving to the `egui-material3` crate
+> (Material 3). This page describes the current theme and will be superseded
+> once that lands.
+
 The look of the desktop app: Selects' dark shadcn workspace, rebuilt in
 egui. This page is for anyone drawing a panel or page. The tokens and
 components live in code; this says which to use for what.

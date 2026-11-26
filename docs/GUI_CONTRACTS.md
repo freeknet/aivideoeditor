@@ -7,6 +7,8 @@ Read with: `CLAUDE.md` (house rules, enforced by the build),
 `docs/research/01-problem-and-competitors.md` (what problem we solve),
 `docs/research/02-ui-and-workflow.md` §9 (the screen-by-screen spec),
 `docs/research/03-techniques.md` (engine upgrades),
+`docs/research/04-selects-agent.md` (how the chat's agent runs),
+`docs/ARCHITECTURE.md` (the module map),
 **`docs/DESIGN.md` (the design system: tokens, fonts, Lucide icons, which
 widget to use for what, and the rules every page follows — `panel_header`
 first, icons not glyphs, no hint lines, `empty_state`)**.
@@ -25,7 +27,8 @@ log; rule-checked plans with a reason per shot; local and free.
 ## Layout (Selects-style single workspace)
 
 ```
-┌ top bar: home · night name · [ search shots, captions, people… ] · chat · inspector · export · ⌘K · ⚙ ┐
+┌ top bar: home · night name · [ search shots, captions, moments… ] · panel toggles · view ▾ · ⚙ · export ┐
+├ guide: the six stages (Footage · Analyse · Music · First cut · Review · Export) · one "next" button ───┤
 │ chat      │ browser    │            viewer            │ inspector                                   │
 │ (history, │ Shots      │  (player, aspect + safe      │ (everything about the selection)            │
 │  ref chips│ People     │   areas, transport)          │                                             │
@@ -37,6 +40,9 @@ status bar: running jobs · night · last error
 ```
 
 Home screen (`pages::night`) replaces the workspace when no night is open or Home is pressed.
+The guide strip (`pages::night::guide`) sits under the top bar on Home and in the editor
+alike; other regions ask it for a stage's next step with `Action::RunStep(Stage)`, and it
+runs that through Home's one pipeline queue.
 Look: neutral studio greys (signature theme), small type, flat panels with 1 px borders,
 thumbnails carry the colour. Reference: Selects (tryselects.com) — study its density.
 
@@ -49,7 +55,7 @@ Comment / Preview (`Alt+1…4`) rearrange them (`gui::ui::layout`).
 Keys live in one table, `gui::ui::keymap::COMMANDS` (id, label, scope, ave /
 Premiere / Final Cut keys). Global rows are dispatched by the shell; region
 rows document keys a region reads and give it `keymap::chord(id, preset)` to
-adopt the user's preset. `?` prints the table.
+adopt the user's preset. `?` shows the table (`gui::ui::shortcut_sheet`).
 
 | Region | Module | Shortcut (ave preset) |
 |---|---|---|
@@ -66,7 +72,13 @@ adopt the user's preset. `?` prints the table.
 `crate::gui::ui::widgets::mention_menu(ui, ctx.actions, &reference)` (or
 `mention_menu_many` for a selection, in timeline order). It renders "Mention
 in chat ▸ about / keep / avoid / replace / more like / feature" and pushes
-`Action::AddRef`.
+`Action::AddRef`. (People and Music still draw their own "Reference in chat"
+submenu, which does the same.)
+
+To hand the chat a whole message (a batch of timeline comments, a finding to
+fix, Home's first request), push `Action::ChatInbox(text)`: the assistant
+takes it from `ctx.chat_inbox`, shows it in its composer or sends it, and
+opens the panel.
 
 ## Code map
 
@@ -76,14 +88,16 @@ in chat ▸ about / keep / avoid / replace / more like / feature" and pushes
 | Page contract | `src/gui/pages/mod.rs` (`PageCtx`, `States`, helpers) | integration only |
 | Regions | `src/gui/pages/<region>.rs` + optional `src/gui/pages/<region>/*.rs` | one owner per region |
 | Workspace layout | `src/gui/ui/workspace.rs` | integration only |
-| Reserved engine modules | `src/search.rs`, `src/recipe.rs`, `src/alternatives.rs` (declared in lib.rs, empty) | see owners in the brief |
+| Keys, layout, palette | `src/gui/ui/keymap.rs`, `src/gui/ui/layout.rs`, `src/gui/ui/command_palette.rs` + `src/command_palette.rs` | integration only |
 | Assistant panel | `src/gui/assistant.rs` (+ `src/gui/assistant/*.rs`) | assistant owner |
+| Agent tools | `src/mcp.rs` (`ave mcp`; the in-process providers reuse it), `agent/skills/` | assistant owner |
 | Viewer | `src/gui/player.rs` (+ `src/gui/player/*.rs`) | player owner |
 | Thumbnails | `src/gui/thumbs.rs` | integration only |
 | Open night | `src/project.rs` | integration only |
 | Background jobs | `src/jobs.rs` | integration only |
 | References | `src/refs.rs` | integration only |
-| Engine | `src/{analyze,index,caption,beats,people,plan,draft,render,otio,media,commands}.rs` | engine owners |
+| Engine | `src/{index,caption,people,plan,draft,render,otio,media,proxy,commands}.rs`, `src/analyze/` (incl. sets, spans, cheer), `src/beats.rs` (+ `src/beats/structure.rs`) | engine owners |
+| Editing helpers | `src/fix.rs` (finding fixes and advice), `src/alternatives.rs` (slot alternatives), `src/search.rs` (+ `src/search/marks.rs`), `src/recipe.rs`, `src/template.rs` | engine owners |
 
 **Integration-only files** may be changed by a page owner only to *add*
 something their page needs that cannot live in their own files, and the
@@ -116,21 +130,28 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui);
 | Field | Use |
 |---|---|
 | `theme` | the palette |
-| `project: &mut Option<Project>` | the night: `work`, `settings`, `index` (shot log), `music`, `people`, `plans`; `reload_*()` after you write a file |
-| `jobs` | `spawn(label, Cmd)` runs an engine step (`crate::commands::Cmd`) in the background; `running()`, `get(id)`; the app reloads the project when one finishes |
+| `project: &mut Option<Project>` | the night: `work`, `settings`, `index` (shot log), `music`, `people`, `plans`, `warnings`; `reload_*()` after you write a file |
+| `jobs` | `spawn(label, Cmd)` runs an engine step (`crate::commands::Cmd`) in the background; `running()`, `get(id)`, `cancel(id)`; the app reloads the project when one finishes |
 | `thumbs` | `paint(ui, rect, path, t, cx, placeholder)` cover-fits a frame (cropped around `cx`); `get(..)` for the raw texture |
-| `player` | the shared viewer: `open_clip(path, t0, t1, cx)`, `open_sequence(Vec<SeqShot>, music)`, `open_audio(path, t0, t1)`, `sequence_shot()`, `play/pause/toggle/seek/position/duration`, `show(ui, thumbs, size, aspect, bg)`, `transport(ui)`, `handle_keys(ui, ctx.keymap)` (Space, J/K/L, ←/→, under the preset) |
+| `player` | the shared viewer: `open_clip(path, t0, t1, cx)`, `open_sequence(Vec<SeqShot>, music)` (or `open_cut(.., card)` with an end card), `open_audio(path, t0, t1)`, I/O marks (`mark_in/mark_out/marks`), `sequence_shot()`, `play/pause/toggle/seek/position/duration`, `show(ui, thumbs, size, aspect, bg)`, `transport(ui)`, `handle_keys(ui, ctx.keymap)` (Space, J/K/L, ←/→, under the preset) |
 | `config` | saved preferences |
 | `keymap` | the keyboard preset: read region keys with `keymap::pressed(input, id, ctx.keymap)` / `consume` / `fires`, never a hard-coded `Key` |
 | `refs` | references staged for the assistant (read; add with `Action::AddRef`) |
 | `selection` | the app-wide selection as `Vec<Reference>`: **replace it** when the user selects in your region; the inspector shows it; `R`/`Shift-R` stage it for chat (handled by the workspace) |
-| `search` | the top bar search text (Shots filters by it; others may too) |
+| `search` | the top bar search text (Shots filters by it with `crate::search`; others may too) |
+| `chat_inbox` | messages handed to the chat with `Action::ChatInbox`; the assistant drains it |
 | `actions` | push `Action`s; applied after the frame |
+| `blocked` | a modal is open: read no shortcuts (`keys_free(ui)` checks this and text focus) |
+| `page` | the `Page` on show |
 
 ### Actions (`src/gui/app/mod.rs`)
 
 `Go(Page)`, `PickProject`, `OpenProject(path)`, `ReloadProject`, `CloseProject`,
-`AddRef(Reference)`, `ClearRefs`, `ToggleChat`, `ToggleInspector`, `ToggleExport`, plus the shell's own (settings, theme, sidebar, quit).
+`AddRef(Reference)`, `ClearRefs`, `ChatInbox(String)`, `ToggleChat`, `ToggleInspector`, `ToggleExport`,
+`SetViewMode`, `TogglePanel(Region)`, `FocusRegion(Region)`, `StageSelection`, `ChooseSelectionIntent`,
+`FocusSearch`, `LiftShots { plan, shots }` (the timeline's undoable, versioned lift, from any region),
+`RunStep(Stage)` (the guide runs a stage's next step), plus the shell's own (commands, settings,
+theme, motion, keymap, shortcut sheet, sidebar, analysis jobs, ffmpeg and caption paths, focus, quit).
 
 ## References (`src/refs.rs`) — the "reference it in the conversation" feature
 
@@ -138,12 +159,12 @@ The user constantly needs to point at *these* clips/shots/bars while talking to
 the assistant. Every page makes references from its selection; the assistant
 composer shows them as chips and sends them (resolved to facts) with the message.
 
-- **Kinds:** `Shot{plan,index}`, `Segment{id}`, `Range{clip,t0,t1}`, `Frame{clip,t}`,
+- **Targets** (`refs::Target`): `Shot{plan,index}`, `Segment{id}`, `Range{clip,t0,t1}`, `Frame{clip,t}`,
   `Bars{from,to}`, `Person{name}`, `Plan{name}`.
 - **Modifiers** (intent): `About`, `Keep` `+`, `Avoid` `!`, `Replace` `>`, `Like` `~`, `Hero` `*`.
 - **Text form** round-trips: `>@shot:reel-30#5 ~@seg:MVI_7925/3 !@person:white-mask @bars:17-20`.
   Typing that in the composer is the same as clicking.
-- `refs::resolve(&ref, project)` → `Resolved { clip, range, facts }` — the precise
+- `refs::resolve(&ref, project)` → `Result<Resolved, String>`, `Resolved { clip, range, facts }` — the precise
   facts (source range, shot-log numbers, caption, who) the model receives.
 
 **Every page must offer reference-making on its selection:**
@@ -154,13 +175,41 @@ composer shows them as chips and sends them (resolved to facts) with the message
 | `R` | add the selection as references (`Action::AddRef` per item), modifier `About` |
 | `Shift-R` | add with a modifier picked from a small popup (keep / avoid / replace / more like / feature) |
 | `Alt-R` | add the current I/O-marked range or playhead frame as `Range`/`Frame` |
-| right-click → "Reference in chat ▸ <modifier>" | same, from the context menu |
-| drag an item onto the assistant panel | add as reference (where the page and panel are both visible) |
+| right-click → "Mention in chat ▸ <modifier>" | same, from the context menu (`mention_menu`) |
+| drag an item onto the assistant panel | add as reference (where the page and panel are both visible); *not built yet: no region offers it today* |
+
+## What the regions write, and where
+
+Each of these is a plain file another region, the command line or the chat
+agent may also read, so write it through its owner and reload:
+
+- **Findings** (`pages::plan::findings`): the check bar's list. **Fix** applies
+  `fix::fixes`' best candidate as one undoable, versioned edit; **Ask chat**
+  puts a prompt naming the shots in the composer (`Action::ChatInbox`; nothing
+  is sent); **Accept** (soft findings only) adds the finding to the plan's
+  `accepted` list until the shots it is about change. **Fix all** is
+  `fix::fix_all`, as one edit.
+- **Markers** (`pages::plan::comments`): a marker is a `[[comment]]` in the
+  plan's TOML (`plan::Comment`; `[[marker]]` is read too). **Send to chat**
+  hands every open comment over as one message.
+- **Plan versions** (`pages::plan::history`): every save writes
+  `plans/<name>.toml` and `plans/.history/<name>/v<N>.toml`. `LiftShots` goes
+  through the timeline's edit path, and the assistant's Apply writes a new
+  version too, so undoing an agent turn is reverting to a version.
+- **Review marks** (`search::marks`): pick / reject and a 1-5 rating per
+  segment in `<work>/review.toml`, written by the Shots tab.
+- **Acts** (`analyze::sets`, `pages::review::acts`): the index groups a night
+  into sets; the Shots tab can group by them, and `set:N` searches one.
+- **Export** (`pages::deliver`): the recipe's deliverables × plan versions; a
+  plan failing its check is never rendered, and a file ave did not make is
+  never replaced, without an explicit "render anyway" / "replace them".
 
 ## Engine calls a page may make directly
 
 Read-only and cheap: `plan::Plan::load/save/timing`, `plan::check`, `refs::resolve`,
-`people::People` lookups, anything on `Index`/`MusicMap`. Anything slow (decoding,
+`people::People` lookups, anything on `Index`/`MusicMap`, `search::search`, `fix::advice`,
+`alternatives::rank`. `fix::fixes` re-checks every candidate, so the findings list works
+it out one finding a frame. Anything slow (decoding,
 analysis, rendering, captioning) goes through `jobs.spawn` with a `Cmd`, or a page-owned
 worker thread that never blocks the UI thread.
 
@@ -173,5 +222,5 @@ cargo test --all-features
 ```
 
 Plus: every new `.rs` file has the header banner (`src/header_check.rs`), no `unsafe`
-outside `src/win/`, no `unwrap/expect/panic`, `#[expect(..., reason)]` never `#[allow]`.
+outside `src/win/` (`src/unsafe_check.rs`), no `unwrap/expect/panic`, `#[expect(..., reason)]` never `#[allow]`.
 Add a `CHANGELOG.md` line under `## [Unreleased]` → `### Added` for what you built.
