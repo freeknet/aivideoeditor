@@ -1,0 +1,78 @@
+name: Claude PR review
+
+# Claude Code reviews each pull request once, when it opens or leaves draft.
+# It runs on the owner's Claude plan through the CLAUDE_CODE_OAUTH_TOKEN
+# repository secret (made with `claude setup-token`), not on API credits.
+# Until that secret exists the job fails at the review step and gates
+# nothing (ci-ok does not depend on it). Pushes to an open PR do not
+# re-trigger it; comment `@claude review again` (claude.yml) to ask for
+# another pass.
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+
+# A reopened PR supersedes any review still running for it.
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    name: review
+    # Forks get no secrets on `pull_request`, and drafts aren't ready.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      actions: read
+    steps:
+      # Pinned to full SHAs, as in ci.yml. Versions are in the comments.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+
+      - uses: anthropics/claude-code-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe # v1.0.269
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # The job's own token, so the review does not depend on the Claude
+          # GitHub App being installed on this repository. Comments come
+          # from github-actions[bot].
+          github_token: ${{ github.token }}
+          track_progress: true
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            Review this pull request to AI Video Editor, a Windows desktop
+            video editor (egui) with the `ave` command line under it, in
+            Rust. Read CLAUDE.md first: its "Rules the build enforces" and
+            "Things that are deliberate" sections are the house rules.
+
+            Focus, most important first:
+            1. Correctness bugs, including in the plan check, the render
+               command lines and anything that parses outside input (plan
+               and recipe TOML, people.toml keys, MCP messages).
+            2. `unsafe` outside src/win/, or unsafe blocks without a
+               `// SAFETY:` comment or holding more than one call.
+            3. unwrap/expect/panic!/todo!/unreachable!, `#[allow]`, wildcard
+               enum arms, or a `let _ =` / `.ok();` without a reason comment.
+            4. A file ave did not make being overwritten, or a user's
+               footage folder being written to.
+            5. A hand edit to CHANGELOG.md or THIRD_PARTY.md (both are
+               generated).
+
+            Do not comment on formatting or clippy lints; CI enforces them.
+            Put specific issues in inline comments on the lines concerned.
+            Finish with one short top-level summary. If nothing is wrong,
+            say so in a sentence; don't invent findings.
+          claude_args: |
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
