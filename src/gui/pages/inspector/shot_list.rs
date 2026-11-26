@@ -679,6 +679,7 @@ mod tests {
                 shot("D", "closer"),
             ],
             comments: Vec::new(),
+            accepted: Vec::new(),
         }
     }
 

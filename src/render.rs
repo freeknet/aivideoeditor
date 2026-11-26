@@ -687,6 +687,7 @@ mod tests {
             finish,
             shots: vec![shot("A"), shot("B")],
             comments: Vec::new(),
+            accepted: Vec::new(),
         }
     }
 

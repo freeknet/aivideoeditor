@@ -244,6 +244,7 @@ mod tests {
                 comment(2.0, "cut on the snare\nnot the kick", "yellow", false),
                 comment(4.5, "", "blue", true),
             ],
+            accepted: Vec::new(),
         };
         let m = plan_markers(&plan, 24.0);
         assert_eq!(m.len(), 2, "one OTIO marker per plan marker");

@@ -137,7 +137,8 @@ decision depends on the picture. Plans are storyboards on the music's beat grid:
 check (each finding is `<where> [<hard|soft> <id>] <message>`: hard ones, such as bad-span or beat-count, make the \
 plan invalid and must be fixed; soft ones, such as jump-cut, exposure-jump or repeat-performer, are taste calls); \
 plan_edit applies ops to a working copy and returns the diff and check without saving until commit:true; \
-alternatives ranks replacements for a slot. Rules: no repeated shots or performers, best moments only, the drop on \
+alternatives ranks replacements for a slot; plan_fix lists every finding with what it means and its automatic \
+fixes (what each does to the check, and the ops to stage it with plan_edit). Rules: no repeated shots or performers, best moments only, the drop on \
 the hero fire shot, no slow motion or digital zoom. You own the editorial decisions; say why for each shot in its \
 note. A commit needs the base_version plan_get returned and is refused unless the person allowed the assistant to \
 apply edits; otherwise stage and let them apply. Every commit is a new version (plan_versions, plan_revert).";
@@ -201,6 +202,8 @@ pub(crate) fn tools() -> Value {
             "seconds": {"type": "number", "default": 30}, "end_card": {"type": "string"}, "commit": {"type": "boolean", "default": false}}}},
         {"name": "alternatives", "description": "Ranked footage that could replace shot `index` (1-based) of a plan without breaking the rules, each with why it fits.",
          "inputSchema": {"type": "object", "required": ["plan", "index"], "properties": {"plan": {"type": "string"}, "index": {"type": "integer"}, "limit": {"type": "integer", "default": 8}}}},
+        {"name": "plan_fix", "description": "Every rule-check finding of a plan with what it means in plain words and its automatic fixes, best first: each says what it changes and what it does to the check (clears the finding, never adds a hard one; new soft findings named) and carries the ops to stage it with plan_edit. Findings the person accepted are marked. Nothing is saved.",
+         "inputSchema": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}, "limit": {"type": "integer", "default": 3, "description": "Fixes per finding."}}}},
         {"name": "plan_versions", "description": "A plan's saved versions, oldest first, with what changed.",
          "inputSchema": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}}}},
         {"name": "plan_revert", "description": "Restore a saved version (saved as a new version, nothing is lost).",
@@ -232,6 +235,7 @@ pub(crate) fn call(work: &Path, name: &str, args: &Value, caller: Caller) -> Res
         "plan_edit" => plan_edit(&project, args, caller),
         "plan_draft" => plan_draft(&project, args, caller),
         "alternatives" => alternatives(&project, args),
+        "plan_fix" => plan_fix(&project, args),
         "plan_versions" => {
             let name = str_arg(args, "name")?;
             let lines: Vec<String> = store::versions(&project.work, name)
@@ -851,6 +855,62 @@ fn alternatives(p: &Project, args: &Value) -> Result<Vec<Value>> {
     }))
 }
 
+/// `plan_fix`: each finding with its advice and automatic fixes, as ops.
+fn plan_fix(p: &Project, args: &Value) -> Result<Vec<Value>> {
+    let index = p.index.as_ref().context("the night is not indexed yet")?;
+    let music = p.music.as_ref().context("the music is not mapped yet")?;
+    let name = str_arg(args, "name")?;
+    let path = plan_path(p, name);
+    let plan = Plan::load(&path)?;
+    let limit = args["limit"].as_u64().unwrap_or(3).clamp(1, 8) as usize;
+    let memory = crate::plan::Memory::for_index(index);
+    let night = crate::fix::Night {
+        index,
+        map: music,
+        people: &p.people,
+        memory: &memory,
+    };
+    let findings = night.check(&plan);
+    let mut s = format!("{name}: check {}\n", check_summary(&findings));
+    for f in &findings {
+        let accepted = plan.is_accepted(f);
+        s.push_str(&format!(
+            "{}{}\n  what: {}\n",
+            f.text(),
+            if accepted {
+                " (accepted by the person)"
+            } else {
+                ""
+            },
+            crate::fix::advice(f.id)
+        ));
+        if accepted {
+            continue;
+        }
+        let fixes = crate::fix::fixes(&plan, f, night, limit);
+        if fixes.is_empty() {
+            s.push_str(if crate::fix::fixable(f.id) {
+                "  no safe automatic fix: edit by hand (alternatives, plan_edit)\n"
+            } else {
+                "  no automatic fix: the person's call\n"
+            });
+        }
+        for (k, fix) in fixes.iter().enumerate() {
+            s.push_str(&format!(
+                "  fix {}: {}\n    ops: {}\n",
+                k + 1,
+                fix.preview(),
+                serde_json::to_string(&fix.ops)?
+            ));
+        }
+    }
+    s.push_str(&format!(
+        "stage a fix with plan_edit (name, ops, reason); base_version: {}\n",
+        plan_version(&path)?
+    ));
+    Ok(text(s))
+}
+
 /// `look`: a JPEG contact sheet of up to 12 moments.
 fn look(p: &Project, args: &Value) -> Result<Vec<Value>> {
     use base64::Engine as _;
@@ -1036,6 +1096,50 @@ pub(crate) mod tests {
         let base = super::plan_version(&work.join("plans/t.toml"))?;
         let v = super::commit_edit(work, "t", &ops_typed, "from a card", &base)?;
         assert_eq!(v, 3, "the card's Apply takes the same path");
+        Ok(())
+    }
+
+    #[test]
+    fn plan_fix_lists_each_finding_with_its_fixes_as_ops() -> anyhow::Result<()> {
+        use super::{Caller, call};
+        let dir = tempfile::tempdir()?;
+        let work = dir.path().join("2026-11-13").join("_ave");
+        std::fs::create_dir_all(work.join("plans"))?;
+        let mut index = crate::fix::tests::index();
+        crate::fix::tests::paint(&mut index, "C", 0.3, [0.0, 0.05, 0.95]);
+        index.save(&work)?;
+        crate::fix::tests::map().save(&work)?;
+        let mut plan = crate::fix::tests::plan();
+        plan.name = "reel-x".into();
+        plan.save(&work.join("plans").join("reel-x.toml"))?;
+        let got = first_text(&call(
+            &work,
+            "plan_fix",
+            &json!({"name": "reel-x"}),
+            Caller::Agent,
+        )?);
+        assert!(
+            got.contains("cut 2|3 [soft colour-jump]")
+                && got.contains("what: The mid-tone colour jumps")
+                && got.contains("fix 1: Swap shot 3 C/2 → ")
+                && got.contains("ops: [{\"op\":\"replace_shot\",\"index\":3,"),
+            "finding, advice, fix and ops: {got}"
+        );
+        let ops_line = got
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("ops: "))
+            .ok_or_else(|| anyhow::anyhow!("no ops line: {got}"))?;
+        let ops: serde_json::Value = serde_json::from_str(ops_line)?;
+        let staged = first_text(&call(
+            &work,
+            "plan_edit",
+            &json!({"name": "reel-x", "ops": ops, "reason": "fix the colour jump"}),
+            Caller::Agent,
+        )?);
+        assert!(
+            staged.contains("0 problems after") && staged.contains("1 fixed"),
+            "the ops stage cleanly with plan_edit: {staged}"
+        );
         Ok(())
     }
 

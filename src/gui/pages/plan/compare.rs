@@ -1137,6 +1137,7 @@ mod tests {
             finish: Default::default(),
             shots,
             comments: Vec::new(),
+            accepted: Vec::new(),
         }
     }
 

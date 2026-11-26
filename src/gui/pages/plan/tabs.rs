@@ -246,7 +246,8 @@ pub(super) fn refresh(state: &mut State, project: &mut Project) {
                 project.music.as_ref(),
             ) {
                 (Ok(plan), Some(index), Some(map)) => {
-                    crate::plan::check(&plan, index, map, &project.people).len()
+                    let found = crate::plan::check(&plan, index, map, &project.people);
+                    found.len() - crate::plan::accepted_count(&plan, &found)
                 }
                 (Ok(_), _, _) => 0,
                 (Err(_), _, _) => 1,
@@ -280,10 +281,13 @@ pub(super) fn strip(
     let t = palette;
     let names = stems(project);
     let mut closed = hidden(project);
-    let current_errors = if state.viewing.is_none() {
-        state.problems.len()
-    } else {
-        0
+    // Accepted soft findings do not count.
+    let current_errors = match (&state.viewing, &state.plan) {
+        (None, Some(plan)) => {
+            state.problems.len() - crate::plan::accepted_count(plan, &state.problems)
+        }
+        (None, None) => state.problems.len(),
+        (Some(_), _) => 0,
     };
     let tabs = model(
         &names,
@@ -812,6 +816,7 @@ mod tests {
             finish: Default::default(),
             shots: Vec::new(),
             comments: Vec::new(),
+            accepted: Vec::new(),
         }
     }
 

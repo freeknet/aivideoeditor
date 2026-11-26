@@ -365,6 +365,12 @@ pub(crate) struct Plan {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub(crate) comments: Vec<Comment>,
+    /// Soft findings the editor accepted for this cut, by [`Plan::accept_key`]
+    /// (`colour-jump@3 MVI_7925@12.30x4 MVI_7990@40.10x4`): they no longer
+    /// count. The key names the shots involved, so a finding comes back
+    /// once its shots change.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) accepted: Vec<String>,
 }
 
 /// A marker: a moment of the cut with a colour and, usually, a note. Like
@@ -450,6 +456,46 @@ impl Plan {
     /// Beats of footage before the end card.
     pub(crate) fn footage_beats(&self) -> usize {
         (self.card_bar - self.start_bar) * 4
+    }
+
+    /// The key a finding is accepted by: its id, where it is, and the shots
+    /// it is about (clip, in-point and beats), so the acceptance lapses when
+    /// any of them changes. `colour-jump@3 A@12.30x4 B@40.10x4` for a seam,
+    /// `flagged@5 A@12.30x4` for a shot, `off-drop@plan` for the plan.
+    pub(crate) fn accept_key(&self, f: &Finding) -> String {
+        let shot = |n: usize| {
+            self.shots.get(n.wrapping_sub(1)).map_or_else(
+                || "?".to_owned(),
+                |s| format!("{}@{:.2}x{}", s.clip, s.t_in, s.beats),
+            )
+        };
+        match (f.seam, f.shot) {
+            (Some(n), _) => format!("{}@{n} {} {}", f.id, shot(n), shot(n + 1)),
+            (None, Some(n)) => format!("{}@{n} {}", f.id, shot(n)),
+            (None, None) => format!("{}@plan", f.id),
+        }
+    }
+
+    /// Whether `f` is a soft finding the editor accepted for this cut.
+    /// Hard findings can never be accepted.
+    pub(crate) fn is_accepted(&self, f: &Finding) -> bool {
+        !f.is_hard() && self.accepted.contains(&self.accept_key(f))
+    }
+
+    /// Accepts soft finding `f` (`on`) or takes the acceptance back; whether
+    /// anything changed.
+    pub(crate) fn set_accepted(&mut self, f: &Finding, on: bool) -> bool {
+        if f.is_hard() {
+            return false;
+        }
+        let key = self.accept_key(f);
+        let had = self.accepted.contains(&key);
+        if on && !had {
+            self.accepted.push(key);
+        } else if !on && had {
+            self.accepted.retain(|k| *k != key);
+        }
+        on != had
     }
 }
 
@@ -1030,10 +1076,9 @@ fn seams(plan: &Plan, index: &Index, timing: &[(f32, f32)], drop_beat: usize) ->
             }
         }
         let b_dur = timing.get(k + 1).map_or(EDGE_WINDOW, |&(_, d)| d);
-        let (Some((la, ca)), Some((lb, cb))) = (
-            edge_look(index, &a.clip, (a_out - EDGE_WINDOW).max(a.t_in), a_out),
-            edge_look(index, &b.clip, b.t_in, b.t_in + EDGE_WINDOW.min(b_dur)),
-        ) else {
+        let Some(((la, ca), (lb, cb))) =
+            edges(index, (&a.clip, a.t_in, dur), (&b.clip, b.t_in, b_dur))
+        else {
             continue;
         };
         let stops = (la.max(LUMA_FLOOR) / lb.max(LUMA_FLOOR)).log2();
@@ -1063,6 +1108,41 @@ fn seams(plan: &Plan, index: &Index, timing: &[(f32, f32)], drop_beat: usize) ->
         }
     }
     out
+}
+
+/// One side of a cut: clip, in-point and length in seconds.
+pub(crate) type Side<'a> = (&'a str, f32, f32);
+
+/// The look at each side of a cut from `a` to `b`: the last
+/// [`EDGE_WINDOW`] of `a` and the first of `b`, as the seam check reads
+/// them (brightness, mid-tone chromaticity).
+#[expect(
+    clippy::type_complexity,
+    reason = "two looks, each a brightness and an optional chromaticity, read once"
+)]
+fn edges(
+    index: &Index,
+    a: Side<'_>,
+    b: Side<'_>,
+) -> Option<((f32, Option<[f32; 2]>), (f32, Option<[f32; 2]>))> {
+    let a_out = a.1 + a.2;
+    Some((
+        edge_look(index, a.0, (a_out - EDGE_WINDOW).max(a.1), a_out)?,
+        edge_look(index, b.0, b.1, b.1 + EDGE_WINDOW.min(b.2))?,
+    ))
+}
+
+/// How hard a cut from `a` to `b` jumps: stops of brightness change and
+/// the mid-tone colour distance (`None` with nothing to judge colour on),
+/// measured as the seam check measures them; `None` without samples.
+pub(crate) fn seam_jump(index: &Index, a: Side<'_>, b: Side<'_>) -> Option<(f32, Option<f32>)> {
+    let ((la, ca), (lb, cb)) = edges(index, a, b)?;
+    let stops = (la.max(LUMA_FLOOR) / lb.max(LUMA_FLOOR)).log2().abs();
+    let colour = match (ca, cb) {
+        (Some(x), Some(y)) => Some((x[0] - y[0]).hypot(x[1] - y[1])),
+        (Some(_) | None, _) => None,
+    };
+    Some((stops, colour))
 }
 
 /// Whether a people-map name says who someone is (unlisted footage is
@@ -1109,17 +1189,33 @@ pub(crate) fn hard_count(findings: &[Finding]) -> usize {
 pub(crate) fn report(plan: &Plan, problems: &[Finding]) -> String {
     let mut s = String::new();
     for p in problems {
-        let _ = writeln!(s, "{} {}", plan.name, p.text());
+        let accepted = if plan.is_accepted(p) {
+            " (accepted)"
+        } else {
+            ""
+        };
+        let _ = writeln!(s, "{} {}{accepted}", plan.name, p.text());
     }
     let hard = hard_count(problems);
-    let soft = problems.len() - hard;
+    let accepted = accepted_count(plan, problems);
+    let soft = problems.len() - hard - accepted;
     let shots = plan.shots.len();
+    let tail = if accepted > 0 {
+        format!(", {accepted} accepted")
+    } else {
+        String::new()
+    };
     let _ = match (hard, soft) {
-        (0, 0) => writeln!(s, "{}: ok ({shots} shots)", plan.name),
-        (0, _) => writeln!(s, "{}: ok ({shots} shots), {soft} soft", plan.name),
-        (_, _) => writeln!(s, "{}: fails: {hard} hard, {soft} soft", plan.name),
+        (0, 0) => writeln!(s, "{}: ok ({shots} shots){tail}", plan.name),
+        (0, _) => writeln!(s, "{}: ok ({shots} shots), {soft} soft{tail}", plan.name),
+        (_, _) => writeln!(s, "{}: fails: {hard} hard, {soft} soft{tail}", plan.name),
     };
     s
+}
+
+/// How many of `findings` the plan has accepted (soft ones only).
+pub(crate) fn accepted_count(plan: &Plan, findings: &[Finding]) -> usize {
+    findings.iter().filter(|f| plan.is_accepted(f)).count()
 }
 
 #[cfg(test)]
@@ -1279,6 +1375,7 @@ beats = 4
             finish: super::Finish::default(),
             shots: vec![shot(3), shot(5), shot(4)],
             comments: Vec::new(),
+            accepted: Vec::new(),
         };
         let people = crate::people::People::default();
         let problems = super::check(&plan, &tiny_index(), &tiny_map(), &people);
@@ -1322,6 +1419,7 @@ beats = 4
             finish: super::Finish::default(),
             shots: vec![shot("A", 10.0), shot("B", 10.0), shot("A", 60.0)],
             comments: Vec::new(),
+            accepted: Vec::new(),
         };
         let people = crate::people::People::default();
         let problems = super::check(&plan, &tiny_index(), &tiny_map(), &people);
@@ -1378,6 +1476,7 @@ beats = 4
             finish: super::Finish::default(),
             shots: vec![shot("A"), shot("B")],
             comments: Vec::new(),
+            accepted: Vec::new(),
         }
     }
 

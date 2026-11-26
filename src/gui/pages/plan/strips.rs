@@ -579,6 +579,7 @@ fn count_pill(
     n: usize,
     color: Color32,
     tip: &str,
+    sense: Sense,
 ) -> egui::Response {
     let t = s.theme;
     let (fill, ink) = if n > 0 {
@@ -595,8 +596,20 @@ fn count_pill(
         theme::SPACE_SM + icons::SMALL + theme::SPACE_XS + galley.size().x + theme::SPACE_SM,
         theme::COMPACT_HEIGHT,
     );
-    let (rect, resp) = ui.allocate_exact_size(size, Sense::hover());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, format!("{n} {tip}")));
+    let (rect, resp) = ui.allocate_exact_size(size, sense);
+    let role = if sense.senses_click() {
+        egui::Role::Button
+    } else {
+        egui::Role::Label
+    };
+    resp.widget_info(|| egui::WidgetInfo::labeled(role, true, format!("{n} {tip}")));
+    if sense.senses_click() && resp.hovered() {
+        ui.painter().rect_filled(
+            rect,
+            CornerRadius::same(theme::RADIUS),
+            theme::ink(t, theme::INK_08),
+        );
+    }
     let p = ui.painter();
     p.rect_filled(rect, CornerRadius::same(theme::RADIUS), fill);
     icons::paint(
@@ -624,9 +637,12 @@ fn count_pill(
 }
 
 /// The check bar: shots clean, soft and hard counts as pills (from each
-/// finding's severity), "Ready to render" unless a hard finding stops it,
-/// then the worst finding and the full list. Clicking a finding selects its
-/// shot, or both shots around a seam finding's cut with the playhead on it.
+/// finding's severity; accepted soft findings do not count), "Ready to
+/// render" unless a hard finding stops it, then the worst finding and the
+/// Findings list ([`super::findings`]), where each finding can be fixed,
+/// handed to the chat or accepted. A click on the soft or hard count opens
+/// the list; clicking a finding selects its shot, or both shots around a
+/// seam finding's cut with the playhead on it.
 pub(super) fn check_bar(
     state: &mut State,
     s: &Shown<'_>,
@@ -637,14 +653,20 @@ pub(super) fn check_bar(
     let t = s.theme;
     top_line(ui, s, rect);
     let errors = crate::plan::hard_count(&state.problems);
-    let warnings = state.problems.len() - errors;
+    let accepted = crate::plan::accepted_count(&s.plan, &state.problems);
+    let warnings = state.problems.len() - errors - accepted;
     let clean = (0..s.plan.shots.len())
         .filter(|k| !s.issues.contains_key(k))
         .count();
-    // Hard first, each group in check order.
-    let mut order: Vec<&crate::plan::Finding> = state.problems.iter().collect();
-    order.sort_by_key(|f| f.severity);
-    let mut jump: Option<crate::plan::Finding> = None;
+    // The worst open finding: hard first, each group in check order.
+    let first = state
+        .problems
+        .iter()
+        .filter(|f| !s.plan.is_accepted(f))
+        .min_by_key(|f| f.severity)
+        .cloned();
+    let any = !state.problems.is_empty();
+    let mut act: Option<super::findings::Act> = None;
     row(ui, rect.shrink2(vec2(theme::SPACE_SM, 0.0)), |ui| {
         if s.project.index.is_none() {
             icons::icon(ui, icons::INFO, icons::SMALL, theme::rgb(t.text_muted));
@@ -662,23 +684,35 @@ pub(super) fn check_bar(
             clean,
             theme::rgb(t.success),
             "shots pass every rule",
+            Sense::hover(),
         );
-        count_pill(
+        let soft_tip = if accepted > 0 {
+            format!(
+                "soft: taste rules bent (repeats, flags, jump cuts, exposure and colour jumps); {accepted} accepted. Click to fix them"
+            )
+        } else {
+            "soft: taste rules bent (repeats, flags, jump cuts, exposure and colour jumps). Click to fix them".to_owned()
+        };
+        let list_sense = if !any { Sense::hover() } else { Sense::click() };
+        let soft = count_pill(
             ui,
             s,
             icons::TRIANGLE_ALERT,
             warnings,
             theme::rgb(t.warning),
-            "soft: taste rules bent (repeats, flags, jump cuts, exposure and colour jumps)",
+            &soft_tip,
+            list_sense,
         );
-        count_pill(
+        let hard = count_pill(
             ui,
             s,
             icons::CIRCLE_X,
             errors,
             theme::rgb(t.danger),
-            "hard: the plan is invalid or would render wrong (timing, ranges, crop, drop)",
+            "hard: the plan is invalid or would render wrong (timing, ranges, crop, drop). Click to fix them",
+            list_sense,
         );
+        let toggle = soft.clicked() || hard.clicked();
         ui.add_space(theme::SPACE_XS);
         if errors == 0 {
             ui.label(
@@ -687,7 +721,7 @@ pub(super) fn check_bar(
                     .color(theme::rgb(t.text_muted)),
             );
         }
-        if order.is_empty() {
+        if !any {
             return;
         }
         let list = widgets::button_with(
@@ -697,37 +731,14 @@ pub(super) fn check_bar(
             Some(icons::LIST),
             "Findings",
         );
-        let list = widgets::tip(list, t, "Every finding the check makes, hard first", "");
-        let _ = egui::Popup::menu(&list)
-            .width(460.0)
-            .gap(theme::SPACE_XS)
-            .show(|ui| {
-                egui::ScrollArea::vertical()
-                    .max_height(280.0)
-                    .show(ui, |ui| {
-                        for p in &order {
-                            let glyph = if p.is_hard() {
-                                icons::CIRCLE_X
-                            } else {
-                                icons::TRIANGLE_ALERT
-                            };
-                            let item = widgets::menu_item(
-                                ui,
-                                t,
-                                Some(glyph),
-                                &format!("{} · {}", p.place(), p.message),
-                                "",
-                                false,
-                            );
-                            let item = widgets::tip(item, t, p.id, "");
-                            if item.clicked() {
-                                jump = Some((*p).clone());
-                                ui.close();
-                            }
-                        }
-                    });
-            });
-        if let Some(first) = order.first() {
+        let list = widgets::tip(
+            list,
+            t,
+            "Every finding the check makes, hard first, with a fix where there is one",
+            "",
+        );
+        act = super::findings::popover(state, s, &list, toggle);
+        if let Some(first) = &first {
             let resp = ui.add(
                 egui::Label::new(
                     egui::RichText::new(format!("{} · {}", first.place(), first.message))
@@ -743,14 +754,24 @@ pub(super) fn check_bar(
                 "Select that shot"
             };
             if widgets::tip(resp, t, &format!("{what} ({})", first.id), "").clicked() {
-                jump = Some((*first).clone());
+                act = Some(super::findings::Act::Select(first.clone()));
             }
         }
     });
-    let Some((shots, cut)) = jump
-        .as_ref()
-        .and_then(|f| super::finding_target(f, s.plan.shots.len()))
-    else {
+    if let Some(act) = act {
+        super::findings::act(state, s, io, act);
+    }
+}
+
+/// Selects what finding `f` is about (its shot, or both shots around its
+/// cut), scrolls it into view and, for a cut, puts the playhead on it.
+pub(super) fn show_finding(
+    state: &mut State,
+    s: &Shown<'_>,
+    io: &mut Io<'_>,
+    f: &crate::plan::Finding,
+) {
+    let Some((shots, cut)) = super::finding_target(f, s.plan.shots.len()) else {
         return;
     };
     let (Some(&lo), Some(&hi)) = (shots.first(), shots.last()) else {

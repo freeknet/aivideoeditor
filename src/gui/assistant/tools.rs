@@ -148,6 +148,7 @@ pub(crate) fn describe(name: &str, input: &Value, live: bool) -> String {
             "Ranked alternatives",
             format!("{} #{}", s("plan"), input["index"]),
         ),
+        "plan_fix" => ("Finding fixes", "Found fixes", s("name").to_owned()),
         "plan_versions" => ("Listing versions", "Listed versions", s("name").to_owned()),
         "plan_revert" => (
             "Reverting",

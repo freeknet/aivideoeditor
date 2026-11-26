@@ -535,13 +535,23 @@ pub(crate) enum Cmd {
     /// stop `ave render` without --force. Soft findings are taste rules
     /// bent (drop-subject, flash-shot, flagged, bad-moment, wide-action,
     /// same-stretch, repeat-performer, lookalike, reused, jump-cut,
-    /// exposure-jump, colour-jump): reported, never fatal.
+    /// exposure-jump, colour-jump): reported, never fatal. Soft findings
+    /// accepted in the plan (`accepted = [...]`) are marked and not counted.
+    ///
+    /// With --fix, every finding that has a safe automatic fix gets it, one
+    /// at a time and re-checked after each (a fix must clear its finding,
+    /// add no hard one and leave fewer findings than before); the plan is
+    /// saved as a new version and each fix is printed. Findings with no
+    /// automatic fix print what to do instead.
     Check {
         /// Plan file.
         plan: PathBuf,
         /// Work folder.
         #[arg(long)]
         work: PathBuf,
+        /// Apply the safe automatic fixes and save the plan.
+        #[arg(long)]
+        fix: bool,
     },
     /// Render a plan to <work>/renders/<name>.mp4 (+ a 720p preview).
     Render {
@@ -741,8 +751,15 @@ fn run(command: Cmd, out: &mut impl Write, progress: &Progress) -> anyhow::Resul
             }
             writeln!(out, "-> {}", path.display())?;
         }
-        Cmd::Check { plan, work } => {
-            let (plan, problems) = load_and_check(&plan, &work)?;
+        Cmd::Check {
+            plan: path,
+            work,
+            fix,
+        } => {
+            let (mut plan, mut problems) = load_and_check(&path, &work)?;
+            if fix {
+                problems = fix_plan(&path, &work, &mut plan, &problems, out)?;
+            }
             write!(out, "{}", crate::plan::report(&plan, &problems))?;
             let hard = crate::plan::hard_count(&problems);
             anyhow::ensure!(hard == 0, "{hard} hard finding(s)");
@@ -819,6 +836,83 @@ fn run(command: Cmd, out: &mut impl Write, progress: &Progress) -> anyhow::Resul
         }
     }
     Ok(())
+}
+
+/// `ave check --fix`: applies the safe automatic fixes to `plan` (loaded
+/// from `path`), prints each and what is left without one, saves the plan
+/// as a new version when anything changed, and returns its new findings.
+fn fix_plan(
+    path: &std::path::Path,
+    work: &std::path::Path,
+    plan: &mut crate::plan::Plan,
+    problems: &[crate::plan::Finding],
+    out: &mut impl Write,
+) -> anyhow::Result<Vec<crate::plan::Finding>> {
+    let index = crate::index::Index::load(work)?;
+    let map = crate::project::music_for(work)?;
+    let people = crate::people::People::load(work)?;
+    let memory = crate::plan::Memory::for_index(&index);
+    let night = crate::fix::Night {
+        index: &index,
+        map: &map,
+        people: &people,
+        memory: &memory,
+    };
+    let (fixed, done) = crate::fix::fix_all(plan, night);
+    for a in &done {
+        writeln!(
+            out,
+            "{} fixed {} [{}]: {}",
+            plan.name,
+            a.finding.place(),
+            a.finding.id,
+            a.fix.preview()
+        )?;
+    }
+    let after = night.check(&fixed);
+    for f in after.iter().filter(|f| !fixed.is_accepted(f)) {
+        let how = if crate::fix::fixable(f.id) {
+            "no safe automatic fix"
+        } else {
+            "no automatic fix"
+        };
+        writeln!(
+            out,
+            "{} {how} for {} [{}]: {}",
+            plan.name,
+            f.place(),
+            f.id,
+            crate::fix::advice(f.id)
+        )?;
+    }
+    if done.is_empty() {
+        writeln!(out, "{}: nothing changed", plan.name)?;
+        return Ok(problems.to_vec());
+    }
+    let what = format!(
+        "ave check --fix: {}",
+        done.iter()
+            .map(|a| format!("{} {}", a.finding.id, a.finding.place()))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| fixed.name.clone());
+    let in_work = path
+        .parent()
+        .zip(std::fs::canonicalize(work.join("plans")).ok())
+        .is_some_and(|(dir, plans)| std::fs::canonicalize(dir).is_ok_and(|d| d == plans));
+    if in_work {
+        let v = crate::gui::assistant::store::save_version(work, &stem, &fixed, &what)?;
+        writeln!(out, "{}: saved as v{v} -> {}", plan.name, path.display())?;
+    } else {
+        fixed.save(path)?;
+        writeln!(out, "{}: saved -> {}", plan.name, path.display())?;
+    }
+    *plan = fixed;
+    Ok(after)
 }
 
 /// Loads a plan and checks it against the work folder's index and music.
@@ -963,6 +1057,61 @@ mod tests {
                 .iter()
                 .any(|l| l.contains("failed") || l.contains("started")),
             "no clip was touched and nothing reported as failed: {lines:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn check_fix_applies_the_safe_fixes_and_saves_a_version() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let work = dir.path().join("2026-11-13").join("_ave");
+        std::fs::create_dir_all(work.join("plans"))?;
+        let mut index = crate::fix::tests::index();
+        crate::fix::tests::paint(&mut index, "C", 0.3, [0.0, 0.05, 0.95]);
+        index.save(&work)?;
+        crate::fix::tests::map().save(&work)?;
+        let mut plan = crate::fix::tests::plan();
+        plan.name = "reel-x".into();
+        let path = work.join("plans").join("reel-x.toml");
+        plan.save(&path)?;
+        let check = |fix: bool| -> anyhow::Result<String> {
+            let mut out = Vec::new();
+            super::run(
+                super::Cmd::Check {
+                    plan: path.clone(),
+                    work: work.clone(),
+                    fix,
+                },
+                &mut out,
+                &Progress::default(),
+            )?;
+            Ok(String::from_utf8(out)?)
+        };
+        let before = check(false)?;
+        assert!(
+            before.contains("[soft colour-jump]") && before.contains("ok (3 shots), 1 soft"),
+            "a colour jump to start with: {before}"
+        );
+        let fixed = check(true)?;
+        assert!(
+            fixed.contains("reel-x fixed cut 2|3 [colour-jump]: Swap shot 3 C/2 → ")
+                && fixed.contains("(clears colour jump 0.44, no new findings)"),
+            "says what it did: {fixed}"
+        );
+        assert!(
+            fixed.contains("saved as v2") && fixed.trim_end().ends_with("reel-x: ok (3 shots)"),
+            "saved and clean: {fixed}"
+        );
+        let saved = crate::plan::Plan::load(&path)?;
+        assert_ne!(saved.shots[2].clip, "C", "the file has the fix");
+        assert!(
+            work.join("plans/.history/reel-x/v1.toml").exists(),
+            "the original is kept as v1"
+        );
+        let again = check(true)?;
+        assert!(
+            again.contains("reel-x: nothing changed"),
+            "nothing left to fix: {again}"
         );
         Ok(())
     }
