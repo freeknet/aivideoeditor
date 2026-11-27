@@ -409,32 +409,25 @@ pub fn switch(ui: &mut Ui, theme: &Palette, on: &mut bool, label: &str) -> Respo
     response
 }
 
-/// A card: a raised surface that lifts under the pointer and carries an
-/// accent edge when selected. Click anywhere on it to select it.
+/// A card: Material's outlined card, clickable, with its state layer under
+/// the pointer and its selected look when `selected`. Click anywhere on it
+/// to select it.
 pub fn card(
     ui: &mut Ui,
-    theme: &Palette,
+    _theme: &Palette,
     id: egui::Id,
     selected: bool,
     add_contents: impl FnOnce(&mut Ui),
 ) -> Response {
-    let hovered_before = ui.ctx().read_response(id).is_some_and(|r| r.hovered());
-    let lift = hover_t(ui, id.with("lift"), hovered_before);
-    let chosen = fade(ui.ctx(), id.with("chosen"), selected);
-    let border = theme
-        .border
-        .lerp(theme.border_strong, lift)
-        .lerp(theme.accent, chosen);
-    let inner = egui::Frame::new()
-        .fill(blend(theme.raised, theme.hover, lift * 0.6))
-        .stroke(Stroke::new(1.0 + chosen, theme::rgb(border)))
-        .corner_radius(CornerRadius::same(theme::RADIUS_LG))
-        .inner_margin(theme::margin(SPACE_MD + SPACE_XS))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            add_contents(ui);
-        });
-    ui.interact(inner.response.rect, id, Sense::click())
+    ui.push_id(id, |ui| {
+        ui.add(
+            egui_material3::MaterialCard2::outlined()
+                .clickable(true)
+                .selected(selected)
+                .content(add_contents),
+        )
+    })
+    .inner
 }
 
 /// Lays `count` cards out in as many equal columns of at least `minimum`

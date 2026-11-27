@@ -584,7 +584,8 @@ pub fn visuals(theme: &Palette) -> egui::Visuals {
     };
     visuals.panel_fill = rgb(theme.panel);
     visuals.window_corner_radius = CornerRadius::same(RADIUS_LG);
-    visuals.menu_corner_radius = CornerRadius::same(RADIUS_MD);
+    // Every egui menu and popup takes Material's menu shape (extra-small).
+    visuals.menu_corner_radius = CornerRadius::same(RADIUS);
     visuals.faint_bg_color = ink(theme, INK_03);
     // Text fields draw on this: the panel itself, with the `input` outline
     // doing the work, as shadcn's transparent inputs do.
@@ -659,7 +660,10 @@ pub fn visuals(theme: &Palette) -> egui::Visuals {
     visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, rgb(theme.text_muted));
     // Flat panels; only floating things (menus, popovers, windows) carry a
     // shadow, and a soft one.
-    visuals.popup_shadow = float_shadow();
+    // Menus and popups sit at Material's level 2 (its key shadow; egui
+    // draws one shadow per frame).
+    let [key, _ambient] = egui_material3::tokens::Elevation::Level2.shadows(Color32::BLACK);
+    visuals.popup_shadow = key;
     visuals.window_shadow = float_shadow();
     visuals.window_stroke = ink_line(theme);
     visuals.window_fill = popover_fill(theme);
