@@ -1,110 +1,63 @@
 // ============================================================================
 // Module:       gui::ui::modal
-// Description:  The one modal card: a scrim, a raised card that fades and rises
-//               into place, and dismissal by Escape or a click outside.
+// Description:  The one modal dialog: egui-material3's dialog on its scrim,
+//               dismissed by Escape or a click outside.
 //
-// Dependencies: egui (Modal); super::{theme, widgets}
+// Dependencies: egui; egui_material3 (MaterialDialog); crate::theme::Palette
 // ============================================================================
 
-//! Modal cards.
+//! Modal dialogs.
 //!
-//! **One modal shape, not several.** Every dialog in the app is this card
+//! **One modal shape, not several.** Every dialog in the app is this one
 //! with different contents, so there are no six dialogs of six widths, none
-//! aligned, three movable for no reason. egui's `Modal` layer confines
-//! keyboard focus and blocks the views underneath; this module adds the
-//! theme's card, a title row with a close button, and the arrival motion
-//! shared with page changes: a short fade and rise.
+//! aligned, three movable for no reason. It is Material 3's basic dialog
+//! (egui-material3's `MaterialDialog`): the high container on a scrim, the
+//! extra-large shape, a headline, focus kept inside while
+//! it is open and handed back when it closes, and Material's enter and exit
+//! motion.
 //!
 //! Escape and a click on the scrim both dismiss, because a dialog that can
 //! only be closed with the mouse is a dialog that interrupts typing.
 
-use super::theme::{self, SPACE_MD};
-use super::widgets;
 use crate::theme::Palette;
-use egui::{Align2, CornerRadius, Ui, Vec2};
-
-/// How far the card rises as it arrives.
-const RISE: f32 = 8.0;
-
-/// The scrim's opacity at rest: enough to push the window back without
-/// hiding it.
-const SCRIM_ALPHA: u8 = 150;
+use egui::Ui;
 
 /// What a modal reports back after a frame.
 pub struct Outcome<R> {
     /// What the contents returned, if they were drawn this frame.
     pub inner: Option<R>,
-    /// Whether the user asked to dismiss it (Escape, the scrim, or ×).
+    /// Whether the user asked to dismiss it (Escape or the scrim).
     pub dismissed: bool,
 }
 
-/// Draws a modal card titled `title`, `width` wide, while `open` (and while
-/// it fades out after closing).
+/// Draws a modal dialog titled `title`, `width` wide, while `open` (and
+/// while it animates out after closing).
 pub fn show<R>(
     ctx: &egui::Context,
-    theme: &Palette,
+    _theme: &Palette,
     title: &str,
     open: bool,
     width: f32,
     contents: impl FnOnce(&mut Ui) -> R,
 ) -> Outcome<R> {
     let id = egui::Id::unique("modal").with(title);
-    let progress = widgets::fade(ctx, id.with("progress"), open);
-    if progress <= 0.0 {
-        return Outcome {
-            inner: None,
-            dismissed: false,
-        };
-    }
-    let alpha = (f32::from(SCRIM_ALPHA) * progress)
-        .round()
-        .clamp(0.0, 255.0) as u8;
-    let area = egui::Modal::default_area(id).anchor(
-        Align2::CENTER_CENTER,
-        Vec2::new(0.0, RISE * (1.0 - progress)),
-    );
-    let mut closed_by_button = false;
-    let response = egui::Modal::new(id)
-        .area(area)
-        .frame(egui::Frame::NONE)
-        .backdrop_color(theme::translucent(theme.app, alpha))
-        .show(ctx, |ui| {
-            ui.set_opacity(progress);
-            egui::Frame::new()
-                .fill(theme::rgb(theme.raised))
-                // Material's dialog: the high container, no outline, the
-                // extra-large shape and 24 px insets.
-                .corner_radius(CornerRadius::same(theme::RADIUS_DIALOG))
-                .inner_margin(theme::margin(theme::SPACE_XL))
-                .shadow(egui::epaint::Shadow {
-                    offset: [0, 10],
-                    blur: 28,
-                    spread: 0,
-                    // Alpha-only: a shadow is lighting, not a theme colour.
-                    color: egui::Color32::from_black_alpha(110),
-                })
-                .show(ui, |ui| {
-                    ui.set_width(width);
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new(title)
-                                .font(theme::font(theme::HEADING_SIZE))
-                                .color(theme::rgb(theme.text)),
-                        );
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let close = widgets::icon_button(ui, theme, "Close");
-                            super::paint_glyph(ui, &close, super::glyph::CLOSE);
-                            closed_by_button = close.response.clicked();
-                        });
-                    });
-                    ui.add_space(SPACE_MD);
-                    contents(ui)
-                })
-                .inner
-        });
-    let dismissed = open && (closed_by_button || response.should_close());
+    // The caller owns whether the dialog is open; the library's flag is a
+    // copy, and its closing is reported as `dismissed`.
+    let mut still_open = open;
+    // No library close button: it draws a Material Symbols codepoint in the
+    // proportional family, where the app's Lucide font answers first for
+    // the same private-use codepoints, so it showed the wrong glyph.
+    // Escape and the scrim close every dialog.
+    let response = egui_material3::MaterialDialog::new(id, title, &mut still_open)
+        .close_button(false)
+        .dismiss_on_escape(true)
+        .dismiss_on_scrim(true)
+        .min_width(width)
+        .max_width(width)
+        .content(move |ui, _close| contents(ui))
+        .show(ctx);
     Outcome {
-        inner: Some(response.inner),
-        dismissed,
+        inner: response.inner,
+        dismissed: open && response.close_reason.is_some(),
     }
 }
