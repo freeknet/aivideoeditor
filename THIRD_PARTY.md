@@ -22,7 +22,7 @@ Compiled into `ave.exe`. Where each came from is in [`assets/fonts/NOTICE`](asse
 
 ## Crates
 
-Every crate compiled into `ave.exe` (`aivideoeditor` for `x86_64-pc-windows-msvc`), 293 in all, with the licence its authors published it under. The release zip's `THIRD-PARTY-NOTICES.txt` has each one's version and full licence text.
+Every crate compiled into `ave.exe` (`aivideoeditor` for `x86_64-pc-windows-msvc`), 262 in all, with the licence its authors published it under. The release zip's `THIRD-PARTY-NOTICES.txt` has each one's version and full licence text.
 
 | Crate | Licence | Source |
 |---|---|---|
@@ -41,7 +41,6 @@ Every crate compiled into `ave.exe` (`aivideoeditor` for `x86_64-pc-windows-msvc
 | anstyle-wincon | MIT OR Apache-2.0 | https://github.com/rust-cli/anstyle |
 | anyhow | MIT OR Apache-2.0 | https://github.com/dtolnay/anyhow |
 | arboard | MIT OR Apache-2.0 | https://github.com/1Password/arboard |
-| arrayref | BSD-2-Clause | https://github.com/droundy/arrayref |
 | arrayvec | MIT OR Apache-2.0 | https://github.com/bluss/arrayvec |
 | ash | MIT OR Apache-2.0 | https://github.com/ash-rs/ash |
 | base64 | MIT OR Apache-2.0 | https://github.com/marshallpierce/rust-base64 |
@@ -61,11 +60,9 @@ Every crate compiled into `ave.exe` (`aivideoeditor` for `x86_64-pc-windows-msvc
 | clipboard-win | BSL-1.0 | https://github.com/DoumanAsh/clipboard-win |
 | codespan-reporting | Apache-2.0 | https://github.com/brendanzab/codespan |
 | color | Apache-2.0 OR MIT | https://github.com/linebender/color |
-| color_quant | MIT | https://github.com/image-rs/color_quant |
 | colorchoice | MIT OR Apache-2.0 | https://github.com/rust-cli/anstyle |
 | cookie | MIT OR Apache-2.0 | https://github.com/SergioBenitez/cookie-rs |
 | cookie_store | MIT OR Apache-2.0 | https://github.com/pfernie/cookie_store |
-| core_maths | MIT | https://github.com/robertbastian/core_maths |
 | cpal | Apache-2.0 | https://github.com/RustAudio/cpal |
 | crc32fast | MIT OR Apache-2.0 | https://github.com/srijs/rust-crc32fast |
 | crossbeam-channel | MIT OR Apache-2.0 | https://github.com/crossbeam-rs/crossbeam |
@@ -73,9 +70,7 @@ Every crate compiled into `ave.exe` (`aivideoeditor` for `x86_64-pc-windows-msvc
 | crossbeam-epoch | MIT OR Apache-2.0 | https://github.com/crossbeam-rs/crossbeam |
 | crossbeam-utils | MIT OR Apache-2.0 | https://github.com/crossbeam-rs/crossbeam |
 | cursor-icon | MIT OR Apache-2.0 OR Zlib | https://github.com/rust-windowing/cursor-icon |
-| dark-light | MIT OR Apache-2.0 | https://github.com/rust-dark-light/rust-dark-light |
 | dasp_sample | MIT OR Apache-2.0 | https://github.com/rustaudio/sample |
-| data-url | MIT OR Apache-2.0 | https://github.com/servo/rust-url |
 | der | Apache-2.0 OR MIT | https://github.com/RustCrypto/formats |
 | deranged | MIT OR Apache-2.0 | https://github.com/jhpratt/deranged |
 | dirs | MIT OR Apache-2.0 | https://codeberg.org/dirs/dirs-rs |
@@ -103,14 +98,11 @@ Every crate compiled into `ave.exe` (`aivideoeditor` for `x86_64-pc-windows-msvc
 | fdeflate | MIT OR Apache-2.0 | https://github.com/image-rs/fdeflate |
 | fearless_simd | Apache-2.0 OR MIT | https://github.com/linebender/fearless_simd |
 | flate2 | MIT OR Apache-2.0 | https://github.com/rust-lang/flate2-rs |
-| float-cmp | MIT | https://github.com/mikedilger/float-cmp |
 | foldhash | Zlib | https://github.com/orlp/foldhash |
 | font-types | MIT OR Apache-2.0 | https://github.com/googlefonts/fontations |
-| fontdb | MIT | https://github.com/RazrFalcon/fontdb |
 | fontique | Apache-2.0 OR MIT | https://github.com/linebender/parley |
 | form_urlencoded | MIT OR Apache-2.0 | https://github.com/servo/rust-url |
 | getrandom | MIT OR Apache-2.0 | https://github.com/rust-random/getrandom |
-| gif | MIT OR Apache-2.0 | https://github.com/image-rs/image-gif |
 | glifo | Apache-2.0 OR MIT | https://github.com/linebender/vello |
 | glow | MIT OR Apache-2.0 OR Zlib | https://github.com/grovesNL/glow |
 | glutin | Apache-2.0 | https://github.com/rust-windowing/glutin |
@@ -137,7 +129,6 @@ Every crate compiled into `ave.exe` (`aivideoeditor` for `x86_64-pc-windows-msvc
 | idna_adapter | Apache-2.0 OR MIT | https://github.com/hsivonen/idna_adapter |
 | image | MIT OR Apache-2.0 | https://github.com/image-rs/image |
 | image-webp | MIT OR Apache-2.0 | https://github.com/image-rs/image-webp |
-| imagesize | MIT | https://github.com/Roughsketch/imagesize |
 | indexmap | Apache-2.0 OR MIT | https://github.com/indexmap-rs/indexmap |
 | is_terminal_polyfill | MIT OR Apache-2.0 | https://github.com/polyfill-rs/is_terminal_polyfill |
 | itertools | MIT OR Apache-2.0 | https://github.com/rust-itertools/itertools |
@@ -175,7 +166,6 @@ Every crate compiled into `ave.exe` (`aivideoeditor` for `x86_64-pc-windows-msvc
 | pem-rfc7468 | Apache-2.0 OR MIT | https://github.com/RustCrypto/formats |
 | peniko | Apache-2.0 OR MIT | https://github.com/linebender/peniko |
 | percent-encoding | MIT OR Apache-2.0 | https://github.com/servo/rust-url |
-| pico-args | MIT | https://github.com/RazrFalcon/pico-args |
 | pin-project-lite | Apache-2.0 OR MIT | https://github.com/taiki-e/pin-project-lite |
 | png | MIT OR Apache-2.0 | https://github.com/image-rs/image-png |
 | poll-promise | MIT OR Apache-2.0 | https://github.com/EmbarkStudios/poll-promise |
@@ -199,14 +189,10 @@ Every crate compiled into `ave.exe` (`aivideoeditor` for `x86_64-pc-windows-msvc
 | regex-automata | MIT OR Apache-2.0 | https://github.com/rust-lang/regex |
 | regex-syntax | MIT OR Apache-2.0 | https://github.com/rust-lang/regex |
 | renderdoc-sys | MIT OR Apache-2.0 | https://github.com/ebkalderon/renderdoc-rs |
-| resvg | Apache-2.0 OR MIT | https://github.com/linebender/resvg |
 | rfd | MIT | https://github.com/PolyMeilex/rfd |
-| rgb | MIT | https://github.com/kornelski/rust-rgb |
-| roxmltree | MIT OR Apache-2.0 | https://github.com/RazrFalcon/roxmltree |
 | rustc-hash | Apache-2.0 OR MIT; Apache-2.0 OR MIT | https://github.com/rust-lang-nursery/rustc-hash |
 | rustfft | MIT OR Apache-2.0 | https://github.com/ejmahler/RustFFT |
 | rustls-pki-types | MIT OR Apache-2.0 | https://github.com/rustls/pki-types |
-| rustybuzz | MIT | https://github.com/harfbuzz/rustybuzz |
 | schannel | MIT | https://github.com/steffengy/schannel-rs |
 | scopeguard | MIT OR Apache-2.0 | https://github.com/bluss/scopeguard |
 | self_cell | Apache-2.0 OR GPL-2.0-only | https://github.com/Voultapher/self_cell |
@@ -216,19 +202,14 @@ Every crate compiled into `ave.exe` (`aivideoeditor` for `x86_64-pc-windows-msvc
 | serde_json | MIT OR Apache-2.0 | https://github.com/serde-rs/json |
 | serde_spanned | MIT OR Apache-2.0 | https://github.com/toml-rs/toml |
 | simd-adler32 | MIT | https://github.com/mcountryman/simd-adler32 |
-| simplecss | Apache-2.0 OR MIT | https://github.com/linebender/simplecss |
-| siphasher | MIT OR Apache-2.0 | https://github.com/jedisct1/rust-siphash |
 | skrifa | MIT OR Apache-2.0 | https://github.com/googlefonts/fontations |
-| slotmap | Zlib | https://github.com/orlp/slotmap |
 | smallvec | MIT OR Apache-2.0 | https://github.com/servo/rust-smallvec |
 | smol_str | MIT OR Apache-2.0 | https://github.com/rust-analyzer/smol_str |
 | spirv | Apache-2.0 | https://github.com/gfx-rs/rspirv |
 | stable_deref_trait | MIT OR Apache-2.0 | https://github.com/storyyeller/stable_deref_trait |
 | static_assertions | MIT OR Apache-2.0 | https://github.com/nvzqz/static-assertions-rs |
 | strength_reduce | MIT OR Apache-2.0 | http://github.com/ejmahler/strength_reduce |
-| strict-num | MIT | https://github.com/RazrFalcon/strict-num |
 | strsim | MIT | https://github.com/rapidfuzz/strsim-rs |
-| svgtypes | Apache-2.0 OR MIT | https://github.com/linebender/svgtypes |
 | syn | MIT OR Apache-2.0 | https://github.com/dtolnay/syn |
 | synstructure | MIT | https://github.com/mystor/synstructure |
 | sys-locale | MIT OR Apache-2.0 | https://github.com/1Password/sys-locale |
@@ -239,10 +220,7 @@ Every crate compiled into `ave.exe` (`aivideoeditor` for `x86_64-pc-windows-msvc
 | time | MIT OR Apache-2.0 | https://github.com/time-rs/time |
 | time-core | MIT OR Apache-2.0 | https://github.com/time-rs/time |
 | time-macros | MIT OR Apache-2.0 | https://github.com/time-rs/time |
-| tiny-skia | BSD-3-Clause | https://github.com/linebender/tiny-skia |
-| tiny-skia-path | BSD-3-Clause | https://github.com/linebender/tiny-skia/tree/master/path |
 | tinystr | Unicode-3.0 | https://github.com/unicode-org/icu4x |
-| tinyvec | Zlib OR Apache-2.0 OR MIT | https://github.com/Lokathor/tinyvec |
 | toml | MIT OR Apache-2.0 | https://github.com/toml-rs/toml |
 | toml_datetime | MIT OR Apache-2.0 | https://github.com/toml-rs/toml |
 | toml_parser | MIT OR Apache-2.0 | https://github.com/toml-rs/toml |
@@ -251,28 +229,21 @@ Every crate compiled into `ave.exe` (`aivideoeditor` for `x86_64-pc-windows-msvc
 | tracing-attributes | MIT | https://github.com/tokio-rs/tracing |
 | tracing-core | MIT | https://github.com/tokio-rs/tracing |
 | transpose | MIT OR Apache-2.0 | https://github.com/ejmahler/transpose |
-| ttf-parser | MIT OR Apache-2.0 | https://github.com/harfbuzz/ttf-parser |
 | type-map | MIT OR Apache-2.0 | https://github.com/kardeiz/type-map |
-| unicode-bidi | MIT OR Apache-2.0 | https://github.com/servo/unicode-bidi |
-| unicode-bidi-mirroring | MIT OR Apache-2.0 | https://github.com/RazrFalcon/unicode-bidi-mirroring |
-| unicode-ccc | MIT OR Apache-2.0 | https://github.com/RazrFalcon/unicode-ccc |
 | unicode-general-category | Apache-2.0 | https://github.com/yeslogic/unicode-general-category |
 | unicode-ident | (MIT OR Apache-2.0) AND Unicode-3.0 | https://github.com/dtolnay/unicode-ident |
 | unicode-properties | (MIT OR Apache-2.0) AND Unicode-3.0 | https://github.com/unicode-rs/unicode-properties |
 | unicode-script | MIT OR Apache-2.0 | https://github.com/unicode-rs/unicode-script |
 | unicode-segmentation | MIT OR Apache-2.0 | https://github.com/unicode-rs/unicode-segmentation |
-| unicode-vo | MIT OR Apache-2.0 | https://github.com/RazrFalcon/unicode-vo |
 | unicode-width | MIT OR Apache-2.0 | https://github.com/unicode-rs/unicode-width |
 | ureq | MIT OR Apache-2.0 | https://github.com/algesten/ureq |
 | ureq-proto | MIT OR Apache-2.0 | https://github.com/algesten/ureq-proto |
 | url | MIT OR Apache-2.0 | https://github.com/servo/rust-url |
-| usvg | Apache-2.0 OR MIT | https://github.com/linebender/resvg |
 | utf8-zero | MIT OR Apache-2.0 | https://github.com/algesten/utf8-zero |
 | utf8_iter | Apache-2.0 OR MIT | https://github.com/hsivonen/utf8_iter |
 | utf8parse | Apache-2.0 OR MIT | https://github.com/alacritty/vte |
 | utf_types | Apache-2.0 OR MIT | https://github.com/hsivonen/utf_types |
 | uuid | Apache-2.0 OR MIT | https://github.com/uuid-rs/uuid |
-| value-bag | Apache-2.0 OR MIT | https://github.com/sval-rs/value-bag |
 | vello_common | Apache-2.0 OR MIT | https://github.com/linebender/vello |
 | vello_cpu | Apache-2.0 OR MIT | https://github.com/linebender/vello |
 | web-time | MIT OR Apache-2.0 | https://github.com/daxpedda/web-time |
@@ -302,9 +273,7 @@ Every crate compiled into `ave.exe` (`aivideoeditor` for `x86_64-pc-windows-msvc
 | windows_x86_64_msvc | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs |
 | winit | Apache-2.0 | https://github.com/rust-windowing/winit |
 | winnow | MIT | https://github.com/winnow-rs/winnow |
-| winreg | MIT | https://github.com/gentoo90/winreg-rs |
 | writeable | Unicode-3.0 | https://github.com/unicode-org/icu4x |
-| xmlwriter | MIT | https://github.com/RazrFalcon/xmlwriter |
 | yoke | Unicode-3.0 | https://github.com/unicode-org/icu4x |
 | yoke-derive | Unicode-3.0 | https://github.com/unicode-org/icu4x |
 | zerocopy | BSD-2-Clause OR Apache-2.0 OR MIT | https://github.com/google/zerocopy |
