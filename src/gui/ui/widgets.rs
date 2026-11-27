@@ -1146,9 +1146,10 @@ pub fn tab_strip<T: PartialEq + Copy>(
     }
 }
 
-/// A segmented control, as shadcn's Tabs: a muted track, the chosen
-/// option a raised pill in the panel colour. For a mode or a small option
-/// set. Returns whether the choice changed.
+/// A segmented control: Material's segmented button at its densest (28 px,
+/// the height of the controls around it), connected outlined segments with
+/// the chosen one in the secondary container, no check mark. For a mode or
+/// a small option set. Returns whether the choice changed.
 pub fn segmented<T: PartialEq + Copy>(
     ui: &mut Ui,
     theme: &Palette,
@@ -1163,85 +1164,52 @@ pub fn segmented<T: PartialEq + Copy>(
 /// drawn faint, does not take a click, and says why on hover.
 pub fn segmented_gated<T: PartialEq + Copy>(
     ui: &mut Ui,
-    theme: &Palette,
+    _theme: &Palette,
     current: &mut T,
     items: &[(T, &str)],
     off: impl Fn(T) -> Option<String>,
 ) -> bool {
-    let font = theme::medium(ui.ctx(), theme::BODY_SIZE);
-    let galleys: Vec<_> = items
+    use egui_material3::{Segment, SegmentedButton};
+    if items.is_empty() {
+        return false;
+    }
+    let before = items.iter().position(|&(value, _)| value == *current);
+    let mut index = before;
+    let group = items
         .iter()
-        .map(|&(_, label)| {
-            ui.painter()
-                .layout_no_wrap(label.to_owned(), font.clone(), Color32::PLACEHOLDER)
-        })
-        .collect();
-    let pad = 2.0;
-    let widths: Vec<f32> = galleys
-        .iter()
-        .map(|g| g.size().x + SPACE_MD * 2.0 - SPACE_XS)
-        .collect();
-    let total = widths.iter().sum::<f32>() + pad * 2.0;
-    let (track, _) =
-        ui.allocate_exact_size(Vec2::new(total, theme::CONTROL_HEIGHT), Sense::hover());
-    ui.painter().rect_filled(
-        track,
-        CornerRadius::same(theme::RADIUS_MD),
-        theme::popover_fill(theme),
+        .map(|&(_, label)| label)
+        .collect::<Vec<_>>()
+        .join(" / ");
+    let reasons: Vec<Option<String>> = items.iter().map(|&(value, _)| off(value)).collect();
+    let button = items.iter().zip(&reasons).fold(
+        SegmentedButton::single_optional(&mut index)
+            .id_salt(group.clone())
+            .label(group.clone())
+            .density(-3)
+            .show_check(false),
+        |button, (&(_, label), why)| {
+            button.segment(match why {
+                Some(why) => Segment::new(label).enabled(false).hover_text(why.clone()),
+                None => Segment::new(label),
+            })
+        },
     );
-    let mut changed = false;
-    let mut x = track.left() + pad;
-    for ((&(value, label), galley), width) in items.iter().zip(galleys).zip(widths) {
-        let rect = Rect::from_min_size(
-            egui::pos2(x, track.top() + pad),
-            Vec2::new(width, track.height() - pad * 2.0),
-        );
-        x += width;
-        let id = ui.scope_id().with(("segment", label));
-        let why_off = off(value);
-        let enabled = why_off.is_none();
-        let sense = if enabled {
-            Sense::click()
-        } else {
-            Sense::hover()
-        };
-        let mut response = ui.interact(rect, id, sense);
-        match &why_off {
-            None => super::hint::auto(&response, label),
-            Some(why) => response = super::hint::Hint::hint(response, why),
-        }
-        let on = *current == value;
-        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, enabled, on, label));
-        let lift = hover_t(ui, id, response.hovered());
-        let painter = ui.painter();
-        if on {
-            painter.add(egui::epaint::RectShape::filled(
-                rect,
-                CornerRadius::same(theme::RADIUS),
-                theme::rgb(theme.panel),
-            ));
-            painter.rect_stroke(
-                rect,
-                CornerRadius::same(theme::RADIUS),
-                Stroke::new(1.0, theme::ink(theme, theme::INK_05)),
-                egui::StrokeKind::Inside,
-            );
-        }
-        let ink = if !enabled {
-            theme::rgb(theme.text_faint).gamma_multiply(0.55)
-        } else if on {
-            theme::rgb(theme.text)
-        } else {
-            blend(theme.text_muted, theme.text, lift)
-        };
-        painter.galley(rect.center() - galley.size() / 2.0, galley, ink);
-        focus_ring(ui, theme, &response);
-        if enabled && response.clicked() && !on {
-            *current = value;
-            changed = true;
+    let shown = button.show(ui);
+    // The status bar names what a segment does, or why it is off.
+    for ((segment, &(_, label)), why) in shown.segments.iter().zip(items).zip(&reasons) {
+        match why {
+            Some(why) if segment.hovered() => super::hint::set(ui.ctx(), why, ""),
+            Some(_) => {}
+            None => super::hint::auto(segment, label),
         }
     }
-    changed
+    match index.and_then(|i| items.get(i)) {
+        Some(&(value, _)) if index != before => {
+            *current = value;
+            true
+        }
+        Some(_) | None => false,
+    }
 }
 
 /// The colour a [`pill`] takes.
