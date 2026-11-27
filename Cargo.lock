@@ -904,7 +904,7 @@ dependencies = [
 [[package]]
 name = "egui-material3"
 version = "0.0.10"
-source = "git+https://github.com/freeknet/egui-material3?rev=daf2fdb821933695795e3a1f47325fcdadc7c762#daf2fdb821933695795e3a1f47325fcdadc7c762"
+source = "git+https://github.com/freeknet/egui-material3?rev=bf4f905a5ccda56f403d1f1259c704d73083667d#bf4f905a5ccda56f403d1f1259c704d73083667d"
 dependencies = [
  "base64 0.22.1",
  "eframe",
