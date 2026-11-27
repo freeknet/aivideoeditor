@@ -840,16 +840,17 @@ pub fn key_button(ui: &mut Ui, theme: &Palette, label: &str) -> Response {
     button_with(ui, theme, ButtonKind::Key, None, label)
 }
 
-/// A ghost icon button: 28 px square, the icon muted until hovered, a
-/// tooltip naming it and its shortcut (`keys` empty for none). Every
-/// icon-only control in the app is one of these or an [`icon_toggle`].
+/// A ghost icon button: 28 px square, a tooltip naming it and its
+/// shortcut (`keys` empty for none). Every icon-only control in the app is
+/// one of these or an [`icon_toggle`].
 pub fn icon_btn(ui: &mut Ui, theme: &Palette, glyph: char, label: &str, keys: &str) -> Response {
-    icon_toggle(ui, theme, glyph, label, keys, false)
+    material_icon_button(ui, theme, glyph, label, keys, None, theme::CONTROL_HEIGHT)
 }
 
-/// An icon button that shows whether what it toggles is on: the selected
-/// fill (ink 12 %) and a full-strength icon when on, muted when off; ink
-/// 12 % and the foreground colour under the pointer.
+/// An icon button that shows whether what it toggles is on: Material's
+/// standard toggle icon button, the icon in the primary colour when on.
+/// It reports the toggled state to screen readers; the caller flips its
+/// own state on `clicked`.
 pub fn icon_toggle(
     ui: &mut Ui,
     theme: &Palette,
@@ -872,20 +873,69 @@ pub fn icon_toggle_sized(
     on: bool,
     size: f32,
 ) -> Response {
-    let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
-    response
-        .widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), on, label));
-    let lift = hover_t(ui, response.id, response.hovered());
-    paint_ghost(ui, theme, rect, on, lift, theme::RADIUS_MD);
-    let rest = if on { theme.text } else { theme.text_muted };
-    icons::paint(
-        ui.painter(),
-        rect,
+    material_icon_button(ui, theme, glyph, label, keys, Some(on), size)
+}
+
+/// A Lucide `glyph` as an egui-material3 icon, drawn from the app's icon
+/// family.
+#[must_use]
+pub fn lucide(glyph: char) -> egui_material3::Icon {
+    egui_material3::Icon::glyph(
         glyph,
-        icons::SIZE,
-        blend(rest, theme.text, lift),
+        egui::FontFamily::Name(crate::gui::font::ICONS.into()),
+    )
+}
+
+/// egui-material3's standard icon button, square-cornered, `size` across,
+/// drawing the Lucide `glyph`: a toggle when `on` is given. Material gives
+/// every icon button a 48 dp touch target; in ave's dense rows that target
+/// would overlap the neighbouring controls, so the button is laid out in a
+/// child clipped to its visible square, which is also where egui clips its
+/// hit area. The focus ring the clip cuts off is painted again outside it.
+fn material_icon_button(
+    ui: &mut Ui,
+    theme: &Palette,
+    glyph: char,
+    label: &str,
+    keys: &str,
+    on: Option<bool>,
+    size: f32,
+) -> Response {
+    use egui_material3::iconbutton::{
+        IconButtonShape, IconButtonSize, MIN_TOUCH_TARGET, MaterialIconButton,
+    };
+    let (slot, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
+    let enabled = ui.is_enabled();
+    let mut selected = on.unwrap_or(false);
+    let mut button = MaterialIconButton::standard(lucide(glyph))
+        .size(IconButtonSize::Custom(size))
+        .shape(IconButtonShape::Square)
+        .label(label)
+        .enabled(enabled);
+    if on.is_some() {
+        button = button.toggleable(&mut selected);
+    }
+    let target = Rect::from_center_size(slot.center(), Vec2::splat(size.max(MIN_TOUCH_TARGET)));
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(target)
+            .layout(Layout::left_to_right(Align::Min)),
     );
-    focus_ring(ui, theme, &response);
+    child.set_clip_rect(slot.intersect(ui.clip_rect()));
+    let response = child.add(button);
+    if response.has_focus() {
+        let radius = IconButtonSize::Custom(size)
+            .metrics()
+            .square_shape
+            .radius(slot);
+        egui_material3::paint::paint_focus_ring(
+            ui.painter(),
+            slot,
+            CornerRadius::same(radius.round().clamp(0.0, 255.0) as u8),
+            egui_material3::MaterialTheme::of(ui.ctx())
+                .color(egui_material3::tokens::ColorRole::Secondary),
+        );
+    }
     tip(response, theme, label, keys)
 }
 
@@ -1059,35 +1109,65 @@ pub fn glass_button(
 }
 
 /// A tooltip on `response`: `label`, then `keys` as [`kbd`] chips when
-/// there are any. Put hints here, not in a line of text under a control.
-pub fn tip(response: Response, theme: &Palette, label: &str, keys: &str) -> Response {
+/// there are any, in Material's plain tooltip. Put hints here, not in a
+/// line of text under a control. The tooltip takes its colours from the
+/// Material theme, so the palette is not read.
+pub fn tip(response: Response, _theme: &Palette, label: &str, keys: &str) -> Response {
     if label.is_empty() {
         return response;
     }
     if response.hovered() {
         super::hint::set(&response.ctx, label, keys);
     }
-    response.on_hover_ui(|ui| {
+    let name = if keys.is_empty() {
+        label.to_owned()
+    } else {
+        format!("{label} ({keys})")
+    };
+    super::hint::name_for_screen_readers(&response, &name);
+    // Whether it showed changes nothing here: the response is returned
+    // either way.
+    let _ = egui_material3::MaterialTooltip::new(name).show_for_with(&response, |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = SPACE_SM;
-            ui.label(egui::RichText::new(label).color(theme::rgb(theme.text)));
+            ui.label(label);
             if !keys.is_empty() {
-                kbd(ui, theme, keys);
+                let ink = ui.visuals().text_color();
+                kbd_in(ui, keys, ink);
             }
         });
-    })
+    });
+    response
+}
+
+/// A rich tooltip on `response`: Material's rich tooltip (the raised
+/// surface container) holding whatever `add_contents` lays out, for a
+/// preview with several lines. `name` is what screen readers are told.
+/// Like egui's tooltips it closes when the pointer leaves the control.
+pub fn rich_tip(response: Response, name: &str, add_contents: impl FnOnce(&mut Ui)) -> Response {
+    // Neither the tooltip's response nor the content's return value is
+    // needed: it has no actions.
+    let _ = egui_material3::RichTooltip::new(name)
+        .persistent(false)
+        .show_for_with(&response, add_contents);
+    response
 }
 
 /// A keyboard shortcut as chips: `Ctrl+Shift+R` becomes three, one per
 /// key; anything with a space in it (`Space / K`) stays one chip.
 pub fn kbd(ui: &mut Ui, theme: &Palette, keys: &str) -> Response {
+    kbd_in(ui, keys, theme::rgb(theme.text_muted))
+}
+
+/// [`kbd`] in `ink`, the chips tinted from it: on the inverse surface of a
+/// tooltip the palette's muted ink would not show.
+fn kbd_in(ui: &mut Ui, keys: &str, ink: Color32) -> Response {
     let parts: Vec<&str> = if keys.contains(' ') || keys.len() == 1 {
         vec![keys]
     } else {
         keys.split('+').filter(|part| !part.is_empty()).collect()
     };
     let font = theme::medium(ui.ctx(), theme::TINY_SIZE);
-    let ink = theme::rgb(theme.text_muted);
     let gap = 2.0;
     let galleys: Vec<_> = parts
         .into_iter()
@@ -1111,8 +1191,8 @@ pub fn kbd(ui: &mut Ui, theme: &Palette, keys: &str) -> Response {
         ui.painter().rect(
             chip,
             CornerRadius::same(4),
-            theme::ink(theme, theme::INK_08),
-            Stroke::new(1.0, theme::ink(theme, theme::INK_05)),
+            ink.gamma_multiply(0.12),
+            Stroke::new(1.0, ink.gamma_multiply(0.2)),
             egui::StrokeKind::Inside,
         );
         ui.painter()

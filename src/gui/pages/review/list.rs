@@ -524,7 +524,7 @@ fn row(
         muted,
         rect.right() - x - CELL_PAD - PAD_X,
     );
-    response.on_hover_ui(|ui| super::tooltip(ui, paint, item))
+    super::tooltip_on(response, paint, item)
 }
 
 #[cfg(test)]

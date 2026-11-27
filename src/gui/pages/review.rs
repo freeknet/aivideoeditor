@@ -2433,7 +2433,22 @@ fn bar_value(night: &Night<'_>, s: &crate::index::Scored, m: search::Metric) -> 
 }
 
 /// The hover card: caption, why it matched, the numbers.
-pub(super) fn tooltip(ui: &mut egui::Ui, paint: &Paint<'_>, item: &Item) {
+pub(super) fn tooltip_on(
+    response: egui::Response,
+    paint: &Paint<'_>,
+    item: &Item,
+) -> egui::Response {
+    let name = paint
+        .night
+        .index
+        .segments
+        .get(item.seg)
+        .map_or_else(String::new, |s| s.id.clone());
+    widgets::rich_tip(response, &name, |ui| tooltip(ui, paint, item))
+}
+
+/// The preview [`tooltip_on`] lays out for `item`.
+fn tooltip(ui: &mut egui::Ui, paint: &Paint<'_>, item: &Item) {
     let Some(s) = paint.night.index.segments.get(item.seg) else {
         return;
     };

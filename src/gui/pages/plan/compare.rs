@@ -844,7 +844,8 @@ pub(super) fn view(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut U
                 clicked_shot = Some((lane.side, k));
             }
             let tip_note = shot.note.clone();
-            resp.on_hover_ui(|ui| {
+            // The response has been read above; only the tooltip is left.
+            let _ = widgets::rich_tip(resp, &name, |ui| {
                 ui.label(
                     egui::RichText::new(describe(shot))
                         .font(theme::medium(ui.ctx(), theme::BODY_SIZE))

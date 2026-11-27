@@ -17,8 +17,8 @@ use crate::gui::ui::hint::Hint as _;
 use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, Ui, pos2, vec2};
 
 use crate::gui::thumbs::Thumbs;
-use crate::gui::ui::icons;
 use crate::gui::ui::theme::{self, SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XS};
+use crate::gui::ui::{icons, widgets};
 use crate::index::Index;
 use crate::theme::Palette;
 
@@ -364,7 +364,7 @@ pub(super) fn segment_row(
         font,
         ink,
     );
-    response.on_hover_ui(|ui| {
+    widgets::rich_tip(response, &seg.id, |ui| {
         ui.set_max_width(300.0);
         ui.label(
             egui::RichText::new(&seg.id)
