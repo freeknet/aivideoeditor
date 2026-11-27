@@ -240,6 +240,11 @@ pub fn setup(ctx: &egui::Context, family: Option<&str>) -> Option<PathBuf> {
             list.push(key.clone());
         }
     }
+    // egui-material3's bundled Material Symbols, as their own families: the
+    // library draws its few built-in icons (a dialog's close button) in
+    // them. They go to the very back of the proportional chain, so Lucide
+    // keeps the private-use codepoints the two fonts share in labels.
+    egui_material3::fonts::add_symbols(&mut fonts);
     ctx.set_fonts(fonts);
     face
 }

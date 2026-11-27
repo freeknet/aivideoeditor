@@ -1,7 +1,7 @@
 // ============================================================================
 // Module:       gui::ui::modal
 // Description:  The one modal dialog: egui-material3's dialog on its scrim,
-//               dismissed by Escape or a click outside.
+//               closed by its close button, Escape or a click outside.
 //
 // Dependencies: egui; egui_material3 (MaterialDialog); crate::theme::Palette
 // ============================================================================
@@ -12,7 +12,7 @@
 //! with different contents, so there are no six dialogs of six widths, none
 //! aligned, three movable for no reason. It is Material 3's basic dialog
 //! (egui-material3's `MaterialDialog`): the high container on a scrim, the
-//! extra-large shape, a headline, focus kept inside while
+//! extra-large shape, a headline, a close button, focus kept inside while
 //! it is open and handed back when it closes, and Material's enter and exit
 //! motion.
 //!
@@ -26,7 +26,8 @@ use egui::Ui;
 pub struct Outcome<R> {
     /// What the contents returned, if they were drawn this frame.
     pub inner: Option<R>,
-    /// Whether the user asked to dismiss it (Escape or the scrim).
+    /// Whether the user asked to dismiss it (the close button, Escape or
+    /// the scrim).
     pub dismissed: bool,
 }
 
@@ -44,12 +45,11 @@ pub fn show<R>(
     // The caller owns whether the dialog is open; the library's flag is a
     // copy, and its closing is reported as `dismissed`.
     let mut still_open = open;
-    // No library close button: it draws a Material Symbols codepoint in the
-    // proportional family, where the app's Lucide font answers first for
-    // the same private-use codepoints, so it showed the wrong glyph.
-    // Escape and the scrim close every dialog.
     let response = egui_material3::MaterialDialog::new(id, title, &mut still_open)
-        .close_button(false)
+        .close_button(true)
+        // The contents keep the app's own fonts and colours rather than
+        // Material's supporting-text style.
+        .content_style(egui_material3::dialog::DialogContentStyle::Inherit)
         .dismiss_on_escape(true)
         .dismiss_on_scrim(true)
         .min_width(width)
