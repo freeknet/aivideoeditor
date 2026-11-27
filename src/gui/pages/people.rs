@@ -1180,20 +1180,23 @@ fn dialog(ctx: &mut PageCtx<'_>, state: &mut State, ui: &Ui, ops: &mut Vec<Op>) 
                     .spacing([theme::SPACE_SM, theme::SPACE_XS])
                     .show(ui, |ui| {
                         let label = ui.label("Clip");
-                        egui::ComboBox::from_id_salt("people-range-clip")
-                            .selected_text(clip.as_str())
-                            .width(180.0)
-                            .show_ui(ui, |ui| {
-                                egui::ScrollArea::vertical()
-                                    .max_height(300.0)
-                                    .show(ui, |ui| {
-                                        for c in &clips {
-                                            ui.selectable_value(clip, c.clone(), c);
-                                        }
-                                    });
-                            })
-                            .response
-                            .labelled_by(label.id);
+                        // Material's compact select; nothing picked until the
+                        // clip is one of the night's.
+                        let mut pick = clips.iter().position(|c| c == clip);
+                        let field = clips.iter().enumerate().fold(
+                            egui_material3::MaterialSelect::new(&mut pick)
+                                .id_salt("people-range-clip")
+                                .variant(egui_material3::SelectVariant::Outlined)
+                                .compact(true)
+                                .placeholder("Pick a clip")
+                                .width(180.0)
+                                .menu_max_height(300.0),
+                            |field, (i, c)| field.option(i, c.as_str()),
+                        );
+                        ui.add(field).labelled_by(label.id);
+                        if let Some(c) = pick.and_then(|i| clips.get(i)) {
+                            c.clone_into(clip);
+                        }
                         ui.end_row();
                         let label = ui.label("From (s)");
                         ui.add(egui::DragValue::new(from).speed(0.1).range(0.0..=f32::MAX))
