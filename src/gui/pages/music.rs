@@ -848,93 +848,115 @@ fn sections(
             edits.push(Edit::ResetSections);
         }
     });
-    egui::Grid::new("music-sections")
-        .num_columns(3)
-        .spacing([theme::SPACE_SM, theme::SPACE_XS])
-        .min_row_height(theme::COMPACT_HEIGHT)
-        .show(ui, |ui| {
-            for (i, s) in map.sections.iter().enumerate() {
-                let colour = section_color(ctx.theme, &s.name);
-                widgets::swatch(ui, ctx.theme, colour, egui::vec2(4.0, 16.0));
-                let renaming = state.rename.as_ref().is_some_and(|(k, _)| *k == i);
-                if renaming {
-                    let mut commit = None;
-                    let mut cancel = false;
-                    if let Some((_, text)) = state.rename.as_mut() {
-                        let field = ui
-                            .add(egui::TextEdit::singleline(text).desired_width(110.0))
-                            .accessible_name("Section name");
-                        if state.focus_rename {
-                            field.request_focus();
-                            state.focus_rename = false;
-                        }
-                        if field.lost_focus() {
-                            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                                cancel = true;
-                            } else {
-                                commit = Some(text.clone());
-                            }
-                        }
-                    }
-                    if let Some(name) = commit {
-                        edits.push(Edit::RenameSection(i, name));
-                        state.rename = None;
-                    } else if cancel {
-                        state.rename = None;
-                    }
-                } else {
-                    let label = ui
-                        .add(
-                            egui::Label::new(
-                                RichText::new(&s.name)
-                                    .font(theme::medium(ui.ctx(), theme::BODY_SIZE))
-                                    .color(theme::rgb(ctx.theme.text)),
-                            )
-                            .sense(egui::Sense::click()),
-                        )
-                        .hint("Click to select; double-click or right-click to rename");
-                    if label.clicked() {
-                        view::select(ctx, state, s.from_bar, s.to_bar);
-                        if let Some(bar) = map.bars.get(s.from_bar) {
-                            state.view_t0 = bar.t - 0.05 * state.view_span;
-                            state.clamp_view(map.duration);
-                        }
-                    }
-                    if label.double_clicked() {
-                        state.rename = Some((i, s.name.clone()));
-                        state.focus_rename = true;
-                    }
-                    widgets::context_menu(&label, |ui| {
-                        if ui.button("Rename…").clicked() {
-                            state.rename = Some((i, s.name.clone()));
-                            state.focus_rename = true;
-                            ui.close();
-                        }
-                        widgets::submenu(ui, "Call it", |ui| {
-                            for name in structure::NAMES {
-                                if ui.button(name).clicked() {
-                                    edits.push(Edit::RenameSection(i, name.to_owned()));
-                                    ui.close();
-                                }
-                            }
-                        });
-                    });
+    // A Material 3 list, a row per section: its colour, its name (a field
+    // while it is renamed) and its bars. Click selects it; double-click or
+    // the menu renames it.
+    use egui_material3::{ListItem, MaterialList, VisualDensity};
+    let palette = ctx.theme;
+    let focus_rename = std::mem::take(&mut state.focus_rename);
+    let mut rename_slot = state.rename.as_mut().map(|(k, text)| (*k, text));
+    let field: std::cell::RefCell<Option<egui::Response>> = std::cell::RefCell::new(None);
+    let list = map.sections.iter().enumerate().fold(
+        MaterialList::new()
+            .id(ui.make_persistent_id("music-sections"))
+            .dividers(false)
+            .fill_width(true),
+        |list, (i, s)| {
+            let editing = match rename_slot.take() {
+                Some((k, text)) if k == i => Some(text),
+                other => {
+                    rename_slot = other;
+                    None
                 }
-                let t0 = map.bars.get(s.from_bar).map_or(0.0, |b| b.t);
-                ui.label(
-                    RichText::new(format!(
-                        "bars {}–{} · {:.1} s",
-                        s.from_bar,
-                        s.to_bar,
-                        map.bar_end(s.to_bar) - t0
-                    ))
-                    .font(theme::tabular(ui.ctx(), theme::BODY_SIZE))
-                    .color(theme::rgb(ctx.theme.text_muted)),
-                )
-                .hint(clock(t0));
-                ui.end_row();
+            };
+            let field = &field;
+            let t0 = map.bars.get(s.from_bar).map_or(0.0, |b| b.t);
+            let bars = format!(
+                "bars {}–{} · {:.1} s",
+                s.from_bar,
+                s.to_bar,
+                map.bar_end(s.to_bar) - t0
+            );
+            list.item(
+                ListItem::new(s.name.clone())
+                    .dense(true)
+                    .visual_density(VisualDensity::new(0.0, -4.0))
+                    .content_ui(move |ui, _item| {
+                        ui.spacing_mut().item_spacing.x = theme::SPACE_SM;
+                        let colour = section_color(palette, &s.name);
+                        widgets::swatch(ui, palette, colour, egui::vec2(4.0, 16.0));
+                        match editing {
+                            Some(text) => {
+                                let response = widgets::input(text)
+                                    .label("Section name")
+                                    .width(140.0)
+                                    .show(ui)
+                                    .response;
+                                if focus_rename {
+                                    response.request_focus();
+                                }
+                                *field.borrow_mut() = Some(response);
+                            }
+                            None => {
+                                ui.label(
+                                    RichText::new(&s.name)
+                                        .font(theme::medium(ui.ctx(), theme::BODY_SIZE))
+                                        .color(theme::rgb(palette.text)),
+                                );
+                            }
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                RichText::new(bars)
+                                    .font(theme::tabular(ui.ctx(), theme::BODY_SIZE))
+                                    .color(theme::rgb(palette.text_muted)),
+                            )
+                            .hint(clock(t0));
+                        });
+                    }),
+            )
+        },
+    );
+    let rows = list.show(ui).items;
+    if let Some(response) = field.into_inner()
+        && response.lost_focus()
+    {
+        let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
+        if let Some((k, text)) = state.rename.take()
+            && !escape
+        {
+            edits.push(Edit::RenameSection(k, text));
+        }
+    }
+    for ((i, s), row) in map.sections.iter().enumerate().zip(rows) {
+        let row = row.hint("Click to select; double-click or right-click to rename");
+        if row.clicked() {
+            view::select(ctx, state, s.from_bar, s.to_bar);
+            if let Some(bar) = map.bars.get(s.from_bar) {
+                state.view_t0 = bar.t - 0.05 * state.view_span;
+                state.clamp_view(map.duration);
             }
+        }
+        if row.double_clicked() {
+            state.rename = Some((i, s.name.clone()));
+            state.focus_rename = true;
+        }
+        widgets::context_menu(&row, |ui| {
+            if ui.button("Rename…").clicked() {
+                state.rename = Some((i, s.name.clone()));
+                state.focus_rename = true;
+                ui.close();
+            }
+            widgets::submenu(ui, "Call it", |ui| {
+                for name in structure::NAMES {
+                    if ui.button(name).clicked() {
+                        edits.push(Edit::RenameSection(i, name.to_owned()));
+                        ui.close();
+                    }
+                }
+            });
         });
+    }
 }
 
 /// The drop list.
