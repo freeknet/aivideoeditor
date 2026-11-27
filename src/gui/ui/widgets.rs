@@ -1342,30 +1342,29 @@ pub enum Tone {
     Danger,
 }
 
-/// A badge: short text on a tinted fill of its tone (the colour at 15 %
-/// behind text in that colour), drawn as Material's labelled badge.
-pub fn pill(ui: &mut Ui, theme: &Palette, text: &str, tone: Tone) -> Response {
+/// A badge: short text on its tone's container colour, drawn as
+/// Material's labelled badge. Success and warning are egui-material3's
+/// theme-harmonised extended colours, danger the error container, key the
+/// primary container, neutral the highest surface container.
+pub fn pill(ui: &mut Ui, _theme: &Palette, text: &str, tone: Tone) -> Response {
+    use egui_material3::tokens::ColorRole;
+    let scheme = egui_material3::MaterialTheme::of(ui.ctx());
+    let roles = |fill: ColorRole, ink: ColorRole| (scheme.color(fill), scheme.color(ink));
     let (fill, ink) = match tone {
-        Tone::Neutral => (
-            theme::ink(theme, theme::INK_10),
-            theme::rgb(theme.text_muted),
+        Tone::Neutral => roles(
+            ColorRole::SurfaceContainerHighest,
+            ColorRole::OnSurfaceVariant,
         ),
-        Tone::Key => (
-            theme::translucent(theme.accent, 38),
-            theme::rgb(theme.accent),
-        ),
-        Tone::Success => (
-            theme::translucent(theme.success, 38),
-            theme::rgb(theme.success),
-        ),
-        Tone::Warning => (
-            theme::translucent(theme.warning, 38),
-            theme::rgb(theme.warning),
-        ),
-        Tone::Danger => (
-            theme::translucent(theme.danger, 38),
-            theme::rgb(theme.danger),
-        ),
+        Tone::Key => roles(ColorRole::PrimaryContainer, ColorRole::OnPrimaryContainer),
+        Tone::Success => {
+            let group = scheme.success();
+            (group.color_container, group.on_color_container)
+        }
+        Tone::Warning => {
+            let group = scheme.warning();
+            (group.color_container, group.on_color_container)
+        }
+        Tone::Danger => roles(ColorRole::ErrorContainer, ColorRole::OnErrorContainer),
     };
     // Material's labelled badge (16 px, label-small, fully rounded) in the
     // tone's tint, inline rather than pinned to a corner.
