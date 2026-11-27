@@ -1348,7 +1348,7 @@ dependencies = [
 [[package]]
 name = "egui-material3"
 version = "0.0.10"
-source = "git+https://github.com/freeknet/egui-material3?rev=4eb3cc124b171386c1c77e65a1af853897febb7b#4eb3cc124b171386c1c77e65a1af853897febb7b"
+source = "git+https://github.com/freeknet/egui-material3?rev=0355fae9b72d55f93a35d1a9fe3e7caff2de5c57#0355fae9b72d55f93a35d1a9fe3e7caff2de5c57"
 dependencies = [
  "base64 0.22.1",
  "dark-light",
