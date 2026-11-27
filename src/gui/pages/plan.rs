@@ -1731,20 +1731,22 @@ fn draft_window(
                     ui.end_row();
                     ui.label("Aspect");
                     ui.horizontal(|ui| {
-                        let before = form.aspect;
-                        for a in [Aspect::Vertical, Aspect::Feed, Aspect::Wide] {
-                            ui.selectable_value(&mut form.aspect, a, aspect_key(a));
-                        }
-                        if form.aspect != before {
+                        let aspects = [Aspect::Vertical, Aspect::Feed, Aspect::Wide]
+                            .map(|a| (a, aspect_key(a)));
+                        if widgets::segmented(ui, palette, &mut form.aspect, &aspects) {
                             form.end_card = end_card_for(project, form.aspect);
                         }
                     });
                     ui.end_row();
                     ui.label("Length");
                     ui.horizontal(|ui| {
-                        for secs in [15.0, 30.0, 60.0] {
-                            ui.selectable_value(&mut form.seconds, secs, format!("{secs:.0}s"));
-                        }
+                        // The preset lengths; any other is typed in the field.
+                        widgets::segmented(
+                            ui,
+                            palette,
+                            &mut form.seconds,
+                            &[(15.0, "15s"), (30.0, "30s"), (60.0, "60s")],
+                        );
                         ui.add(
                             widgets::number(&mut form.seconds, "Length")
                                 .range(8.0..=240.0)
@@ -1793,10 +1795,12 @@ fn draft_window(
             }
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                if ui.button("Draft").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                if widgets::key_button(ui, palette, "Draft").clicked()
+                    || ui.input(|i| i.key_pressed(egui::Key::Enter))
+                {
                     go = true;
                 }
-                if ui.button("Cancel").clicked() {
+                if widgets::ghost_button(ui, palette, "Cancel").clicked() {
                     cancel = true;
                 }
             });

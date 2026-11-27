@@ -733,23 +733,24 @@ fn template_section(ui: &mut egui::Ui, theme: &crate::theme::Palette, state: &mu
                 .template_pick
                 .clone()
                 .unwrap_or_else(|| if current.is_empty() { "General".to_owned() } else { current.clone() });
-            egui::ComboBox::from_id_salt("recipe-template")
-                .width(220.0)
-                .selected_text(pick.as_str())
-                .show_ui(ui, |ui| {
-                    for t in &catalog {
-                        if ui
-                            .selectable_label(pick == t.name, &t.name)
-                            .hint(&t.description)
-                            .clicked()
-                        {
-                            state.template_pick = Some(t.name.clone());
-                        }
-                    }
-                })
-                .response
-                .accessible_name("Template")
-                .hint("The template to apply");
+            // Each template's description is the tooltip on its row.
+            let mut index = catalog.iter().position(|t| t.name == pick);
+            let field = catalog.iter().enumerate().fold(
+                egui_material3::MaterialSelect::new(&mut index)
+                    .id_salt("recipe-template")
+                    .variant(egui_material3::SelectVariant::Outlined)
+                    .compact(true)
+                    .label("Template")
+                    .width(220.0)
+                    .menu_max_height(300.0),
+                |field, (i, t)| field.option_item(egui_material3::SelectOption::new(i, &t.name).description(&t.description)),
+            );
+            ui.add(field).hint("The template to apply");
+            if let Some(t) = index.and_then(|i| catalog.get(i))
+                && t.name != pick
+            {
+                state.template_pick = Some(t.name.clone());
+            }
             let chosen = catalog.iter().find(|t| t.name == pick);
             if widgets::outline_button(ui, theme, "Apply")
                 .hint("Replace this project's deliverables, rules, footage words and measures with the template's")

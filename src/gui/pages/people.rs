@@ -1216,29 +1216,26 @@ fn dialog(ctx: &mut PageCtx<'_>, state: &mut State, ui: &Ui, ops: &mut Vec<Op>) 
                         .labelled_by(label.id);
                         ui.end_row();
                         let label = ui.label("Person");
-                        ui.horizontal(|ui| {
-                            ui.add(egui::TextEdit::singleline(name).desired_width(130.0))
-                                .labelled_by(label.id);
-                            egui::ComboBox::from_id_salt("people-range-name")
-                                .selected_text("▾")
-                                .width(24.0)
-                                .show_ui(ui, |ui| {
-                                    egui::ScrollArea::vertical()
-                                        .max_height(300.0)
-                                        .show(ui, |ui| {
-                                            for n in &names {
-                                                ui.selectable_value(name, n.clone(), n);
-                                            }
-                                        });
-                                })
-                                .response
-                                .accessible_name("Pick a known person");
-                        });
+                        // Any name can be typed; the menu suggests the
+                        // known people whose names hold what is typed.
+                        let field = names.iter().enumerate().fold(
+                            egui_material3::MaterialSelect::editable(name)
+                                .id_salt("people-range-name")
+                                .variant(egui_material3::SelectVariant::Outlined)
+                                .compact(true)
+                                .label("Person")
+                                .width(180.0)
+                                .menu_max_height(300.0),
+                            |field, (i, n)| field.option(i, n.as_str()),
+                        );
+                        ui.add(field).labelled_by(label.id);
                         ui.end_row();
                     });
                 let valid = !clip.is_empty() && *to > *from && !name.trim().is_empty();
                 ui.horizontal(|ui| {
-                    let assign = ui.add_enabled(valid, egui::Button::new("Assign"));
+                    let assign = ui
+                        .add_enabled_ui(valid, |ui| widgets::key_button(ui, ctx.theme, "Assign"))
+                        .inner;
                     if assign.clicked() {
                         ops.push(Op::AssignRange(
                             clip.clone(),
@@ -1248,7 +1245,7 @@ fn dialog(ctx: &mut PageCtx<'_>, state: &mut State, ui: &Ui, ops: &mut Vec<Op>) 
                         ));
                         close = true;
                     }
-                    if ui.button("Cancel").clicked() {
+                    if widgets::ghost_button(ui, ctx.theme, "Cancel").clicked() {
                         close = true;
                     }
                 });

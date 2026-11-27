@@ -661,10 +661,12 @@ pub(super) fn form_window(
                     FormKind::Rename(_) => "Rename",
                     FormKind::Duplicate(_) => "Duplicate",
                 };
-                if ui.button(label).clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                if widgets::key_button(ui, palette, label).clicked()
+                    || ui.input(|i| i.key_pressed(egui::Key::Enter))
+                {
                     go = true;
                 }
-                if ui.button("Cancel").clicked() {
+                if widgets::ghost_button(ui, palette, "Cancel").clicked() {
                     cancel = true;
                 }
             });
