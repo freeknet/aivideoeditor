@@ -22,14 +22,11 @@ Compiled into `ave.exe`. Where each came from is in [`assets/fonts/NOTICE`](asse
 
 ## Crates
 
-Every crate compiled into `ave.exe` (`aivideoeditor` for `x86_64-pc-windows-msvc`), 262 in all, with the licence its authors published it under. The release zip's `THIRD-PARTY-NOTICES.txt` has each one's version and full licence text.
+Every crate compiled into `ave.exe` (`aivideoeditor` for `x86_64-pc-windows-msvc`), 250 in all, with the licence its authors published it under. The release zip's `THIRD-PARTY-NOTICES.txt` has each one's version and full licence text.
 
 | Crate | Licence | Source |
 |---|---|---|
 | accesskit | MIT OR Apache-2.0 | https://github.com/AccessKit/accesskit |
-| accesskit_consumer | MIT OR Apache-2.0 | https://github.com/AccessKit/accesskit |
-| accesskit_windows | MIT OR Apache-2.0 | https://github.com/AccessKit/accesskit |
-| accesskit_winit | Apache-2.0 | https://github.com/AccessKit/accesskit |
 | adler2 | 0BSD OR MIT OR Apache-2.0 | https://github.com/oyvindln/adler2 |
 | ahash | MIT OR Apache-2.0 | https://github.com/tkaitchuck/ahash |
 | aho-corasick | Unlicense OR MIT | https://github.com/BurntSushi/aho-corasick |
@@ -85,7 +82,6 @@ Every crate compiled into `ave.exe` (`aivideoeditor` for `x86_64-pc-windows-msvc
 | egui-wgpu | MIT OR Apache-2.0 | https://github.com/emilk/egui/tree/main/crates/egui-wgpu |
 | egui-winit | MIT OR Apache-2.0 | https://github.com/emilk/egui/tree/main/crates/egui-winit |
 | egui_glow | MIT OR Apache-2.0 | https://github.com/emilk/egui/tree/main/crates/egui_glow |
-| egui_system_font_provider | MIT OR Apache-2.0 | https://github.com/emilk/egui/tree/main/crates/egui_system_font_provider |
 | either | MIT OR Apache-2.0 | https://github.com/rayon-rs/either |
 | emath | MIT OR Apache-2.0 | https://github.com/emilk/egui/tree/main/crates/emath |
 | env_filter | MIT OR Apache-2.0 | https://github.com/rust-cli/env_logger |
@@ -100,7 +96,6 @@ Every crate compiled into `ave.exe` (`aivideoeditor` for `x86_64-pc-windows-msvc
 | flate2 | MIT OR Apache-2.0 | https://github.com/rust-lang/flate2-rs |
 | foldhash | Zlib | https://github.com/orlp/foldhash |
 | font-types | MIT OR Apache-2.0 | https://github.com/googlefonts/fontations |
-| fontique | Apache-2.0 OR MIT | https://github.com/linebender/parley |
 | form_urlencoded | MIT OR Apache-2.0 | https://github.com/servo/rust-url |
 | getrandom | MIT OR Apache-2.0 | https://github.com/rust-random/getrandom |
 | glifo | Apache-2.0 OR MIT | https://github.com/linebender/vello |
@@ -145,7 +140,6 @@ Every crate compiled into `ave.exe` (`aivideoeditor` for `x86_64-pc-windows-msvc
 | lock_api | MIT OR Apache-2.0 | https://github.com/Amanieu/parking_lot |
 | log | MIT OR Apache-2.0 | https://github.com/rust-lang/log |
 | memchr | Unlicense OR MIT | https://github.com/BurntSushi/memchr |
-| memmap2 | MIT OR Apache-2.0 | https://github.com/RazrFalcon/memmap2-rs |
 | miniz_oxide | MIT OR Zlib OR Apache-2.0 | https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide |
 | moxcms | BSD-3-Clause OR Apache-2.0 | https://github.com/awxkee/moxcms |
 | naga | MIT OR Apache-2.0 | https://github.com/gfx-rs/wgpu |
@@ -162,13 +156,11 @@ Every crate compiled into `ave.exe` (`aivideoeditor` for `x86_64-pc-windows-msvc
 | ordered-float | MIT | https://github.com/reem/rust-ordered-float |
 | parking_lot | MIT OR Apache-2.0 | https://github.com/Amanieu/parking_lot |
 | parking_lot_core | MIT OR Apache-2.0 | https://github.com/Amanieu/parking_lot |
-| parlance | Apache-2.0 OR MIT | https://github.com/linebender/parley |
 | pem-rfc7468 | Apache-2.0 OR MIT | https://github.com/RustCrypto/formats |
 | peniko | Apache-2.0 OR MIT | https://github.com/linebender/peniko |
 | percent-encoding | MIT OR Apache-2.0 | https://github.com/servo/rust-url |
 | pin-project-lite | Apache-2.0 OR MIT | https://github.com/taiki-e/pin-project-lite |
 | png | MIT OR Apache-2.0 | https://github.com/image-rs/image-png |
-| poll-promise | MIT OR Apache-2.0 | https://github.com/EmbarkStudios/poll-promise |
 | pollster | MIT OR Apache-2.0 | https://github.com/zesterer/pollster |
 | polycool | MIT OR Apache-2.0 | https://github.com/linebender/kurbo |
 | potential_utf | Unicode-3.0 | https://github.com/unicode-org/icu4x |
@@ -212,7 +204,6 @@ Every crate compiled into `ave.exe` (`aivideoeditor` for `x86_64-pc-windows-msvc
 | strsim | MIT | https://github.com/rapidfuzz/strsim-rs |
 | syn | MIT OR Apache-2.0 | https://github.com/dtolnay/syn |
 | synstructure | MIT | https://github.com/mystor/synstructure |
-| sys-locale | MIT OR Apache-2.0 | https://github.com/1Password/sys-locale |
 | termcolor | Unlicense OR MIT | https://github.com/BurntSushi/termcolor |
 | thiserror | MIT OR Apache-2.0 | https://github.com/dtolnay/thiserror |
 | thiserror-impl | MIT OR Apache-2.0 | https://github.com/dtolnay/thiserror |
@@ -226,14 +217,12 @@ Every crate compiled into `ave.exe` (`aivideoeditor` for `x86_64-pc-windows-msvc
 | toml_parser | MIT OR Apache-2.0 | https://github.com/toml-rs/toml |
 | toml_writer | MIT OR Apache-2.0 | https://github.com/toml-rs/toml |
 | tracing | MIT | https://github.com/tokio-rs/tracing |
-| tracing-attributes | MIT | https://github.com/tokio-rs/tracing |
 | tracing-core | MIT | https://github.com/tokio-rs/tracing |
 | transpose | MIT OR Apache-2.0 | https://github.com/ejmahler/transpose |
 | type-map | MIT OR Apache-2.0 | https://github.com/kardeiz/type-map |
 | unicode-general-category | Apache-2.0 | https://github.com/yeslogic/unicode-general-category |
 | unicode-ident | (MIT OR Apache-2.0) AND Unicode-3.0 | https://github.com/dtolnay/unicode-ident |
 | unicode-properties | (MIT OR Apache-2.0) AND Unicode-3.0 | https://github.com/unicode-rs/unicode-properties |
-| unicode-script | MIT OR Apache-2.0 | https://github.com/unicode-rs/unicode-script |
 | unicode-segmentation | MIT OR Apache-2.0 | https://github.com/unicode-rs/unicode-segmentation |
 | unicode-width | MIT OR Apache-2.0 | https://github.com/unicode-rs/unicode-width |
 | ureq | MIT OR Apache-2.0 | https://github.com/algesten/ureq |
@@ -247,7 +236,6 @@ Every crate compiled into `ave.exe` (`aivideoeditor` for `x86_64-pc-windows-msvc
 | vello_common | Apache-2.0 OR MIT | https://github.com/linebender/vello |
 | vello_cpu | Apache-2.0 OR MIT | https://github.com/linebender/vello |
 | web-time | MIT OR Apache-2.0 | https://github.com/daxpedda/web-time |
-| webbrowser | MIT OR Apache-2.0 | https://github.com/amodm/webbrowser-rs |
 | webpki-root-certs | CDLA-Permissive-2.0 | https://github.com/rustls/webpki-roots |
 | weezl | MIT OR Apache-2.0 | https://github.com/image-rs/weezl |
 | wgpu | MIT OR Apache-2.0 | https://github.com/gfx-rs/wgpu |
