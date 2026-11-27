@@ -1310,14 +1310,14 @@ fn settings(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
             } else {
                 let at = store::prefs_path().map(|p| p.display().to_string()).unwrap_or_default();
                 ui.horizontal(|ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut state.key_draft)
-                            .password(true)
-                            .hint_text(if prefs.api_key.is_some() { "saved — paste to replace" } else { "sk-ant-…" })
-                            .desired_width(ui.available_width() - 64.0),
-                    )
-                    .accessible_name("Claude API key")
-                    .hint(format!("Stored in plain text at {at}. Or set ANTHROPIC_API_KEY. Keys: console.anthropic.com."));
+                    widgets::input(&mut state.key_draft)
+                        .password(true)
+                        .label("Claude API key")
+                        .placeholder(if prefs.api_key.is_some() { "saved — paste to replace" } else { "sk-ant-…" })
+                        .width(ui.available_width() - 64.0)
+                        .show(ui)
+                        .response
+                        .hint(format!("Stored in plain text at {at}. Or set ANTHROPIC_API_KEY. Keys: console.anthropic.com."));
                     if widgets::outline_button(ui, theme, "Save").clicked() {
                         let key = state.key_draft.trim().to_owned();
                         prefs.api_key = (!key.is_empty()).then_some(key);
@@ -1328,8 +1328,11 @@ fn settings(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
             }
             widgets::menu_heading(ui, theme, "Local model server");
             ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut state.url_draft).desired_width(ui.available_width() - 64.0))
-                    .accessible_name("Local model server")
+                widgets::input(&mut state.url_draft)
+                    .label("Local model server")
+                    .width(ui.available_width() - 64.0)
+                    .show(ui)
+                    .response
                     .hint("llama.cpp's server (AVE_LLM_URL). Small local models plan poorly; use it offline.");
                 if widgets::outline_button(ui, theme, "Save").clicked() {
                     prefs.local_url = Some(state.url_draft.trim().to_owned());

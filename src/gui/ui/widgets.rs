@@ -1445,15 +1445,38 @@ pub fn empty_state(
     ui.advance_cursor_after_rect(area);
 }
 
-/// A single-line field with Selects' input look: the `input` hairline, 8 px
-/// corners, 28 px tall, the `ring` colour around it while focused, and
-/// `hint` as the placeholder.
-pub fn text_field(ui: &mut Ui, theme: &Palette, text: &mut String, hint: &str) -> Response {
-    let width = ui.available_width();
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, theme::CONTROL_HEIGHT), Sense::hover());
-    field_frame(ui, theme, rect, text, hint, None)
+/// A single-line field filling the row: Material's outlined text field
+/// at its densest (32 px, no floating label), `hint` as the placeholder.
+pub fn text_field(ui: &mut Ui, _theme: &Palette, text: &mut String, hint: &str) -> Response {
+    input(text)
+        .placeholder(hint)
+        .fill_width(true)
+        .show(ui)
+        .response
 }
 
+/// Material's outlined text field at its densest (32 px, no floating
+/// label: a `label` becomes the placeholder unless one is set, and stays
+/// the accessible name), for forms and dialogs. Finish it with `.show(ui)`.
+pub fn input(text: &mut String) -> egui_material3::MaterialInput<'_> {
+    egui_material3::MaterialInput::outlined(text).compact(true)
+}
+
+/// Material's outlined number field at its densest (32 px), named `label`
+/// for screen readers: drag it sideways, step it with Up and Down, or type.
+/// Finish it with `ui.add(..)`.
+pub fn number<'a, N: egui::emath::Numeric>(
+    value: &'a mut N,
+    label: &str,
+) -> egui_material3::MaterialNumberField<'a, N> {
+    egui_material3::MaterialNumberField::new(value)
+        .label(label)
+        .compact(true)
+}
+
+/// A hand-placed field in a row too short for [`input`]'s 32 px (a 24 or
+/// 28 px header or toolbar), optionally led by a Lucide icon: the field
+/// egui-material3 cannot draw yet, its own fill, hairline and focus ring.
 /// [`text_field`] at a given `rect`, with an optional leading icon: for a
 /// field placed by hand (the top bar's search). A field as tall as
 /// [`theme::BAR_CONTROL`] takes 14 px text, 12 px padding and a 16 px

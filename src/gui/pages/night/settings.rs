@@ -908,30 +908,30 @@ fn rules_section(
         parts::form_row(ui, theme, "Same clip", |ui| {
             changed |= ui
                 .add(
-                    egui::DragValue::new(&mut rules.same_clip_gap)
+                    widgets::number(&mut rules.same_clip_gap, "Same clip gap")
                         .range(0.0..=600.0)
-                        .speed(1.0)
-                        .suffix(" s apart"),
+                        .drag_points_per_step(1.0)
+                        .suffix(" s apart")
+                        .width(160.0),
                 )
                 .hint("Two shots from one clip start at least this far apart in it")
-                .accessible_name("Same clip gap")
                 .changed();
         });
         ui.add_space(theme::SPACE_XS + 2.0);
         parts::form_row(ui, theme, "Same person", |ui| {
             changed |= ui
                 .add(
-                    egui::DragValue::new(&mut rules.person_gap)
+                    widgets::number(&mut rules.person_gap, "Person gap")
                         .range(0..=30)
-                        .speed(0.1)
+                        .drag_points_per_step(10.0)
                         .prefix("not again within ")
-                        .suffix(" shots"),
+                        .suffix(" shots")
+                        .width(260.0),
                 )
                 .hint(
                     "Unnamed footage counts as one person per clip, and per 3 minutes of a long clip. 0 turns it off.",
                 )
-                .accessible_name("Person gap")
-                .changed();
+                                .changed();
         });
         ui.add_space(theme::SPACE_XS + 2.0);
         parts::form_row(ui, theme, "Look-alikes", |ui| {
@@ -1067,12 +1067,12 @@ fn deliverable_row(
     }
     changed |= ui
         .add(
-            egui::DragValue::new(&mut d.seconds)
+            widgets::number(&mut d.seconds, &format!("Deliverable {} length", i + 1))
                 .range(5.0..=600.0)
-                .speed(0.5)
-                .suffix(" s"),
+                .drag_points_per_step(2.0)
+                .suffix(" s")
+                .width(100.0),
         )
-        .accessible_name(format!("Deliverable {} length", i + 1))
         .changed();
     // Index 0 is "auto"; the rest are the card keys, in order.
     let cards: Vec<String> = std::iter::once(format!("auto ({})", recipe::aspect_key(d.aspect)))
@@ -1095,13 +1095,16 @@ fn deliverable_row(
     }
     changed |= ui
         .add(
-            egui::DragValue::new(&mut d.card_bars)
-                .range(0..=8)
-                .speed(0.05)
-                .suffix(" bars"),
+            widgets::number(
+                &mut d.card_bars,
+                &format!("Deliverable {} card length", i + 1),
+            )
+            .range(0..=8)
+            .drag_points_per_step(20.0)
+            .suffix(" bars")
+            .width(100.0),
         )
         .hint("How long the end card holds, in bars (two seconds each with no music)")
-        .accessible_name(format!("Deliverable {} card length", i + 1))
         .changed();
     let mut template = d.filename.clone().unwrap_or_default();
     let response = ui

@@ -135,12 +135,13 @@ pub fn draw(app: &mut App, ctx: &egui::Context, actions: &mut Vec<Action>) {
                 .inner_margin(super::theme::margin(SPACE_MD))
                 .show(ui, |ui| {
                     ui.set_width(WIDTH);
-                    let field = ui.add(
-                        egui::TextEdit::singleline(&mut state.query)
-                            .hint_text("Type a command")
-                            .desired_width(f32::INFINITY)
-                            .font(super::theme::font(super::theme::TITLE_SIZE)),
-                    );
+                    let field = egui_material3::MaterialInput::outlined(&mut state.query)
+                        .label("Command")
+                        .placeholder("Type a command")
+                        .density(-1)
+                        .fill_width(true)
+                        .show(ui)
+                        .response;
                     field.request_focus();
                     if field.changed() {
                         state.selected = 0;

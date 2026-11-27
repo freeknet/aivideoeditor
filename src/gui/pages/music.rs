@@ -593,15 +593,15 @@ fn tempo_menu(
             ui.horizontal(|ui| {
                 ui.add_space(theme::SPACE_SM);
                 let mut bpm = state.bpm_edit.unwrap_or(map.bpm);
-                let field = ui
-                    .add(
-                        egui::DragValue::new(&mut bpm)
-                            .speed(0.01)
-                            .range(40.0..=300.0)
-                            .max_decimals(2)
-                            .suffix(" BPM"),
-                    )
-                    .accessible_name("Tempo");
+                let field = ui.add(
+                    widgets::number(&mut bpm, "Tempo")
+                        .step(0.01)
+                        .drag_points_per_step(1.0)
+                        .range(40.0..=300.0)
+                        .decimals(2)
+                        .suffix(" BPM")
+                        .width(130.0),
+                );
                 if field.changed() {
                     state.bpm_edit = Some(bpm);
                 }
@@ -811,19 +811,12 @@ fn selection_row(
         ui.spacing_mut().item_spacing.x = theme::SPACE_XS;
         let width =
             (ui.available_width() - theme::CONTROL_HEIGHT - theme::SPACE_XS).clamp(60.0, 200.0);
-        let (rect, _) = ui.allocate_exact_size(
-            egui::vec2(width, theme::CONTROL_HEIGHT),
-            egui::Sense::hover(),
-        );
-        let field = widgets::field_frame(
-            ui,
-            ctx.theme,
-            rect,
-            &mut state.range_name,
-            "Another range name",
-            None,
-        )
-        .accessible_name("Range name");
+        let field = widgets::input(&mut state.range_name)
+            .label("Range name")
+            .placeholder("Another range name")
+            .width(width)
+            .show(ui)
+            .response;
         let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         let save = widgets::icon_btn(ui, ctx.theme, icons::CHECK, "Save the range", "Enter");
         if (save.clicked() || enter) && !state.range_name.trim().is_empty() {

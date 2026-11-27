@@ -480,13 +480,14 @@ fn item(
                 let Some((_, buf)) = state.comment_edit.as_mut() else {
                     return;
                 };
-                let resp = ui.add(
-                    egui::TextEdit::multiline(buf)
-                        .hint_text("What should change here")
-                        .font(theme::font(theme::BODY_SIZE))
-                        .desired_rows(2)
-                        .desired_width(f32::INFINITY),
-                );
+                let resp = widgets::input(buf)
+                    .label("Comment")
+                    .placeholder("What should change here")
+                    .multiline(true)
+                    .min_lines(2)
+                    .fill_width(true)
+                    .show(ui)
+                    .response;
                 if focus {
                     resp.request_focus();
                     state.comment_focus = None;

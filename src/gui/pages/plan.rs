@@ -1723,11 +1723,11 @@ fn draft_window(
                 .spacing([10.0, 8.0])
                 .show(ui, |ui| {
                     ui.label("Name");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut form.name)
-                            .hint_text("reel-30")
-                            .desired_width(180.0),
-                    );
+                    widgets::input(&mut form.name)
+                        .label("Name")
+                        .placeholder("reel-30")
+                        .width(180.0)
+                        .show(ui);
                     ui.end_row();
                     ui.label("Aspect");
                     ui.horizontal(|ui| {
@@ -1746,23 +1746,27 @@ fn draft_window(
                             ui.selectable_value(&mut form.seconds, secs, format!("{secs:.0}s"));
                         }
                         ui.add(
-                            egui::DragValue::new(&mut form.seconds)
+                            widgets::number(&mut form.seconds, "Length")
                                 .range(8.0..=240.0)
-                                .suffix(" s"),
+                                .drag_points_per_step(1.0)
+                                .suffix(" s")
+                                .width(100.0),
                         );
                     });
                     ui.end_row();
                     ui.label("End card");
                     ui.horizontal(|ui| {
+                        widgets::input(&mut form.end_card)
+                            .label("End card")
+                            .placeholder("image path (optional)")
+                            .width(180.0)
+                            .show(ui);
                         ui.add(
-                            egui::TextEdit::singleline(&mut form.end_card)
-                                .hint_text("image path (optional)")
-                                .desired_width(180.0),
-                        );
-                        ui.add(
-                            egui::DragValue::new(&mut form.card_bars)
+                            widgets::number(&mut form.card_bars, "End card length")
                                 .range(0..=8)
-                                .suffix(" bars"),
+                                .drag_points_per_step(1.0)
+                                .suffix(" bars")
+                                .width(100.0),
                         );
                     });
                     ui.end_row();

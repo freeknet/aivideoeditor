@@ -1138,13 +1138,12 @@ fn dialog(ctx: &mut PageCtx<'_>, state: &mut State, ui: &Ui, ops: &mut Vec<Op>) 
                         if segs.len() == 1 { "" } else { "s" }
                     ),
                 );
-                let edit = ui
-                    .add(
-                        egui::TextEdit::singleline(name)
-                            .hint_text("e.g. white-mask")
-                            .desired_width(f32::INFINITY),
-                    )
-                    .accessible_name("New person's name");
+                let edit = widgets::input(name)
+                    .label("New person's name")
+                    .placeholder("e.g. white-mask")
+                    .fill_width(true)
+                    .show(ui)
+                    .response;
                 if !edit.has_focus() && !edit.lost_focus() {
                     edit.request_focus();
                 }
@@ -1199,12 +1198,22 @@ fn dialog(ctx: &mut PageCtx<'_>, state: &mut State, ui: &Ui, ops: &mut Vec<Op>) 
                         }
                         ui.end_row();
                         let label = ui.label("From (s)");
-                        ui.add(egui::DragValue::new(from).speed(0.1).range(0.0..=f32::MAX))
-                            .labelled_by(label.id);
+                        ui.add(
+                            widgets::number(from, "From (s)")
+                                .range(0.0..=f32::MAX)
+                                .step(0.1)
+                                .drag_points_per_step(1.0),
+                        )
+                        .labelled_by(label.id);
                         ui.end_row();
                         let label = ui.label("To (s)");
-                        ui.add(egui::DragValue::new(to).speed(0.1).range(0.0..=f32::MAX))
-                            .labelled_by(label.id);
+                        ui.add(
+                            widgets::number(to, "To (s)")
+                                .range(0.0..=f32::MAX)
+                                .step(0.1)
+                                .drag_points_per_step(1.0),
+                        )
+                        .labelled_by(label.id);
                         ui.end_row();
                         let label = ui.label("Person");
                         ui.horizontal(|ui| {

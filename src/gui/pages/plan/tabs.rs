@@ -640,7 +640,11 @@ pub(super) fn form_window(
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label("Name");
-                let r = ui.add(egui::TextEdit::singleline(&mut form.name).desired_width(200.0));
+                let r = widgets::input(&mut form.name)
+                    .label("Name")
+                    .width(200.0)
+                    .show(ui)
+                    .response;
                 if !r.has_focus() && form.error.is_none() && !r.lost_focus() {
                     r.request_focus();
                 }
