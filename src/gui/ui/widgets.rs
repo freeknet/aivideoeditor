@@ -371,12 +371,13 @@ pub fn button(ui: &mut Ui, theme: &Palette, label: &str, emphasis: Emphasis) -> 
 /// An on/off switch with its label to the left. Returns the response; the
 /// value is flipped in place when clicked.
 pub fn switch(ui: &mut Ui, theme: &Palette, on: &mut bool, label: &str) -> Response {
-    // Material's switch (52 x 32: a primary track and an on-primary thumb
-    // when on, an outlined surface track when off) at the right end of a
-    // full-width row; a click on the label toggles it too.
-    const SWITCH: Vec2 = Vec2::new(52.0, 32.0);
+    // Material's dense switch (a 39 x 24 track in a 40 px touch target: a
+    // primary track and an on-primary thumb when on, an outlined surface
+    // track when off) at the right end of a full-width row, named for
+    // screen readers by the row's label; a click on the label toggles it.
+    use egui_material3::switch::{DENSE_TOUCH_TARGET, DENSE_TRACK_HEIGHT, DENSE_TRACK_WIDTH};
     let width = ui.available_width();
-    let height = theme::CONTROL_HEIGHT.max(SWITCH.y);
+    let height = theme::CONTROL_HEIGHT.max(DENSE_TRACK_HEIGHT + SPACE_SM);
     let (rect, mut response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
     ui.painter().text(
         rect.left_center(),
@@ -385,11 +386,19 @@ pub fn switch(ui: &mut Ui, theme: &Palette, on: &mut bool, label: &str) -> Respo
         theme::font(theme::BODY_SIZE),
         theme::rgb(theme.text),
     );
-    let slot = Rect::from_center_size(rect.right_center() - Vec2::new(SWITCH.x / 2.0, 0.0), SWITCH);
+    // The touch target is taller than the row; centred on it, it reaches
+    // a little into the rows around, as Material's targets do.
+    let slot = Rect::from_center_size(
+        rect.right_center() - Vec2::new(DENSE_TRACK_WIDTH / 2.0, 0.0),
+        Vec2::new(DENSE_TRACK_WIDTH, DENSE_TOUCH_TARGET),
+    );
     let enabled = ui.is_enabled();
     let switch = ui.put(
         slot,
-        egui_material3::MaterialSwitch::new(on).enabled(enabled),
+        egui_material3::MaterialSwitch::new(on)
+            .dense(true)
+            .accessible_label(label)
+            .enabled(enabled),
     );
     if response.clicked() {
         *on = !*on;
@@ -399,11 +408,7 @@ pub fn switch(ui: &mut Ui, theme: &Palette, on: &mut bool, label: &str) -> Respo
         response.mark_changed();
     }
     let value = *on;
-    let info = || egui::WidgetInfo::selected(egui::Role::Switch, enabled, value, label);
-    response.widget_info(info);
-    // The library's switch takes its accessible name from its own text,
-    // which would also draw beside it; the row's label names it instead.
-    switch.widget_info(info);
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Switch, enabled, value, label));
     let response = response | switch;
     super::hint::auto(&response, label);
     response
