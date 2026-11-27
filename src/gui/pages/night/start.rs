@@ -534,14 +534,10 @@ fn list(ctx: &mut PageCtx<'_>, nights: &recent::State, ui: &mut egui::Ui) -> Opt
         });
         return None;
     }
-    let mut clicked = None;
-    ui.spacing_mut().item_spacing.y = 2.0;
-    for night in &list {
-        if recent::row(ctx, ui, night, false) {
-            clicked = Some(night.work.clone());
-        }
-    }
-    clicked
+    let clicked = recent::rows(ctx, ui, &list, |_| false, "start-recent-rows");
+    list.iter()
+        .zip(clicked)
+        .find_map(|(night, clicked)| clicked.then(|| night.work.clone()))
 }
 
 /// While files hover over the window: the page dimmed under a dashed
