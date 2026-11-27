@@ -6,18 +6,7 @@ all-features = true
 
 [advisories]
 yanked = "warn"
-ignore = [
-    # Unmaintained crates (none a known vulnerability) that come in on Linux
-    # only, through the `eframe` that egui-material3 lists as a normal Linux
-    # dependency with eframe's default features: accesskit's AT-SPI bridge
-    # (zbus) and winit's Wayland title bars (ab_glyph -> ttf-parser). ave's
-    # own eframe turns neither on. Each clears when the fork makes eframe a
-    # dev-dependency on Linux, as it already is on Windows and macOS.
-    { id = "RUSTSEC-2026-0371", reason = "zbus_names via egui-material3's Linux eframe (accesskit AT-SPI); clears when that eframe is a dev-dependency" },
-    { id = "RUSTSEC-2026-0370", reason = "zvariant via egui-material3's Linux eframe (accesskit AT-SPI); clears when that eframe is a dev-dependency" },
-    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive via egui-material3's Linux eframe (accesskit AT-SPI); clears when that eframe is a dev-dependency" },
-    { id = "RUSTSEC-2026-0192", reason = "ttf-parser via egui-material3's Linux eframe (winit Wayland title bars); clears when that eframe is a dev-dependency" },
-]
+ignore = []
 
 [licenses]
 allow = [
