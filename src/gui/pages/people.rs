@@ -833,18 +833,32 @@ fn detail(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui, ops: &mut Vec<O
                 if header.clicked() {
                     state.picked.clone_from(&row.segs);
                 }
-                for &i in &row.segs {
-                    let look = view::RowLook {
-                        picked: state.picked.contains(&i),
-                        playing: playing.as_ref().is_some_and(|(p, t0)| {
-                            index.segments.get(i).is_some_and(|s| {
-                                p.as_path() == row.path.as_path()
-                                    && (f64::from(s.seg.start) - t0).abs() < 0.01
-                            })
-                        }),
-                    };
-                    let response =
-                        view::segment_row(ui, ctx.thumbs, ctx.theme, index, model, i, &look);
+                let looks: Vec<(usize, view::RowLook)> = row
+                    .segs
+                    .iter()
+                    .map(|&i| {
+                        let look = view::RowLook {
+                            picked: state.picked.contains(&i),
+                            playing: playing.as_ref().is_some_and(|(p, t0)| {
+                                index.segments.get(i).is_some_and(|s| {
+                                    p.as_path() == row.path.as_path()
+                                        && (f64::from(s.seg.start) - t0).abs() < 0.01
+                                })
+                            }),
+                        };
+                        (i, look)
+                    })
+                    .collect();
+                let responses = view::segment_rows(
+                    ui,
+                    ctx.thumbs,
+                    ctx.theme,
+                    index,
+                    model,
+                    &looks,
+                    ("people-segments", &row.clip),
+                );
+                for (&i, response) in row.segs.iter().zip(responses) {
                     let payload = if state.picked.contains(&i) {
                         state.picked.clone()
                     } else {
