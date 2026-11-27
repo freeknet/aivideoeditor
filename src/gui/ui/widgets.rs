@@ -27,9 +27,9 @@
 //! | views of one panel | [`tab_strip`] |
 //! | a mode, an option set | [`segmented`] |
 //! | a status, a count | [`pill`] |
-//! | a shortcut | [`kbd`], or a tooltip via [`tip`] |
+//! | a shortcut | [`kbd`], or a tooltip via [`tip`] ([`rich_tip`] for a preview) |
 //! | nothing to show | [`empty_state`] |
-//! | a field | [`text_field`] |
+//! | a field | [`text_field`], [`input`]; [`number`] for a number |
 //! | a menu | [`menu_item`], [`menu_heading`], [`menu_separator`] in `ui.menu_button` |
 //!
 //! Every colour comes from the [`Palette`] passed in. Every animation goes
