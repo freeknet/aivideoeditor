@@ -36,7 +36,7 @@ eframe = { version = "0.37", default-features = false, features = ["wgpu", "defa
 egui = "0.37"
 # Material 3 tokens and widgets for the desktop editor: the maintainer's fork,
 # pinned to a full commit (deny.toml allows the source).
-egui-material3 = { git = "https://github.com/freeknet/egui-material3", rev = "3b59892a34ef24684b8966bd2e0c9d564c52cb6b" }
+egui-material3 = { git = "https://github.com/freeknet/egui-material3", rev = "a5121db271281d645f6f8768391490ba7c462ec5" }
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
 log = "0.4"
 serde = { version = "1", features = ["derive"] }

@@ -48,7 +48,6 @@ use crate::color::Rgb;
 use crate::theme::{Mode, Palette};
 use egui::{Color32, CornerRadius, Margin, Stroke, TextStyle, Vec2};
 use egui_material3::MaterialTheme;
-use egui_material3::theme::{MaterialThemeContext, ThemeMode};
 use egui_material3::tokens::{ColorRole, ColorScheme, CornerSize, TypeRole};
 
 /// The tightest gap: between an icon and its label (Tailwind `1`).
@@ -432,10 +431,9 @@ pub fn material_scheme(theme: &Palette) -> ColorScheme {
     scheme
 }
 
-/// Hands `theme` to egui-material3, so its widgets draw in the active
-/// palette: on the context (what [`MaterialTheme::of`] reads) and in the
-/// library's process-wide theme, which most of its widgets still read.
-/// Only when the scheme changed: the global sits behind a mutex.
+/// Hands `theme` to egui-material3 on this context (what its widgets read
+/// through [`MaterialTheme::of`]), so they draw in the active palette.
+/// Only when the scheme changed.
 fn install_material(ctx: &egui::Context, theme: &Palette) {
     let scheme = material_scheme(theme);
     let dark = theme.mode == Mode::Dark;
@@ -443,20 +441,6 @@ fn install_material(ctx: &egui::Context, theme: &Palette) {
     if current.colors == scheme && current.is_dark == dark {
         return;
     }
-    let selected_colors = ColorRole::ALL
-        .into_iter()
-        .map(|role| (role.name().to_owned(), scheme.get(role)))
-        .collect();
-    egui_material3::theme::update_global_theme(MaterialThemeContext {
-        theme_mode: if dark {
-            ThemeMode::Dark
-        } else {
-            ThemeMode::Light
-        },
-        selected_colors,
-        dark_mode: dark,
-        ..MaterialThemeContext::default()
-    });
     MaterialTheme::set(
         ctx,
         MaterialTheme {
