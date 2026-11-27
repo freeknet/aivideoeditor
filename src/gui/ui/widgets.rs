@@ -1095,24 +1095,27 @@ pub fn tab_strip<T: PartialEq + Copy>(
     items: &[(T, &str)],
 ) -> bool {
     // Material's secondary tabs (an on-surface label and a primary
-    // underline on the open one). The library spreads its tabs over the
-    // whole width it is given, so it gets a box just wide enough for
-    // equal tabs that fit the longest label, and the header row keeps its
-    // other controls.
+    // underline on the open one), each as wide as its label, on the
+    // header's own fill and without the bar's divider (the header has its
+    // hairline). Even in its content layout the library claims the whole
+    // row, so it gets a box exactly as wide as its tabs, and the header
+    // keeps its other controls.
+    use egui_material3::tabs::{TAB_HORIZONTAL_PADDING, TabLayout};
     if items.is_empty() {
         return false;
     }
-    let font = egui::FontId::proportional(14.0);
-    let widest = items
+    let style = egui_material3::tokens::TypeRole::TitleSmall.style();
+    let font = style.font_id(ui.ctx());
+    let width: f32 = items
         .iter()
         .map(|&(_, label)| {
             ui.painter()
                 .layout_no_wrap(label.to_owned(), font.clone(), Color32::PLACEHOLDER)
                 .size()
                 .x
+                + TAB_HORIZONTAL_PADDING * 2.0
         })
-        .fold(0.0_f32, f32::max);
-    let width = (widest + SPACE_LG * 2.0) * items.len() as f32;
+        .sum();
     let height = theme::CONTROL_HEIGHT + SPACE_XS;
     let before = items.iter().position(|&(value, _)| value == *current);
     let mut index = before.unwrap_or(0);
@@ -1124,6 +1127,9 @@ pub fn tab_strip<T: PartialEq + Copy>(
     let tabs = items.iter().fold(
         egui_material3::MaterialTabs::secondary(&mut index)
             .id_salt(salt)
+            .layout(TabLayout::Content)
+            .transparent()
+            .divider(false)
             .height(height),
         |tabs, &(_, label)| tabs.tab(label),
     );
@@ -1438,21 +1444,25 @@ pub fn field_frame(
     response
 }
 
-/// The frame of a popover or a hand-built menu: the `popover` surface,
-/// a hairline, 8 px corners, a soft shadow, a 4 px inset.
+/// The frame of a popover or a hand-built menu, on Material's menu tokens:
+/// the surface container, no outline, the extra-small shape, the level-2
+/// key shadow, a 4 px inset.
 pub fn popover_frame(theme: &Palette) -> egui::Frame {
+    use egui_material3::tokens::{ColorRole, Elevation};
+    let scheme = theme::material_scheme(theme);
+    let [key, _ambient] = Elevation::Level2.shadows(scheme.get(ColorRole::Shadow));
     egui::Frame::new()
-        .fill(theme::popover_fill(theme))
-        .stroke(theme::ink_line(theme))
-        .corner_radius(CornerRadius::same(theme::RADIUS_MD))
-        .shadow(theme::float_shadow())
+        .fill(scheme.get(ColorRole::SurfaceContainer))
+        .corner_radius(CornerRadius::same(theme::RADIUS))
+        .shadow(key)
         .inner_margin(theme::margin(SPACE_XS))
 }
 
-/// One entry in a menu or popover, as Selects' menu items: 14 px text,
-/// 6 x 8 padding (32 px tall), 6 px corners, an optional icon, the
-/// shortcut right-aligned and faint, `accent` (`#404040`) under the
-/// pointer, and a check when `checked` (pass `false` for a plain action).
+/// One entry in a menu or popover, on Material's menu-item tokens kept
+/// dense (32 px tall rather than 48): label-large text, 12 px sides, an
+/// optional Lucide icon, the shortcut right-aligned and faint, an
+/// on-surface state layer under the pointer, and a check when `checked`
+/// (pass `false` for a plain action).
 pub fn menu_item(
     ui: &mut Ui,
     theme: &Palette,
@@ -1470,15 +1480,17 @@ pub fn menu_item(
         egui::WidgetInfo::selected(egui::Role::MenuItem, ui.is_enabled(), checked, label)
     });
     let lift = hover_t(ui, response.id, response.hovered());
-    if lift > 0.0 {
-        ui.painter().rect_filled(
-            rect,
-            CornerRadius::same(theme::RADIUS),
-            theme::accent_fill(theme).gamma_multiply(lift),
-        );
-    }
+    // Material's menu item: an on-surface state layer (8 % hovered, 10 %
+    // pressed or focused) and the label in label-large.
+    egui_material3::paint::paint_state_layer(
+        ui.painter(),
+        rect,
+        CornerRadius::same(theme::RADIUS),
+        theme::rgb(theme.text),
+        egui_material3::tokens::InteractionState::from_response(&response),
+    );
     let painter = ui.painter();
-    let mut x = rect.left() + SPACE_SM;
+    let mut x = rect.left() + SPACE_MD;
     let ink = theme::rgb(theme.text);
     if let Some(glyph) = icon {
         let slot = Rect::from_center_size(
@@ -1498,10 +1510,12 @@ pub fn menu_item(
         egui::pos2(x, rect.center().y),
         Align2::LEFT_CENTER,
         label,
-        theme::font(theme::LARGE_SIZE),
+        egui_material3::tokens::TypeRole::LabelLarge
+            .style()
+            .font_id(ui.ctx()),
         ink,
     );
-    let mut right = rect.right() - SPACE_SM;
+    let mut right = rect.right() - SPACE_MD;
     if checked {
         let slot = Rect::from_center_size(
             egui::pos2(right - icons::SMALL / 2.0, rect.center().y),
@@ -1535,17 +1549,12 @@ pub fn menu_heading(ui: &mut Ui, theme: &Palette, text: &str) -> Response {
     )
 }
 
-/// The hairline between groups in a menu, running to the menu's edges.
-pub fn menu_separator(ui: &mut Ui, theme: &Palette) {
-    let (rect, _) = ui.allocate_exact_size(
-        Vec2::new(ui.available_width(), SPACE_SM + 1.0),
-        Sense::hover(),
-    );
-    ui.painter().hline(
-        rect.x_range().expand(SPACE_XS),
-        rect.center().y,
-        theme::ink_line(theme),
-    );
+/// The divider between groups in a menu: Material's divider (1 px in the
+/// outline-variant colour) with 4 px of air above and below.
+pub fn menu_separator(ui: &mut Ui, _theme: &Palette) {
+    ui.add_space(SPACE_XS);
+    ui.add(egui_material3::MaterialDivider::new());
+    ui.add_space(SPACE_XS);
 }
 
 /// A vertical hairline between groups of controls in a bar.
