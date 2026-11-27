@@ -1068,10 +1068,10 @@ fn filter_menu(
             pad(ui, |ui| {
                 let label = format!("Hide shots scoring under {:.2}", state.opts.cutoff);
                 ui.add(
-                    egui::Slider::new(&mut state.opts.cutoff, 0.0..=0.95)
-                        .step_by(0.05)
+                    egui_material3::MaterialSlider::new(&mut state.opts.cutoff, 0.0..=0.95)
+                        .step(0.05)
                         .show_value(false)
-                        .trailing_fill(true),
+                        .width(200.0),
                 )
                 .hint("Quality when nothing is searched")
                 .accessible_name(label.clone());
@@ -1095,8 +1095,12 @@ fn filter_menu(
                 });
                 pad(ui, |ui| {
                     ui.add(
-                        egui::Slider::new(&mut state.opts.card, CARD_MIN..=CARD_MAX)
-                            .show_value(false),
+                        egui_material3::MaterialSlider::new(
+                            &mut state.opts.card,
+                            CARD_MIN..=CARD_MAX,
+                        )
+                        .show_value(false)
+                        .width(200.0),
                     )
                     .accessible_name("Card size");
                 });

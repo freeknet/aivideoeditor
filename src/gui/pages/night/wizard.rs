@@ -729,19 +729,17 @@ fn footage_step(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
                     .color(theme::rgb(theme.text)),
             );
             if busy {
-                ui.add(
-                    egui::Spinner::new()
-                        .size(icons::SMALL - 2.0)
-                        .color(theme::rgb(theme.text_muted)),
-                );
+                ui.add(widgets::spinner(
+                    icons::SMALL - 2.0,
+                    theme::rgb(theme.text_muted),
+                ));
             }
         }
         None => {
-            ui.add(
-                egui::Spinner::new()
-                    .size(icons::SMALL - 2.0)
-                    .color(theme::rgb(theme.text_muted)),
-            );
+            ui.add(widgets::spinner(
+                icons::SMALL - 2.0,
+                theme::rgb(theme.text_muted),
+            ));
             ui.label(
                 egui::RichText::new("Reading the folder\u{2026}")
                     .font(theme::font(theme::BODY_SIZE))

@@ -477,11 +477,10 @@ fn list(ctx: &mut PageCtx<'_>, nights: &recent::State, ui: &mut egui::Ui) -> Opt
         ui.add_space(theme::SPACE_XS);
         parts::label(ui, theme, "Projects");
         if nights.scanning() {
-            ui.add(
-                egui::Spinner::new()
-                    .size(icons::SMALL - 2.0)
-                    .color(theme::rgb(theme.text_muted)),
-            );
+            ui.add(widgets::spinner(
+                icons::SMALL - 2.0,
+                theme::rgb(theme.text_muted),
+            ));
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let open = widgets::button_with(

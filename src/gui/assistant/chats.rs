@@ -977,7 +977,7 @@ fn chat_tab(
     let mut x = rect.left() + 8.0;
     if streaming {
         let spin = Rect::from_center_size(egui::pos2(x + 5.0, rect.center().y), Vec2::splat(10.0));
-        ui.put(spin, egui::Spinner::new().size(10.0));
+        ui.put(spin, widgets::spinner(10.0, theme::rgb(theme.text)));
         x += lead;
     }
     ui.painter().galley(

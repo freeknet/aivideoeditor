@@ -344,11 +344,7 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
     widgets::panel_header(ui, theme, "Projects", |ui| {
         if state.scanning.is_some() {
             ui.add_space(theme::SPACE_XS);
-            ui.add(
-                egui::Spinner::new()
-                    .size(icons::SMALL)
-                    .color(theme::rgb(theme.text_muted)),
-            );
+            ui.add(widgets::spinner(icons::SMALL, theme::rgb(theme.text_muted)));
             ui.add_space(theme::SPACE_XS);
         } else if widgets::icon_btn(ui, theme, icons::REFRESH, "Rescan the projects", "").clicked()
         {

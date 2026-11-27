@@ -471,6 +471,48 @@ pub fn grid_layout(available: f32, minimum: f32, gap: f32, count: usize) -> (usi
     (columns, width.max(0.0))
 }
 
+/// A busy mark `size` across in `color`: Material's indeterminate circular
+/// progress indicator, the stroke scaled to the size so a 10 px one in a
+/// list row still reads. Add it with `ui.add` or place it with `ui.put`.
+pub fn spinner(size: f32, color: Color32) -> egui_material3::MaterialProgress {
+    egui_material3::MaterialProgress::circular()
+        .indeterminate(true)
+        .size(Vec2::splat(size))
+        .stroke_width((size / 7.0).max(1.5))
+        .active_color(color)
+}
+
+/// A dropdown of `options` with `selected` the chosen index: Material's
+/// compact (32 px) outlined select, its menu scrolling past 300 px. The
+/// response is marked changed when a new option is picked.
+pub fn select<S: AsRef<str>>(
+    ui: &mut Ui,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
+    selected: &mut usize,
+    options: &[S],
+    width: f32,
+) -> Response {
+    let mut pick = Some(*selected);
+    let mut field = egui_material3::MaterialSelect::new(&mut pick)
+        .id_salt(egui::IdSalt::new(id_salt))
+        .variant(egui_material3::SelectVariant::Outlined)
+        .compact(true)
+        .width(width)
+        .menu_max_height(300.0);
+    for (index, option) in options.iter().enumerate() {
+        field = field.option(index, option.as_ref());
+    }
+    let mut response = ui.add(field);
+    if let Some(index) = pick
+        && index != *selected
+        && index < options.len()
+    {
+        *selected = index;
+        response.mark_changed();
+    }
+    response
+}
+
 /// A horizontal meter, `fraction` full, that settles rather than jumps.
 pub fn meter(ui: &mut Ui, theme: &Palette, id: egui::Id, fraction: f32, fill: Rgb) -> Response {
     // Material's linear progress indicator (active track, gap, inactive
@@ -1220,9 +1262,8 @@ pub enum Tone {
     Danger,
 }
 
-/// A badge: short text on a tinted fill of its tone (Selects' `badge`:
-/// colour at 10–15 % behind text in that colour), 20 px tall, 6 px
-/// corners.
+/// A badge: short text on a tinted fill of its tone (the colour at 15 %
+/// behind text in that colour), drawn as Material's labelled badge.
 pub fn pill(ui: &mut Ui, theme: &Palette, text: &str, tone: Tone) -> Response {
     let (fill, ink) = match tone {
         Tone::Neutral => (
@@ -1246,19 +1287,15 @@ pub fn pill(ui: &mut Ui, theme: &Palette, text: &str, tone: Tone) -> Response {
             theme::rgb(theme.danger),
         ),
     };
-    let galley = ui.painter().layout_no_wrap(
-        text.to_owned(),
-        theme::medium(ui.ctx(), theme::SMALL_SIZE),
-        ink,
+    // Material's labelled badge (16 px, label-small, fully rounded) in the
+    // tone's tint, inline rather than pinned to a corner.
+    let response = ui.add(
+        egui_material3::MaterialBadge::new(text)
+            .color(egui_material3::BadgeColor::Custom(fill, ink))
+            .description(text),
     );
-    let size = Vec2::new(galley.size().x + SPACE_SM + SPACE_XS, SPACE_LG + SPACE_XS);
-    let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
-    // Painted text: name it, so a screen reader reads the status.
+    // Name it as text, so a screen reader reads the status.
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, text));
-    ui.painter()
-        .rect_filled(rect, CornerRadius::same(theme::RADIUS), fill);
-    ui.painter()
-        .galley(rect.center() - galley.size() / 2.0, galley, ink);
     response
 }
 

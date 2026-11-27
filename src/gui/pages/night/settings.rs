@@ -848,22 +848,20 @@ fn template_section(ui: &mut egui::Ui, theme: &crate::theme::Palette, state: &mu
                     .push(recipe::DEFAULT_METRICS.get(n).copied().unwrap_or("q").to_owned());
             }
             for (i, slot) in loaded.recipe.metrics.iter_mut().take(4).enumerate() {
-                let shown = crate::search::Metric::bars(std::slice::from_ref(slot))[0].display();
-                egui::ComboBox::from_id_salt(("recipe-bar", i))
-                    .width(96.0)
-                    .selected_text(shown)
-                    .show_ui(ui, |ui| {
-                        for name in BAR_CHOICES {
-                            let label = crate::search::Metric::bars(&[name.to_owned()])[0].display();
-                            if ui.selectable_label(slot == name, label).clicked() {
-                                *slot = name.to_owned();
-                                changed = true;
-                            }
-                        }
-                    })
-                    .response
+                let labels: Vec<String> = BAR_CHOICES
+                    .iter()
+                    .map(|name| crate::search::Metric::bars(&[(*name).to_owned()])[0].display().to_owned())
+                    .collect();
+                let mut index = BAR_CHOICES.iter().position(|name| slot == name).unwrap_or(0);
+                let picked = widgets::select(ui, ("recipe-bar", i), &mut index, &labels, 96.0)
                     .accessible_name(format!("Bar {}", i + 1))
                     .hint("A measure the shot browser shows as a bar on each shot");
+                if picked.changed()
+                    && let Some(name) = BAR_CHOICES.get(index)
+                {
+                    *slot = (*name).to_owned();
+                    changed = true;
+                }
             }
         });
     });
@@ -1051,18 +1049,22 @@ fn deliverable_row(
         })
         .inner
         .changed();
-    egui::ComboBox::from_id_salt(("recipe-aspect", i))
-        .width(64.0)
-        .selected_text(recipe::aspect_key(d.aspect))
-        .show_ui(ui, |ui| {
-            for aspect in recipe::ASPECTS {
-                changed |= ui
-                    .selectable_value(&mut d.aspect, aspect, recipe::aspect_key(aspect))
-                    .changed();
-            }
-        })
-        .response
-        .accessible_name(format!("Deliverable {} shape", i + 1));
+    let shapes: Vec<&str> = recipe::ASPECTS
+        .iter()
+        .map(|a| recipe::aspect_key(*a))
+        .collect();
+    let mut shape = recipe::ASPECTS
+        .iter()
+        .position(|a| *a == d.aspect)
+        .unwrap_or(0);
+    if widgets::select(ui, ("recipe-aspect", i), &mut shape, &shapes, 80.0)
+        .accessible_name(format!("Deliverable {} shape", i + 1))
+        .changed()
+        && let Some(aspect) = recipe::ASPECTS.get(shape)
+    {
+        d.aspect = *aspect;
+        changed = true;
+    }
     changed |= ui
         .add(
             egui::DragValue::new(&mut d.seconds)
@@ -1072,25 +1074,25 @@ fn deliverable_row(
         )
         .accessible_name(format!("Deliverable {} length", i + 1))
         .changed();
-    let shown = d
+    // Index 0 is "auto"; the rest are the card keys, in order.
+    let cards: Vec<String> = std::iter::once(format!("auto ({})", recipe::aspect_key(d.aspect)))
+        .chain(card_keys.iter().cloned())
+        .collect();
+    let mut card = d
         .end_card
-        .clone()
-        .unwrap_or_else(|| format!("auto ({})", recipe::aspect_key(d.aspect)));
-    egui::ComboBox::from_id_salt(("recipe-card", i))
-        .width(96.0)
-        .selected_text(shown)
-        .show_ui(ui, |ui| {
-            changed |= ui
-                .selectable_value(&mut d.end_card, None, "auto (by shape)")
-                .changed();
-            for key in card_keys {
-                changed |= ui
-                    .selectable_value(&mut d.end_card, Some(key.clone()), key)
-                    .changed();
-            }
-        })
-        .response
-        .accessible_name(format!("Deliverable {} end card", i + 1));
+        .as_ref()
+        .and_then(|key| card_keys.iter().position(|k| k == key))
+        .map_or(0, |at| at + 1);
+    if widgets::select(ui, ("recipe-card", i), &mut card, &cards, 112.0)
+        .accessible_name(format!("Deliverable {} end card", i + 1))
+        .changed()
+    {
+        d.end_card = card
+            .checked_sub(1)
+            .and_then(|at| card_keys.get(at))
+            .cloned();
+        changed = true;
+    }
     changed |= ui
         .add(
             egui::DragValue::new(&mut d.card_bars)

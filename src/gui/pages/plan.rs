@@ -1464,7 +1464,7 @@ fn header_right(ui: &mut egui::Ui, t: &Palette, info: &HeaderInfo) -> HeaderOut 
     }
     if let Some(drafting) = &info.drafting {
         ui.label(egui::RichText::new(drafting).font(small).color(muted));
-        ui.spinner();
+        ui.add(widgets::spinner(icons::SMALL - 2.0, muted));
     }
     out
 }
@@ -1609,7 +1609,10 @@ fn lock_banner(palette: &Palette, ui: &mut egui::Ui) {
                 .font(theme::font(theme::BODY_SIZE))
                 .color(theme::rgb(palette.text)),
             );
-            ui.spinner();
+            ui.add(widgets::spinner(
+                icons::SMALL - 2.0,
+                theme::rgb(palette.text),
+            ));
         },
     );
 }
