@@ -2,10 +2,12 @@
 // Module:       gui::ui::widgets
 // Description:  The app's own controls: panel headers, buttons, icon buttons,
 //               tabs, segmented controls, badges, key chips, empty states,
-//               fields, menus, switches, cards, meters and swatches, all
-//               painted from the active palette.
+//               fields, menus, switches, cards, meters and swatches, from
+//               egui-material3's widgets where it has one, else painted from
+//               the active palette.
 //
-// Dependencies: egui; super::{theme, motion, icons}, crate::theme::Palette
+// Dependencies: egui; egui_material3; super::{theme, motion, icons},
+//               crate::theme::Palette
 // ============================================================================
 
 //! The app's controls: the design system's components.
