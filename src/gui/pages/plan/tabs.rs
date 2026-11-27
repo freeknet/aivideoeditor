@@ -463,7 +463,7 @@ pub(super) fn strip(
         } else if resp.clicked() {
             open = Some(tab.name.clone());
         }
-        resp.context_menu(|ui| {
+        widgets::context_menu(&resp, |ui| {
             ui.set_min_width(200.0);
             if widgets::menu_item(ui, t, Some(icons::PENCIL), "Rename…", "", false).clicked() {
                 state.tab_form = Some(Form {
@@ -521,7 +521,7 @@ pub(super) fn strip(
     plus.widget_info(|| {
         egui::WidgetInfo::labeled(egui::Role::Button, true, "New cut, or reopen one")
     });
-    let open_menu = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&plus));
+    let open_menu = widgets::menu_is_open(ui.ctx(), widgets::menu_id(&plus));
     if plus.hovered() || open_menu {
         ui.painter().rect_filled(
             rect,
@@ -547,7 +547,7 @@ pub(super) fn strip(
         .collect();
     let mut draft = false;
     // The response is not needed: drawing it is the point.
-    let _ = egui::Popup::menu(&plus)
+    let _ = widgets::menu(&plus)
         .width(220.0)
         .gap(theme::SPACE_XS)
         .show(|ui| {

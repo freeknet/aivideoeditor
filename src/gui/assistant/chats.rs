@@ -432,7 +432,7 @@ fn rename_field(ctx: &PageCtx<'_>, state: &mut State, ui: &mut Ui, rect: Rect) {
 pub(super) fn menu(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
     let theme = ctx.theme;
     let id = ui.make_persistent_id("assistant-chats");
-    let open = egui::Popup::is_id_open(ui.ctx(), id);
+    let open = widgets::menu_is_open(ui.ctx(), id);
     state.list_open = open;
     // Another chat's rename lives in the list: it ends when the list closes.
     let elsewhere = state
@@ -445,7 +445,7 @@ pub(super) fn menu(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
     let hint = keymap::command("chat-new").map_or_else(String::new, |c| c.hint(ctx.keymap));
     let button = widgets::icon_toggle_sized(ui, theme, icons::MENU, "Chats", "", open, 32.0);
     // The response is not needed: drawing it is the point.
-    let _ = egui::Popup::menu(&button)
+    let _ = widgets::menu(&button)
         .id(id)
         .width(320.0)
         .gap(SPACE_XS)
@@ -514,7 +514,7 @@ fn list(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui, new_keys: &str) {
     });
     if stems.len() > 1 {
         ui.add_enabled_ui(idle, |ui| {
-            ui.menu_button("New chat about another cut", |ui| {
+            widgets::submenu(ui, "New chat about another cut", |ui| {
                 for s in &stems {
                     if widgets::menu_item(ui, theme, None, s, "", false).clicked() {
                         new_on = Some(s.clone());
@@ -860,7 +860,7 @@ pub(super) fn tab_strip(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                                 if out.close {
                                     close = Some(meta.id.clone());
                                 }
-                                out.response.context_menu(|ui| {
+                                widgets::context_menu(&out.response, |ui| {
                                     if widgets::menu_item(ui, theme, None, "Close tab", "", false)
                                         .clicked()
                                     {

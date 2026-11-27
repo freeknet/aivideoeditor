@@ -38,7 +38,7 @@ use crate::beats::MusicMap;
 use crate::gui::app::Action;
 use crate::gui::pages::PageCtx;
 use crate::gui::player::Source;
-use crate::gui::ui::theme;
+use crate::gui::ui::{theme, widgets};
 use crate::refs::{Modifier, Reference, Target};
 use crate::theme::Palette;
 
@@ -489,7 +489,7 @@ fn gestures(
             state.anchor = Some(bar);
         }
     }
-    response.context_menu(|ui| menu(ctx, state, ui, map, edits));
+    widgets::context_menu(response, |ui| menu(ctx, state, ui, map, edits));
 }
 
 /// The right-click menu over the zoomed view.
@@ -521,7 +521,7 @@ fn menu(
         ctx.player.play();
         ui.close();
     }
-    ui.menu_button("Reference in chat", |ui| {
+    widgets::submenu(ui, "Reference in chat", |ui| {
         for m in Modifier::ALL {
             if ui.button(m.label()).clicked() {
                 ctx.actions.push(Action::AddRef(
@@ -547,7 +547,7 @@ fn menu(
         edits.push(Edit::PrimaryDrop(bar));
         ui.close();
     }
-    ui.menu_button("Use as song range for", |ui| {
+    widgets::submenu(ui, "Use as song range for", |ui| {
         for name in DELIVERABLES {
             if ui.button(name).clicked() {
                 edits.push(Edit::SetRange(name.to_owned(), from, to));

@@ -570,7 +570,7 @@ fn tempo_menu(
     key: &dyn Fn(&str) -> String,
 ) {
     let id = ui.make_persistent_id("music-tempo");
-    let open = egui::Popup::is_id_open(ui.ctx(), id);
+    let open = widgets::menu_is_open(ui.ctx(), id);
     let response = widgets::dropdown_button(
         ui,
         palette,
@@ -579,7 +579,7 @@ fn tempo_menu(
         open,
     );
     // The response is not needed: drawing it is the point.
-    let _ = egui::Popup::menu(&response)
+    let _ = widgets::menu(&response)
         .id(id)
         .width(220.0)
         .gap(theme::SPACE_XS)
@@ -911,13 +911,13 @@ fn sections(
                         state.rename = Some((i, s.name.clone()));
                         state.focus_rename = true;
                     }
-                    label.context_menu(|ui| {
+                    widgets::context_menu(&label, |ui| {
                         if ui.button("Rename…").clicked() {
                             state.rename = Some((i, s.name.clone()));
                             state.focus_rename = true;
                             ui.close();
                         }
-                        ui.menu_button("Call it", |ui| {
+                        widgets::submenu(ui, "Call it", |ui| {
                             for name in structure::NAMES {
                                 if ui.button(name).clicked() {
                                     edits.push(Edit::RenameSection(i, name.to_owned()));

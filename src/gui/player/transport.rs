@@ -293,7 +293,7 @@ fn speed(ui: &mut Ui, theme: &Palette, p: &mut Player) {
     );
     let response = widgets::tip(response, theme, "Speed", "J / K / L");
     // The response is not needed: drawing it is the point.
-    let _ = egui::Popup::menu(&response)
+    let _ = widgets::menu(&response)
         .width(120.0)
         .gap(theme::SPACE_XS)
         .align(egui::RectAlign::TOP_START)
@@ -494,7 +494,7 @@ pub(crate) fn volume_menu(ui: &mut Ui, theme: &Palette, p: &mut Player) {
     };
     let response = button(ui, theme, glyph, "Volume", "", false);
     // The response is not needed: drawing it is the point.
-    let _ = egui::Popup::menu(&response)
+    let _ = widgets::menu(&response)
         .width(220.0)
         .gap(theme::SPACE_XS)
         .align(egui::RectAlign::TOP_END)

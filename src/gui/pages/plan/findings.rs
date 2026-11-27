@@ -32,7 +32,7 @@
 
 use std::collections::BTreeSet;
 
-use egui::{Popup, PopupCloseBehavior, Response, Ui};
+use egui::{PopupCloseBehavior, Response, Ui};
 
 use super::{Io, Shown, State};
 use crate::fix::Fix;
@@ -140,11 +140,11 @@ pub(super) fn popover(
     anchor: &Response,
     toggle: bool,
 ) -> Option<Act> {
-    let id = Popup::default_response_id(anchor);
+    let id = widgets::menu_id(anchor);
     if toggle {
-        Popup::toggle_id(&anchor.ctx, id);
+        widgets::toggle_menu(&anchor.ctx, id);
     }
-    if Popup::is_id_open(&anchor.ctx, id) && work_one(state, s) {
+    if widgets::menu_is_open(&anchor.ctx, id) && work_one(state, s) {
         anchor.ctx.request_repaint();
     }
     let problems = state.problems.clone();
@@ -158,7 +158,7 @@ pub(super) fn popover(
         .unwrap_or_else(|| vec![None; problems.len()]);
     let mut act = None;
     // The response is not needed: drawing it is the point.
-    let _ = Popup::menu(anchor)
+    let _ = widgets::menu(anchor)
         .id(id)
         .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
         .width(WIDTH)

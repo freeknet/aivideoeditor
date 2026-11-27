@@ -1393,7 +1393,7 @@ fn header_right(ui: &mut egui::Ui, t: &Palette, info: &HeaderInfo) -> HeaderOut 
         let resp = widgets::tip(resp, t, "Versions: every save keeps a numbered copy", "");
         let latest = info.versions.last().map(|v| v.n);
         // The response is not needed: drawing it is the point.
-        let _ = egui::Popup::menu(&resp)
+        let _ = widgets::menu(&resp)
             .width(340.0)
             .gap(theme::SPACE_XS)
             .show(|ui| {
@@ -1431,7 +1431,7 @@ fn header_right(ui: &mut egui::Ui, t: &Palette, info: &HeaderInfo) -> HeaderOut 
             let resp = text_menu_button(ui, t, None, aspect_key(aspect));
             let resp = widgets::tip(resp, t, "Output aspect; crops follow each shot's cx", "");
             // The response is not needed: drawing it is the point.
-            let _ = egui::Popup::menu(&resp)
+            let _ = widgets::menu(&resp)
                 .width(180.0)
                 .gap(theme::SPACE_XS)
                 .show(|ui| {
@@ -1498,7 +1498,7 @@ fn text_menu_button(
     let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), text));
     let painter = ui.painter();
-    let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
+    let open = widgets::menu_is_open(ui.ctx(), widgets::menu_id(&resp));
     if resp.hovered() || open {
         painter.rect_filled(
             rect,

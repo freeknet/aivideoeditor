@@ -561,7 +561,7 @@ pub(crate) fn row(ctx: &mut PageCtx<'_>, ui: &mut egui::Ui, night: &Summary, ope
     };
     let response = response.hint(tip);
     let mut clicked = response.clicked();
-    response.context_menu(|ui| {
+    widgets::context_menu(&response, |ui| {
         if widgets::menu_item(ui, theme, Some(icons::FOLDER_OPEN), "Open", "", false).clicked() {
             clicked = true;
             ui.close();

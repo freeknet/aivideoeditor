@@ -452,7 +452,7 @@ pub(super) fn draw(ctx: &mut PageCtx<'_>, plans: &mut Plans, state: &mut State, 
                             if resp.double_clicked() {
                                 ops.push(Op::Play(line.k));
                             }
-                            resp.context_menu(|ui| {
+                            widgets::context_menu(&resp, |ui| {
                                 widgets::mention_menu(ui, &mut actions, &reference);
                             });
                         }

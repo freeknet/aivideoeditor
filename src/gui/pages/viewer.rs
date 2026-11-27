@@ -268,11 +268,11 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
 /// Returns whether an option that persists changed.
 fn settings(ui: &mut egui::Ui, theme: &Palette, state: &mut State, p: &mut Player) -> bool {
     let id = ui.scope_id().with("viewer-settings");
-    let open = egui::Popup::is_id_open(ui.ctx(), id);
+    let open = widgets::menu_is_open(ui.ctx(), id);
     let response = transport::button(ui, theme, icons::SETTINGS, "Preview settings", "", open);
     let mut changed = false;
     // The response is not needed: drawing it is the point.
-    let _ = egui::Popup::menu(&response)
+    let _ = widgets::menu(&response)
         .id(id)
         .width(240.0)
         .gap(theme::SPACE_XS)

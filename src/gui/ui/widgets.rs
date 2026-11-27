@@ -310,7 +310,7 @@ pub fn mention_menu_many(
     if references.is_empty() {
         return;
     }
-    ui.menu_button("Mention in chat", |ui| {
+    submenu(ui, "Mention in chat", |ui| {
         for intent in crate::refs::Modifier::ALL {
             if ui.button(mention_label(intent)).clicked() {
                 actions.extend(mention_actions(references, intent));
@@ -1440,6 +1440,148 @@ pub fn field_frame(
         );
     }
     response
+}
+
+/// The id a [`menu`] anchored to `anchor` keeps its open state under,
+/// unless it is given one with [`Menu::id`].
+#[must_use]
+pub fn menu_id(anchor: &Response) -> egui::Id {
+    anchor.id.with("material-menu")
+}
+
+/// Whether the [`menu`] with this id is open (to draw its anchor pressed).
+#[must_use]
+pub fn menu_is_open(ctx: &egui::Context, id: egui::Id) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(id.with("open")))
+        .unwrap_or(false)
+}
+
+/// Opens the [`menu`] with this id if it is closed, closes it if open.
+pub fn toggle_menu(ctx: &egui::Context, id: egui::Id) {
+    let open = menu_is_open(ctx, id);
+    ctx.data_mut(|d| d.insert_temp(id.with("open"), !open));
+}
+
+/// A Material 3 menu anchored to a control: the drop-in for
+/// `egui::Popup::menu`. A click on the anchor opens and closes it; it
+/// closes on a click outside, on Escape, and (by default) when an entry
+/// inside is clicked. Build its content with ave's rows ([`menu_item`],
+/// [`menu_heading`], [`menu_separator`]) and nest submenus with
+/// [`submenu`].
+pub fn menu(anchor: &Response) -> Menu<'_> {
+    Menu {
+        anchor,
+        id: menu_id(anchor),
+        width: None,
+        gap: SPACE_XS,
+        above: false,
+        end: false,
+        close: egui::PopupCloseBehavior::CloseOnClick,
+    }
+}
+
+/// A menu being built; see [`menu`].
+#[must_use = "show it with `.show(...)`"]
+pub struct Menu<'a> {
+    /// The control it opens from.
+    anchor: &'a Response,
+    /// Where its open state lives.
+    id: egui::Id,
+    /// A fixed width, or the content's own within Material's 112–280.
+    width: Option<f32>,
+    /// The space between the anchor and the menu.
+    gap: f32,
+    /// Opens above the anchor rather than below.
+    above: bool,
+    /// Lines up with the anchor's end edge rather than its start.
+    end: bool,
+    /// What clicks close it.
+    close: egui::PopupCloseBehavior,
+}
+
+impl Menu<'_> {
+    /// Keeps the open state under `id` (read it with [`menu_is_open`]).
+    pub fn id(mut self, id: egui::Id) -> Self {
+        self.id = id;
+        self
+    }
+
+    /// A fixed width.
+    pub fn width(mut self, width: f32) -> Self {
+        self.width = Some(width);
+        self
+    }
+
+    /// The space between the anchor and the menu.
+    pub fn gap(mut self, gap: f32) -> Self {
+        self.gap = gap;
+        self
+    }
+
+    /// Where it opens: above the anchor (`egui::RectAlign::TOP_START` or
+    /// `TOP_END`) or below it (any other), at the start or end edge.
+    pub fn align(mut self, align: egui::RectAlign) -> Self {
+        self.above = align == egui::RectAlign::TOP_START || align == egui::RectAlign::TOP_END;
+        self.end = align == egui::RectAlign::TOP_END || align == egui::RectAlign::BOTTOM_END;
+        self
+    }
+
+    /// What clicks close it (default: any click inside or outside).
+    pub fn close_behavior(mut self, close: egui::PopupCloseBehavior) -> Self {
+        self.close = close;
+        self
+    }
+
+    /// Shows it while open; the content's value while it is.
+    pub fn show<R>(self, add_contents: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+        use egui_material3::menu::{Corner, MenuStyle};
+        let ctx = self.anchor.ctx.clone();
+        let key = self.id.with("open");
+        let mut open = ctx.data(|d| d.get_temp::<bool>(key)).unwrap_or(false);
+        if self.anchor.clicked() {
+            open = !open;
+        }
+        let (anchor_corner, menu_corner) = match (self.above, self.end) {
+            (false, false) => (Corner::BottomLeft, Corner::TopLeft),
+            (false, true) => (Corner::BottomRight, Corner::TopRight),
+            (true, false) => (Corner::TopLeft, Corner::BottomLeft),
+            (true, true) => (Corner::TopRight, Corner::BottomRight),
+        };
+        let style = MenuStyle {
+            min_width: self.width,
+            max_width: self.width,
+            ..MenuStyle::default()
+        };
+        let shown = egui_material3::MaterialMenu::new(self.id, &mut open)
+            .anchor_rect(self.anchor.rect)
+            .anchor_corner(anchor_corner)
+            .menu_corner(menu_corner)
+            .y_offset(if self.above { -self.gap } else { self.gap })
+            .close_behavior(self.close)
+            .style(style)
+            .show_with(&ctx, add_contents);
+        ctx.data_mut(|d| d.insert_temp(key, open));
+        shown.map(|inner| inner.inner)
+    }
+}
+
+/// A Material 3 context menu on `response`, opened by a secondary click:
+/// the drop-in for `Response::context_menu`.
+pub fn context_menu<R>(response: &Response, add_contents: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+    egui_material3::MaterialMenu::context(response.id.with("material-context"))
+        .show_context_with(response, add_contents)
+        .map(|inner| inner.inner)
+}
+
+/// A row in a menu that opens a nested Material 3 submenu (on hover, a
+/// click, Enter or the Right arrow): the drop-in for `ui.menu_button`.
+/// Returns the row's response.
+pub fn submenu<R>(
+    ui: &mut Ui,
+    label: impl Into<String>,
+    add_contents: impl FnOnce(&mut Ui) -> R,
+) -> Response {
+    egui_material3::MaterialMenu::submenu(ui, label, add_contents).0
 }
 
 /// The frame of a popover or a hand-built menu, on Material's menu tokens:

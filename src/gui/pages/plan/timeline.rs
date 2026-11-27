@@ -1267,7 +1267,7 @@ fn chip(ui: &Ui, t: &crate::theme::Palette, at: Pos2, align: Align2, text: &str)
 /// The menu on a shot.
 fn context_menu(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, v1_resp: &egui::Response) {
     let t = s.theme;
-    v1_resp.context_menu(|ui| {
+    widgets::context_menu(v1_resp, |ui| {
         let Some(k) = state.menu_shot else {
             ui.close();
             return;
@@ -1324,7 +1324,7 @@ fn context_menu(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, v1_resp: &egu
             }
             ui.close();
         }
-        ui.menu_button("Reference in chat", |ui| {
+        widgets::submenu(ui, "Reference in chat", |ui| {
             for modifier in Modifier::ALL {
                 if widgets::menu_item(ui, t, None, modifier.label(), modifier.prefix(), false)
                     .clicked()

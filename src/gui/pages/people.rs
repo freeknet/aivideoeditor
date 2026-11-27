@@ -287,11 +287,11 @@ fn toolbar(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui, ops: &mut Vec<
                 state.searching = true;
             }
             let id = ui.make_persistent_id("people-order");
-            let open = egui::Popup::is_id_open(ui.ctx(), id);
+            let open = widgets::menu_is_open(ui.ctx(), id);
             let response =
                 widgets::dropdown_button(ui, palette, state.order.label(), "Order people by", open);
             // The response is not needed: drawing it is the point.
-            let _ = egui::Popup::menu(&response)
+            let _ = widgets::menu(&response)
                 .id(id)
                 .width(200.0)
                 .gap(theme::SPACE_XS)
@@ -598,7 +598,7 @@ fn card_actions(
         *renaming = None;
     }
     let palette = cx.palette;
-    response.context_menu(|ui| {
+    widgets::context_menu(response, |ui| {
         let Some(name) = group.name.clone() else {
             ui.label(text(
                 "Performer footage nobody is mapped to",
@@ -631,7 +631,7 @@ fn card_actions(
             all.extend(others);
             ops.push(Op::Merge(all));
         }
-        ui.menu_button("Merge into", |ui| {
+        widgets::submenu(ui, "Merge into", |ui| {
             egui::ScrollArea::vertical()
                 .max_height(320.0)
                 .show(ui, |ui| {
@@ -643,7 +643,7 @@ fn card_actions(
                 });
         });
         ui.separator();
-        ui.menu_button("Reference in chat", |ui| {
+        widgets::submenu(ui, "Reference in chat", |ui| {
             for m in Modifier::ALL {
                 if ui.button(m.label()).clicked() {
                     ops.push(Op::Ref(
@@ -854,7 +854,7 @@ fn detail(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui, ops: &mut Vec<O
                     if response.clicked() {
                         ops.push(Op::Segment(i, ui.input(|inp| inp.modifiers)));
                     }
-                    response.context_menu(|ui| {
+                    widgets::context_menu(&response, |ui| {
                         segment_menu(ui, group, &names, &payload, index, ops);
                     });
                 }
@@ -878,7 +878,7 @@ fn segment_menu(
         META,
         ui.visuals().weak_text_color(),
     ));
-    ui.menu_button("Move to", |ui| {
+    widgets::submenu(ui, "Move to", |ui| {
         egui::ScrollArea::vertical()
             .max_height(360.0)
             .show(ui, |ui| {
@@ -909,7 +909,7 @@ fn segment_menu(
         }));
     }
     ui.separator();
-    ui.menu_button("Reference in chat", |ui| {
+    widgets::submenu(ui, "Reference in chat", |ui| {
         for m in Modifier::ALL {
             if ui.button(m.label()).clicked() {
                 for &i in segs {

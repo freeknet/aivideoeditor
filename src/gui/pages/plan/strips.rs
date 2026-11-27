@@ -145,7 +145,7 @@ pub(super) fn selection_bar(
                 super::comments::add_at(state, at);
             }
             // How the chat should take them: keep, avoid, replace, more like.
-            ui.menu_button("as{2026}", |ui| {
+            widgets::submenu(ui, "as{2026}", |ui| {
                 for modifier in crate::refs::Modifier::ALL {
                     if widgets::menu_item(ui, t, None, modifier.label(), modifier.prefix(), false)
                         .clicked()
@@ -155,7 +155,6 @@ pub(super) fn selection_bar(
                     }
                 }
             })
-            .response
             .hint("Point the chat at them as keep, avoid, replace, more like this or feature (Shift+R)");
             if widgets::button_with(
                 ui,
