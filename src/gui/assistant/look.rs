@@ -36,11 +36,6 @@ fn ring_rgb(theme: &Palette) -> Rgb {
     theme.text_muted.lerp(theme.panel, 0.36)
 }
 
-/// Selects' `tone-700` (`#404040`) as a palette colour: pill outlines.
-fn accent_rgb(theme: &Palette) -> Rgb {
-    theme.raised.lerp(theme.text, 0.12)
-}
-
 /// Selects' `tone-600` (`#525252`): timings, the meta row.
 fn tone_600(theme: &Palette) -> Color32 {
     theme::selected_row(theme)
@@ -140,76 +135,28 @@ pub(super) fn mode_switch<T: PartialEq + Copy>(
     changed
 }
 
-/// A scope choice in the composer: a small fully rounded pill, a hairline
-/// in `tone-700`, 12 px muted text; when `on`, ink 12 % and foreground.
-pub(super) fn scope_pill(ui: &mut Ui, theme: &Palette, label: &str, on: bool) -> Response {
-    let font = theme::font(theme::BODY_SIZE);
-    let galley = ui
-        .painter()
-        .layout_no_wrap(label.to_owned(), font, Color32::PLACEHOLDER);
-    let size = Vec2::new(galley.size().x + theme::SPACE_MD * 2.0 - 2.0, 22.0);
-    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+/// A scope choice in the composer: Material's filter chip (compact, 24 px),
+/// selected with its check when `on`. The caller decides what a click
+/// does, so the chip's own toggle works on a copy.
+pub(super) fn scope_pill(ui: &mut Ui, _theme: &Palette, label: &str, on: bool) -> Response {
+    let mut shown = on;
+    let response = egui_material3::MaterialChip::filter(label, &mut shown)
+        .small()
+        .show(ui)
+        .response;
     response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, label));
-    let lift = widgets::hover_t(ui, response.id, response.hovered());
-    let radius = CornerRadius::same(u8::MAX);
-    let (fill, stroke, ink) = if on {
-        (
-            theme::selected_fill(theme),
-            Stroke::new(1.0, theme::selected_fill(theme)),
-            theme::rgb(theme.text),
-        )
-    } else {
-        (
-            theme::rgb(theme.raised).gamma_multiply(lift),
-            Stroke::new(
-                1.0,
-                widgets::blend(accent_rgb(theme), ring_rgb(theme), lift),
-            ),
-            widgets::blend(theme.text_muted, theme::primary_fill(theme), lift),
-        )
-    };
-    ui.painter()
-        .rect(rect, radius, fill, stroke, egui::StrokeKind::Inside);
-    ui.painter()
-        .galley(rect.center() - galley.size() / 2.0, galley, ink);
-    widgets::focus_ring(ui, theme, &response);
     response
 }
-
-/// A quick action in the empty chat: a fully rounded pill, a `tone-700`
-/// hairline, 4 x 12 padding, 12 px muted text; under the pointer the
-/// outline goes to `tone-500`, the fill to `tone-800` and the text to
-/// `tone-200`. A label too long for the column wraps.
-pub(super) fn suggestion(ui: &mut Ui, theme: &Palette, label: &str) -> Response {
-    let pad = Vec2::new(theme::SPACE_MD, SPACE_XS);
-    let galley = ui.painter().layout(
-        label.to_owned(),
-        theme::font(theme::BODY_SIZE),
-        Color32::PLACEHOLDER,
-        (ui.available_width() - pad.x * 2.0).max(40.0),
-    );
-    let size = galley.size() + pad * 2.0;
-    let (rect, response) =
-        ui.allocate_exact_size(Vec2::new(size.x, size.y.max(24.0)), Sense::click());
+/// A quick action in the empty chat: Material's suggestion chip (compact,
+/// 24 px), its outline and state layer from the theme.
+pub(super) fn suggestion(ui: &mut Ui, _theme: &Palette, label: &str) -> Response {
+    let response = egui_material3::MaterialChip::suggestion(label)
+        .small()
+        .show(ui)
+        .response;
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
-    let lift = widgets::hover_t(ui, response.id, response.hovered());
-    ui.painter().rect(
-        rect,
-        CornerRadius::same(u8::MAX),
-        theme::rgb(theme.raised).gamma_multiply(lift),
-        Stroke::new(
-            1.0,
-            widgets::blend(accent_rgb(theme), ring_rgb(theme), lift),
-        ),
-        egui::StrokeKind::Inside,
-    );
-    let ink = widgets::blend(theme.text_muted, theme::primary_fill(theme), lift);
-    ui.painter()
-        .galley(rect.center() - galley.size() / 2.0, galley, ink);
-    widgets::focus_ring(ui, theme, &response);
     response
 }
-
 /// How an activity row's expanded text is set.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Body {
