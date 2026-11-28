@@ -1150,7 +1150,7 @@ pub fn glass_button(
 /// leaves the user guessing what to do first.
 pub fn why_disabled(response: Response, reason: &str) -> Response {
     if !response.enabled() && response.contains_pointer() {
-        super::hint::set(&response.ctx, reason, "");
+        super::hint::set_for(&response, reason, "");
     }
     response.on_disabled_hover_text(reason)
 }
@@ -1164,7 +1164,7 @@ pub fn tip(response: Response, _theme: &Palette, label: &str, keys: &str) -> Res
         return response;
     }
     if response.hovered() {
-        super::hint::set(&response.ctx, label, keys);
+        super::hint::set_for(&response, label, keys);
     }
     let name = if keys.is_empty() {
         label.to_owned()

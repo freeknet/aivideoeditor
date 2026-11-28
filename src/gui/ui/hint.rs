@@ -8,12 +8,14 @@
 
 //! Hover hints in the status bar.
 //!
-//! Every control that says what it does says it twice: a tooltip by the
-//! pointer, and the same words (with its shortcut) in the status bar's hint
-//! section, which stays readable while the pointer moves on and needs no
-//! wait. A control writes its hint with [`Hint::hint`] (or through
-//! `widgets::tip`, which the shared buttons use); the status bar reads it
-//! with [`current`].
+//! A control that says what it does says it in its tooltip by the pointer
+//! and, until that tooltip appears (its delay), in the status bar's hint
+//! section, which needs no wait. Once the tooltip is up the status bar
+//! clears, so the same words are never on screen twice; controls with no
+//! tooltip of their own (a thumbnail card, a timeline region) keep their
+//! hint there while hovered. A control writes its hint with [`Hint::hint`]
+//! (or through `widgets::tip`, which the shared buttons use); the status
+//! bar reads it with [`current`].
 //!
 //! The status bar is laid out before the page, so it shows what the last
 //! frame's hover wrote; [`set`] asks for one more frame when the hint
@@ -27,6 +29,8 @@ struct Said {
     text: String,
     keys: String,
     pass: u64,
+    /// Its tooltip, saying the same words, is up by the pointer.
+    tooltip: bool,
 }
 
 /// Where the hint lives in the context's memory.
@@ -37,6 +41,18 @@ fn id() -> Id {
 /// Records `text` (and its shortcut `keys`, may be empty) as the hovered
 /// control's hint for this frame.
 pub fn set(ctx: &Context, text: &str, keys: &str) {
+    record(ctx, text, keys, false);
+}
+
+/// [`set`] for `response`, whose tooltip shows the same `text`: once that
+/// tooltip is up the status bar says nothing, rather than the same words a
+/// second time; until then (the tooltip's delay) the hint is there.
+pub fn set_for(response: &Response, text: &str, keys: &str) {
+    record(&response.ctx, text, keys, response.is_tooltip_open());
+}
+
+/// Records a hint; `tooltip` says its tooltip is showing it already.
+fn record(ctx: &Context, text: &str, keys: &str, tooltip: bool) {
     if text.is_empty() {
         return;
     }
@@ -45,12 +61,13 @@ pub fn set(ctx: &Context, text: &str, keys: &str) {
         text: text.to_owned(),
         keys: keys.to_owned(),
         pass,
+        tooltip,
     };
     let changed = ctx.data_mut(|d| {
         let old = d.get_temp::<Said>(id());
-        let changed = old
-            .as_ref()
-            .is_none_or(|o| o.text != said.text || o.keys != said.keys);
+        let changed = old.as_ref().is_none_or(|o| {
+            o.text != said.text || o.keys != said.keys || o.tooltip != said.tooltip
+        });
         d.insert_temp(id(), said);
         changed
     });
@@ -60,11 +77,12 @@ pub fn set(ctx: &Context, text: &str, keys: &str) {
 }
 
 /// The hint to show now: what a control wrote this frame or the last one
-/// (the status bar draws before the page), as `(text, keys)`.
+/// (the status bar draws before the page), as `(text, keys)`; `None` while
+/// the control's own tooltip is saying it.
 pub fn current(ctx: &Context) -> Option<(String, String)> {
     let now = ctx.cumulative_pass_nr();
     ctx.data(|d| d.get_temp::<Said>(id()))
-        .filter(|s| s.pass + 1 >= now)
+        .filter(|s| s.pass + 1 >= now && !s.tooltip)
         .map(|s| (s.text, s.keys))
 }
 
@@ -81,7 +99,7 @@ impl Hint for Response {
             return self;
         }
         if self.hovered() {
-            set(&self.ctx, text, "");
+            set_for(&self, text, "");
         }
         name_for_screen_readers(&self, text);
         // Whether it showed changes nothing: the response goes back either way.
@@ -198,7 +216,30 @@ pub fn describe(label: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{current, describe, set};
+    use super::{current, describe, record, set};
+
+    #[test]
+    fn the_status_bar_is_quiet_while_the_tooltip_says_the_same() -> anyhow::Result<()> {
+        let ctx = egui::Context::default();
+        let frame = |run: &mut dyn FnMut(&mut egui::Ui)| {
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| run(ui));
+            out.textures_delta.clear();
+        };
+        let mut seen = None;
+        frame(&mut |ui| record(ui.ctx(), "Fold the browser", "Ctrl+B", false));
+        frame(&mut |ui| seen = current(ui.ctx()));
+        assert!(
+            seen.is_some(),
+            "before the tooltip shows, the hint is there"
+        );
+        frame(&mut |ui| record(ui.ctx(), "Fold the browser", "Ctrl+B", true));
+        frame(&mut |ui| seen = current(ui.ctx()));
+        assert_eq!(
+            seen, None,
+            "with the tooltip up, the status bar does not repeat it"
+        );
+        Ok(())
+    }
 
     #[test]
     fn a_hint_shows_for_the_frame_after_and_then_clears() -> anyhow::Result<()> {
