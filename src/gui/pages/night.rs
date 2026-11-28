@@ -134,16 +134,19 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
         .size_range(260.0..=440.0)
         .frame(
             egui::Frame::new()
-                .fill(theme::rgb(ctx.theme.panel))
+                .fill(theme::surface(ui.ctx(), theme::Surface::Panel))
                 .inner_margin(theme::margin(theme::PANEL_INSET)),
         )
         .show(ui, |ui| {
-            if let Some(footage) = recent::draw(ctx, &mut state.recent, ui) {
+            let picked = theme::on_surface(ui, theme::Surface::Panel, |ui| {
+                recent::draw(ctx, &mut state.recent, ui)
+            });
+            if let Some(footage) = picked {
                 new_night(ctx, state, &footage);
             }
         });
     egui::CentralPanel::default()
-        .frame(egui::Frame::new().fill(theme::rgb(ctx.theme.app)))
+        .frame(egui::Frame::new().fill(theme::surface(ui.ctx(), theme::Surface::Canvas)))
         .show(ui, |ui| {
             egui::ScrollArea::vertical()
                 .id_salt("home-main")
@@ -169,7 +172,7 @@ fn full_width(
     add: impl FnOnce(&mut PageCtx<'_>, &mut egui::Ui),
 ) {
     egui::CentralPanel::default()
-        .frame(egui::Frame::new().fill(theme::rgb(ctx.theme.app)))
+        .frame(egui::Frame::new().fill(theme::surface(ui.ctx(), theme::Surface::Canvas)))
         .show(ui, |ui| {
             egui::ScrollArea::vertical()
                 .id_salt(id)

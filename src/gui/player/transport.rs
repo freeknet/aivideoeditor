@@ -455,10 +455,10 @@ fn scrub_bar(p: &mut Player, ui: &mut Ui, theme: &Palette, strip: Rect, fps: f64
             key,
         );
     }
-    // A cut's shot boundaries: 1 px gaps in the panel colour, only where
+    // A cut's shot boundaries: 1 px gaps in the surface under the bar, only where
     // they stand apart, and none at all for a tape of hundreds of shots
     // (they would only dash the bar).
-    let gap = theme::rgb(theme.panel);
+    let gap = theme::current_surface(ui.ctx());
     let starts = p.seg_starts();
     let sparse = starts.len() as f32 * MIN_TICK_GAP * 2.0 <= track.width();
     let mut last = f32::NEG_INFINITY;

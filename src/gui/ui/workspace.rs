@@ -49,7 +49,7 @@
 //! `Shift-R` asks which intent (keep, avoid, replace, more like, feature).
 
 use super::layout::{self, Region, ViewMode};
-use super::theme::{self, SPACE_XS};
+use super::theme::{self, SPACE_XS, Surface};
 use super::{icons, widgets};
 use crate::gui::app::{Action, App, BrowserTab};
 use crate::gui::pages::PageCtx;
@@ -113,7 +113,7 @@ pub fn draw(app: &mut App, ui: &mut Ui, actions: &mut Vec<Action>, blocked: bool
             .show_separator_line(true)
             .frame(
                 egui::Frame::new()
-                    .fill(theme::bar_fill(&app.theme))
+                    .fill(theme::surface(ui.ctx(), Surface::Chrome))
                     .inner_margin(theme::margin_xy(theme::SPACE_SM, SPACE_XS)),
             )
             .show(ui, |ui| {
@@ -124,7 +124,7 @@ pub fn draw(app: &mut App, ui: &mut Ui, actions: &mut Vec<Action>, blocked: bool
 
     if app.home || app.project.is_none() {
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(theme::rgb(app.theme.app)))
+            .frame(egui::Frame::new().fill(theme::surface(ui.ctx(), Surface::Canvas)))
             .show(ui, |ui| {
                 let mut ctx = page_ctx!(app, actions, blocked);
                 crate::gui::pages::night::draw(&mut ctx, &mut app.pages.night, ui);
@@ -199,18 +199,21 @@ pub fn draw(app: &mut App, ui: &mut Ui, actions: &mut Vec<Action>, blocked: bool
             .default_size(EXPORT_WIDTH)
             .frame(panel_frame(app, &egui_ctx, "export"))
             .show(ui, |ui| {
-                let theme = app.theme.clone();
-                let keys = super::keymap::command("export")
-                    .map(|command| command.hint(app.keymap))
-                    .unwrap_or_default();
-                widgets::panel_header(ui, &theme, "Export", |ui| {
-                    if widgets::icon_btn(ui, &theme, icons::X, "Close export", &keys).clicked() {
-                        app.export_open = false;
-                    }
+                theme::on_surface(ui, Surface::Panel, |ui| {
+                    let theme = app.theme.clone();
+                    let keys = super::keymap::command("export")
+                        .map(|command| command.hint(app.keymap))
+                        .unwrap_or_default();
+                    widgets::panel_header(ui, &theme, "Export", |ui| {
+                        if widgets::icon_btn(ui, &theme, icons::X, "Close export", &keys).clicked()
+                        {
+                            app.export_open = false;
+                        }
+                    });
+                    ui.add_space(SPACE_XS);
+                    let mut ctx = page_ctx!(app, actions, blocked);
+                    crate::gui::pages::deliver::draw(&mut ctx, &mut app.pages.deliver, ui);
                 });
-                ui.add_space(SPACE_XS);
-                let mut ctx = page_ctx!(app, actions, blocked);
-                crate::gui::pages::deliver::draw(&mut ctx, &mut app.pages.deliver, ui);
             });
         claim_focus(&egui_ctx, "export", shown.response.rect);
     }
@@ -270,47 +273,49 @@ pub fn draw(app: &mut App, ui: &mut Ui, actions: &mut Vec<Action>, blocked: bool
     let shown = egui::CentralPanel::default()
         .frame(panel_frame(app, &egui_ctx, "viewer"))
         .show(ui, |ui| {
-            let panel = ui.max_rect().expand(theme::PANEL_INSET);
-            {
-                let mut ctx = page_ctx!(app, actions, blocked);
-                crate::gui::pages::viewer::draw(&mut ctx, &mut app.pages.viewer, ui);
-            }
-            // A folded browser or inspector leaves no rail: a glass button
-            // floats in the viewer's top corner instead, as in Selects.
-            let inset = theme::SPACE_XS + 2.0;
-            let theme = app.theme.clone();
-            if !folds.browser {
-                let keys = command_keys(app, Region::Browser);
-                if widgets::glass_button(
-                    ui,
-                    &theme,
-                    panel.left_top() + egui::vec2(inset, inset),
-                    icons::PANEL_LEFT,
-                    Region::Browser.label(),
-                    widgets::IconSide::Leading,
-                    &keys,
-                )
-                .clicked()
+            theme::on_surface(ui, Surface::Content, |ui| {
+                let panel = ui.max_rect().expand(theme::PANEL_INSET);
                 {
-                    actions.push(Action::TogglePanel(Region::Browser));
+                    let mut ctx = page_ctx!(app, actions, blocked);
+                    crate::gui::pages::viewer::draw(&mut ctx, &mut app.pages.viewer, ui);
                 }
-            }
-            if !folds.inspector {
-                let keys = command_keys(app, Region::Inspector);
-                if widgets::glass_button(
-                    ui,
-                    &theme,
-                    panel.right_top() + egui::vec2(-inset, inset),
-                    icons::PANEL_RIGHT,
-                    Region::Inspector.label(),
-                    widgets::IconSide::Trailing,
-                    &keys,
-                )
-                .clicked()
-                {
-                    actions.push(Action::TogglePanel(Region::Inspector));
+                // A folded browser or inspector leaves no rail: a glass button
+                // floats in the viewer's top corner instead, as in Selects.
+                let inset = theme::SPACE_XS + 2.0;
+                let theme = app.theme.clone();
+                if !folds.browser {
+                    let keys = command_keys(app, Region::Browser);
+                    if widgets::glass_button(
+                        ui,
+                        &theme,
+                        panel.left_top() + egui::vec2(inset, inset),
+                        icons::PANEL_LEFT,
+                        Region::Browser.label(),
+                        widgets::IconSide::Leading,
+                        &keys,
+                    )
+                    .clicked()
+                    {
+                        actions.push(Action::TogglePanel(Region::Browser));
+                    }
                 }
-            }
+                if !folds.inspector {
+                    let keys = command_keys(app, Region::Inspector);
+                    if widgets::glass_button(
+                        ui,
+                        &theme,
+                        panel.right_top() + egui::vec2(-inset, inset),
+                        icons::PANEL_RIGHT,
+                        Region::Inspector.label(),
+                        widgets::IconSide::Trailing,
+                        &keys,
+                    )
+                    .clicked()
+                    {
+                        actions.push(Action::TogglePanel(Region::Inspector));
+                    }
+                }
+            });
         });
     claim_focus(&egui_ctx, "viewer", shown.response.rect);
 
@@ -322,8 +327,18 @@ pub fn draw(app: &mut App, ui: &mut Ui, actions: &mut Vec<Action>, blocked: bool
     reference_popup(app, ui.ctx(), actions);
 }
 
-/// The frame every docked panel (and the viewer) is drawn in: the panel
-/// surface and the [`theme::PANEL_INSET`]. Panels touch, with one
+/// The region a docked panel is painted as: the timeline its own level, the
+/// viewer the content surface, every side panel the panel surface.
+fn region_of(key: &str) -> Surface {
+    match key {
+        "timeline" => Surface::Timeline,
+        "viewer" => Surface::Content,
+        _ => Surface::Panel,
+    }
+}
+
+/// The frame every docked panel (and the viewer) is drawn in: its
+/// region's surface ([`region_of`]) and the [`theme::PANEL_INSET`]. Panels touch, with one
 /// white-10 % separator line between them and no gap. The outline is 1 px,
 /// transparent except on the focused panel, where it is `ring`
 /// (`#737373`): the only focus cue a panel has, as in Selects. A
@@ -337,7 +352,7 @@ fn panel_frame(app: &App, ctx: &egui::Context, key: &str) -> egui::Frame {
         egui::Stroke::new(1.0, egui::Color32::TRANSPARENT)
     };
     egui::Frame::new()
-        .fill(theme::rgb(app.theme.panel))
+        .fill(theme::surface(ctx, region_of(key)))
         .stroke(stroke)
         .inner_margin(theme::margin(theme::PANEL_INSET - 1.0))
 }
@@ -428,7 +443,7 @@ fn split(
         // Clipped to the panel, inset included, so a panel header can
         // bleed across the inset to the panel's edges.
         fenced.shrink_clip_rect(rect.expand(theme::PANEL_INSET));
-        add(&mut fenced);
+        theme::on_surface(&mut fenced, region_of(key), add);
         ui.advance_cursor_after_rect(rect);
     });
     claim_focus(ui.ctx(), key, shown.response.rect);
@@ -464,7 +479,7 @@ fn rail(app: &App, ui: &mut Ui, region: Region, actions: &mut Vec<Action>) {
             .resizable(false)
             .frame(
                 egui::Frame::new()
-                    .fill(theme::rgb(app.theme.panel))
+                    .fill(theme::surface(ui.ctx(), Surface::Panel))
                     .inner_margin(egui::Margin {
                         left: 0,
                         right: 0,
@@ -497,7 +512,7 @@ fn rail(app: &App, ui: &mut Ui, region: Region, actions: &mut Vec<Action>) {
     panel
         .exact_size(layout::RAIL)
         .resizable(false)
-        .frame(egui::Frame::new().fill(theme::rgb(app.theme.panel)))
+        .frame(egui::Frame::new().fill(theme::surface(ui.ctx(), Surface::Panel)))
         .show(ui, |ui| {
             if widgets::rail(ui, &app.theme, region.label(), &hint, side).clicked() {
                 actions.push(Action::TogglePanel(region));

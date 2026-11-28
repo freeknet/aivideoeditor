@@ -69,7 +69,7 @@ pub fn draw(app: &mut App, ui: &mut Ui, actions: &mut Vec<Action>) {
         .show_separator_line(true)
         .frame(
             egui::Frame::new()
-                .fill(theme::bar_fill(&theme))
+                .fill(theme::surface(ui.ctx(), theme::Surface::Chrome))
                 .inner_margin(theme::margin_xy(SPACE_SM, 0.0)),
         )
         .show(ui, |ui| {

@@ -67,9 +67,8 @@ specs (they win over `05-selects-ui.md` §8 where the two differ).
 | Selects token | Value | Palette / helper | Use |
 |---|---|---|---|
 | `tone-950` | `#0a0a0a` | `theme.app` | the window; the composer box; the home screen |
-| (top bar) | `#0a0a0a` @ 20 % over the panels ≈ `#141414` | `theme::bar_fill` | the top bar |
-| `background`, `card` | `#171717` | `theme.panel` | every panel, the viewer, the status bar |
-| `popover`, `secondary`, `muted` | `#262626` | `theme.raised`, `theme::popover_fill` | menus, tooltips, popovers, segmented tracks, secondary buttons, list hover |
+| `background`, `card` | `#171717` | `theme.panel` | the content surface (see Surfaces below) |
+| `popover`, `secondary`, `muted` | `#262626` | `theme.raised` | segmented tracks, secondary buttons, list hover; menus and popovers are `theme::popover_fill` (the overlay surface) |
 | `accent` | `#404040` | `theme::accent_fill` | ghost-button and menu-item hover |
 | selected (ink 12 %) | ≈ `#333333` | `theme::selected_fill`, `theme.selection` | open tab, toggle on, selected item |
 | `sidebar-ring` | `#525252` | `theme::selected_row` | a selected list row |
@@ -82,12 +81,42 @@ specs (they win over `05-selects-ui.md` §8 where the two differ).
 | `key` | `#a3e635` | `theme.accent` | see rule 5 |
 | `key-foreground` | `#171717` | `theme.text_on_accent` | text on the key colour |
 | `destructive` | `#ef4444` | `theme.danger` | delete, errors, the blade line |
-| `ring`, `tone-500` | `#737373` | `theme::ring`, `theme::panel_focus` | the focused panel's outline, a focused field |
+| `ring`, `tone-500` | `#737373` | `theme::ring`, `theme::panel_focus` | the focused panel's outline |
+| focus | Material `secondary` | `theme::focus_ink`, `widgets::focus_ring` | the keyboard focus ring: 2 px, 2 px off the control, 3:1 on every surface |
 | glass | `#262626` @ 85 % + white 10 % border | `theme::glass_fill`, `widgets::glass_frame` | floating over footage (Selects uses 50 % + 16 px blur; egui has no blur) |
 
 The `hover` palette surface is `#3a3a3a`, a step short of `#404040`,
 because muted text must clear 4.5:1 on every surface; the `accent` *fill*
 is still exactly `#404040`.
+
+### Surfaces
+
+Each region of the window sits on its own tonal level, one of Material
+3's surface roles from the active theme, so neighbouring regions read
+apart by a quiet step in any theme, light or dark. `theme::Surface` is
+the one map from region to role; fill a panel with
+`theme::surface(ctx, Surface::Panel)` (or `theme::surface_of(palette, ..)`
+without a context), never with a palette field picked at the call site.
+
+| Region | Role (dark / light) | Where |
+|---|---|---|
+| `Canvas` | surfaceContainerLowest | behind the picture in the viewer; the Home screen |
+| `Chrome` | surfaceDim / surfaceBright | top bar, guide strip, status bar |
+| `Content` | surfaceContainerLow | the viewer panel; cards on Home |
+| `Panel` | surfaceContainer | chat, browser, inspector, export, folded rails, Home's recent list |
+| `Timeline` | surfaceContainerHigh | the timeline |
+| `Island` | surfaceContainerHighest | the timeline's floating tool island |
+| `Overlay` | surfaceBright / surfaceDim | menus, popovers, dialogs, the command palette, hover labels |
+
+The workspace draws each panel's contents inside `theme::on_surface`,
+which points Material's `surface` role at that region while the panel
+draws, so the library's own backdrops (a list, a tab row) blend into the
+panel. A shape that has to cut through to the background (a gap, a dimmed
+clip) paints `theme::current_surface(ctx)`. Text fields are transparent.
+Tests check that every region has its own role, that neighbours differ in
+every built-in theme, that text and muted text clear 4.5:1 on every
+region (faint text on the docked ones) and that the focus ring clears
+3:1.
 
 ### Ink
 
@@ -147,9 +176,9 @@ should lay digits out in fixed cells (or use `theme::mono`).
 ## The shell (what the workspace already does)
 
 - **Panels touch**: one 1 px white-10 % separator between neighbours, no
-  gap; each is `#171717` with a 1 px outline that is transparent, or
+  gap; each on its region's surface with a 1 px outline that is transparent, or
   `#737373` on the focused panel (the last one pressed in).
-- **Top bar**: 52 px, `bar_fill`, hairline under; home and the 14 px Medium
+- **Top bar**: 52 px, the chrome surface, hairline under; home and the 14 px Medium
   night name on the left; the 36 px search pill centred; panel toggles,
   view mode (`PANELS_LEFT_BOTTOM`), preferences (`SETTINGS_2`) and Export
   (a filled secondary `SHARE` square) on the right.
@@ -158,7 +187,7 @@ should lay digits out in fixed cells (or use `theme::mono`).
   glass button in the viewer's top-left / top-right corner (6 px inset).
   **Viewer owners: keep the top 48 px of the two corners free of controls
   that matter.** The timeline folds to a 24 px labelled rail.
-- **Status bar**: 24 px, panel colour, hairline above, 11 px text.
+- **Status bar**: 24 px, the chrome surface, hairline above, 11 px text.
 - **Which panel is focused**: `workspace::panel_focused(ctx, key)` says
   whether the panel `key` (`"timeline"`, `"viewer"`, …) took the last
   pointer-down. A panel that paints a selection asks it to pick the
@@ -204,6 +233,7 @@ your own on those pages.
 | a status, a count | `pill(ui, theme, "3", Tone::Neutral)` | Material's labelled badge on the tone's container colour (`MaterialTheme::success()`/`warning()` for those tones); `Tone::{Neutral, Key, Success, Warning, Danger}` |
 | a shortcut | `kbd(ui, theme, "Ctrl+B")` | one chip per key |
 | a hint | `tip(response, theme, label, keys)` | Material's plain tooltip, keys as chips; `rich_tip(response, name, \|ui\| ..)` for a several-line preview (Material's rich tooltip); `pointer_tip(&response, name, \|ui\| ..)` for a timeline or transport, following the pointer (`TooltipAnchor::Pointer`) |
+| why a control is disabled | `why_disabled(response, "Name the template first")` | the reason as the tooltip while it is disabled, and in the status bar; a control greyed out with no reason leaves the user guessing |
 | nothing to show | `empty_state(ui, theme, icons::FILM, "No shots yet", "Index the night to fill this.", \|ui\| { .. })` | centred in the space left |
 | a single-line field | `text_field(ui, theme, &mut text, "Placeholder")`, `input(&mut text).label(..).show(ui)` | Material's outlined field at 32 px; `dense_input(&mut text, 28.0)` for a 28 or 24 px row (the desktop densities, 12 px text), `field_frame(ui, theme, rect, ..)` to place one at a rect with an optional Lucide leading icon |
 | a number | `ui.add(number(&mut value, "Name").range(..).suffix(" s"))` | Material's number field, 32 px: drag, Up/Down steps, typing |

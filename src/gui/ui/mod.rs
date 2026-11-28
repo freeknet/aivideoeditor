@@ -127,6 +127,8 @@ pub fn draw(app: &mut App, ui: &mut Ui) -> Vec<Action> {
     settings::draw(app, ui.ctx(), &mut actions);
     command_palette::draw(app, ui.ctx(), &mut actions);
     shortcut_sheet::draw(app, ui.ctx(), &mut actions);
+    // Last, over everything drawn this frame.
+    widgets::focus_visible(ui.ctx());
     actions
 }
 

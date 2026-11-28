@@ -195,7 +195,7 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
         (ui.available_height() - transport::reserved(ui) - SCRUB_ROOM).max(80.0),
     );
     // A frame still decoding shows as the video surface, forced dark.
-    let surface = theme::rgb(ctx.theme.app);
+    let surface = theme::surface(ui.ctx(), theme::Surface::Canvas);
     let framing = Framing {
         aspect: state.aspect.ratio(),
         ghost: state.ghost && state.aspect != Aspect::Wide,

@@ -424,7 +424,7 @@ fn steps(ctx: &PageCtx<'_>, ui: &mut egui::Ui, phases: &[(Planned, Phase)]) {
     const BAR_ROW: f32 = 16.0;
     let theme = ctx.theme;
     egui::Frame::new()
-        .fill(theme::rgb(theme.panel))
+        .fill(theme::surface(ui.ctx(), theme::Surface::Content))
         .stroke(theme::ink_line(theme))
         .corner_radius(egui::CornerRadius::same(theme::RADIUS_XL))
         .inner_margin(theme::margin_xy(theme::SPACE_LG, theme::SPACE_XS))

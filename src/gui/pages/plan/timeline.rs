@@ -649,7 +649,7 @@ pub(super) fn tracks(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut
     };
 
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, CornerRadius::ZERO, theme::rgb(t.panel));
+    painter.rect_filled(rect, CornerRadius::ZERO, theme::current_surface(ui.ctx()));
     let lane_paint = painter.with_clip_rect(lanes);
 
     // The song's bars, faint behind the clips.
@@ -1000,7 +1000,7 @@ fn video(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut Ui, lay: &L
             v1_paint.rect_filled(
                 block,
                 CornerRadius::same(CLIP_RADIUS),
-                theme::translucent(t.panel, 153),
+                theme::current_surface(v1_paint.ctx()).gamma_multiply(0.6),
             );
         }
         paint_name(
@@ -1122,7 +1122,7 @@ fn video(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut Ui, lay: &L
             v1_paint.rect_filled(
                 block,
                 CornerRadius::same(CLIP_RADIUS),
-                theme::translucent(t.panel, 153),
+                theme::current_surface(v1_paint.ctx()).gamma_multiply(0.6),
             );
         }
     }
@@ -1943,9 +1943,10 @@ fn scroll_strip(
     }
 }
 
-/// The floating tool island: a glass column of 32 px tool buttons 24 px
-/// from the canvas's right edge and 49 px from its bottom; the active tool
-/// keeps an ink-10 % fill.
+/// The floating tool island, on its own surface level
+/// (`theme::Surface::Island`): a column of 32 px tool buttons 24 px from
+/// the canvas's right edge and 49 px from its bottom; the active tool keeps
+/// an ink-10 % fill.
 fn island(state: &mut State, s: &Shown<'_>, ui: &mut Ui, rect: Rect, lay: &Layout, id: egui::Id) {
     let t = s.theme;
     let tools = [
@@ -1987,7 +1988,7 @@ fn island(state: &mut State, s: &Shown<'_>, ui: &mut Ui, rect: Rect, lay: &Layou
     painter.rect(
         frame,
         CornerRadius::same(theme::RADIUS_ISLAND),
-        theme::glass_fill(t),
+        theme::surface(ui.ctx(), theme::Surface::Island),
         theme::ink_line(t),
         egui::StrokeKind::Inside,
     );

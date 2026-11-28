@@ -280,11 +280,153 @@ pub fn glass_fill(theme: &Palette) -> Color32 {
     translucent(theme.raised, 217)
 }
 
-/// The top bar's fill: the window colour at 20 % over the panels
-/// (`#141414` in the signature theme).
+/// A region of the window, named for the surface it is painted on.
+///
+/// Every region takes its own tonal level from Material 3's surface
+/// container roles ([`Surface::role`]), so neighbouring regions read apart
+/// by one quiet step and a theme (Material Night, Material Light or any
+/// other) decides the actual colours. This is the one place that says
+/// which region sits on which role; a panel's fill comes from
+/// [`surface`] (or [`surface_of`] where no context is at hand), never from
+/// a palette field picked at the call site.
+///
+/// Back to front, in a dark theme (a light one runs the same order from
+/// white toward grey):
+///
+/// | Region | Role | What |
+/// |---|---|---|
+/// | [`Canvas`](Surface::Canvas) | lowest container | behind the picture in the viewer; the Home screen |
+/// | [`Chrome`](Surface::Chrome) | dim (dark) / bright (light) | top bar, guide strip, status bar |
+/// | [`Content`](Surface::Content) | low container | the viewer panel; cards on Home |
+/// | [`Panel`](Surface::Panel) | container | chat, browser, inspector, export, folded rails |
+/// | [`Timeline`](Surface::Timeline) | high container | the timeline |
+/// | [`Island`](Surface::Island) | highest container | the timeline's floating tool island |
+/// | [`Overlay`](Surface::Overlay) | bright (dark) / dim (light) | menus, popovers, dialogs, hover labels |
+///
+/// `Chrome` and `Overlay` are the two roles whose tone is absolute rather
+/// than relative to the mode: the dim surface is the darkest-but-one in a
+/// dark scheme and the darkest of all in a light one. Picking by mode keeps
+/// the chrome just behind the content and the overlays just in front of
+/// everything in both.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Surface {
+    /// Behind the footage: the viewer's stage, the Home screen.
+    Canvas,
+    /// The window's frame: top bar, guide strip, status bar.
+    Chrome,
+    /// The main work surface: the viewer panel, Home's cards.
+    Content,
+    /// The side panels: chat, browser, inspector, export.
+    Panel,
+    /// The timeline.
+    Timeline,
+    /// Controls floating over the timeline.
+    Island,
+    /// Menus, popovers, dialogs and hover labels.
+    Overlay,
+}
+
+impl Surface {
+    /// Every region, back to front.
+    pub const ALL: [Self; 7] = [
+        Self::Canvas,
+        Self::Chrome,
+        Self::Content,
+        Self::Panel,
+        Self::Timeline,
+        Self::Island,
+        Self::Overlay,
+    ];
+
+    /// The Material 3 role this region is painted in, in a dark scheme or
+    /// a light one. See the type's docs for the table.
+    #[must_use]
+    pub const fn role(self, dark: bool) -> ColorRole {
+        match self {
+            Self::Canvas => ColorRole::SurfaceContainerLowest,
+            Self::Chrome if dark => ColorRole::SurfaceDim,
+            Self::Chrome => ColorRole::SurfaceBright,
+            Self::Content => ColorRole::SurfaceContainerLow,
+            Self::Panel => ColorRole::SurfaceContainer,
+            Self::Timeline => ColorRole::SurfaceContainerHigh,
+            Self::Island => ColorRole::SurfaceContainerHighest,
+            Self::Overlay if dark => ColorRole::SurfaceBright,
+            Self::Overlay => ColorRole::SurfaceDim,
+        }
+    }
+
+    /// Pairs of regions that touch in the window (or, for the overlay, can
+    /// be drawn over one another): each pair must read apart.
+    pub const NEIGHBOURS: [(Self, Self); 9] = [
+        (Self::Canvas, Self::Content),
+        (Self::Chrome, Self::Content),
+        (Self::Chrome, Self::Panel),
+        (Self::Chrome, Self::Timeline),
+        (Self::Content, Self::Panel),
+        (Self::Content, Self::Timeline),
+        (Self::Panel, Self::Timeline),
+        (Self::Timeline, Self::Island),
+        (Self::Island, Self::Overlay),
+    ];
+}
+
+/// The colour of `region` in the Material theme installed on `ctx` (what
+/// [`apply`] put there this frame).
 #[must_use]
-pub fn bar_fill(theme: &Palette) -> Color32 {
-    rgb(theme.panel.lerp(theme.app, 0.2))
+pub fn surface(ctx: &egui::Context, region: Surface) -> Color32 {
+    let m3 = MaterialTheme::of(ctx);
+    m3.color(region.role(m3.is_dark))
+}
+
+/// The colour of `region` under `theme`, for code with no context at hand
+/// (deriving egui's visuals). Same answer as [`surface`] once the theme is
+/// applied.
+#[must_use]
+pub fn surface_of(theme: &Palette, region: Surface) -> Color32 {
+    material_scheme(theme).get(region.role(theme.mode == Mode::Dark))
+}
+
+/// The surface the widget being drawn sits on: the region [`on_surface`]
+/// scoped, or the content surface outside any. Paint with it where a shape
+/// has to cut through to the background (a gap between segments, a dimmed
+/// clip, a ruler band).
+#[must_use]
+pub fn current_surface(ctx: &egui::Context) -> Color32 {
+    MaterialTheme::of(ctx).color(ColorRole::Surface)
+}
+
+/// The keyboard focus indicator's colour: Material's `secondary` role, its
+/// focus-ring token. It clears 3:1 against every region in every built-in
+/// theme (checked by the tests), which the neutral [`ring`] does not.
+#[must_use]
+pub fn focus_ink(ctx: &egui::Context) -> Color32 {
+    MaterialTheme::of(ctx).color(ColorRole::Secondary)
+}
+
+/// Runs `add` with Material's `surface` role set to `region`'s colour, and
+/// puts the previous theme back afterwards.
+///
+/// egui-material3 paints a widget's own backdrop (a list's container, a tab
+/// row) in `surface`, and [`current_surface`] reads it; scoping it to the
+/// region a panel is drawn in makes those blend into the panel instead of
+/// sitting in a box of the content colour.
+pub fn on_surface<R>(
+    ui: &mut egui::Ui,
+    region: Surface,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    let ctx = ui.ctx().clone();
+    let before = MaterialTheme::of(&ctx);
+    let fill = before.color(region.role(before.is_dark));
+    if before.color(ColorRole::Surface) == fill {
+        return add(ui);
+    }
+    let mut scoped = (*before).clone();
+    scoped.colors.set(ColorRole::Surface, fill);
+    MaterialTheme::set(&ctx, scoped);
+    let out = add(ui);
+    MaterialTheme::set(&ctx, (*before).clone());
+    out
 }
 
 /// The outline of the focused panel (`#737373`, the only focus cue a
@@ -315,11 +457,11 @@ pub fn primary_text(theme: &Palette) -> Color32 {
     rgb(theme.panel)
 }
 
-/// Selects' `popover` and `muted`: the surface of a menu, a tooltip, a
-/// segmented control's track.
+/// The surface of a menu, a popover, a hover label or a badge laid over
+/// other content: the [`Surface::Overlay`] level, in front of every region.
 #[must_use]
 pub fn popover_fill(theme: &Palette) -> Color32 {
-    rgb(theme.raised)
+    surface_of(theme, Surface::Overlay)
 }
 
 /// The shadow under floating things (menus, popovers, windows): soft and
@@ -383,6 +525,18 @@ pub fn material_scheme(theme: &Palette) -> ColorScheme {
         return scheme;
     }
     let mid = rgb(theme.panel.lerp(theme.raised, 0.5));
+    // The dim and bright surfaces as Material places them: in a dark
+    // scheme dim sits just behind the low container (between it and the
+    // window) and bright beyond the highest; in a light one the other way
+    // round. `Surface::Chrome` and `Surface::Overlay` rely on that.
+    let behind = rgb(theme.app.lerp(theme.panel, 0.5));
+    let beyond = rgb(theme.hover);
+    let (dim, bright) = if dark {
+        (behind, beyond)
+    } else {
+        (beyond, behind)
+    };
+    let highest = rgb(theme.raised.lerp(theme.hover, 0.5));
     for (role, color) in [
         (ColorRole::Primary, rgb(theme.accent)),
         (ColorRole::SurfaceTint, rgb(theme.accent)),
@@ -418,13 +572,13 @@ pub fn material_scheme(theme: &Palette) -> ColorScheme {
         (ColorRole::OutlineVariant, rgb(theme.border)),
         (ColorRole::InverseSurface, rgb(theme.text)),
         (ColorRole::InverseOnSurface, rgb(theme.panel)),
-        (ColorRole::SurfaceDim, rgb(theme.app)),
-        (ColorRole::SurfaceBright, rgb(theme.hover)),
+        (ColorRole::SurfaceDim, dim),
+        (ColorRole::SurfaceBright, bright),
         (ColorRole::SurfaceContainerLowest, rgb(theme.app)),
         (ColorRole::SurfaceContainerLow, rgb(theme.panel)),
         (ColorRole::SurfaceContainer, mid),
         (ColorRole::SurfaceContainerHigh, rgb(theme.raised)),
-        (ColorRole::SurfaceContainerHighest, rgb(theme.hover)),
+        (ColorRole::SurfaceContainerHighest, highest),
     ] {
         scheme.set(role, color);
     }
@@ -566,15 +720,17 @@ pub fn visuals(theme: &Palette) -> egui::Visuals {
         Mode::Dark => egui::Visuals::dark(),
         Mode::Light => egui::Visuals::light(),
     };
-    visuals.panel_fill = rgb(theme.panel);
+    visuals.panel_fill = surface_of(theme, Surface::Content);
     visuals.window_corner_radius = CornerRadius::same(RADIUS_LG);
     // Every egui menu and popup takes Material's menu shape (extra-small).
     visuals.menu_corner_radius = CornerRadius::same(RADIUS);
     visuals.faint_bg_color = ink(theme, INK_03);
-    // Text fields draw on this: the panel itself, with the `input` outline
-    // doing the work, as shadcn's transparent inputs do.
-    visuals.extreme_bg_color = rgb(theme.panel);
-    visuals.text_edit_bg_color = Some(rgb(theme.panel));
+    // Text fields are transparent, so they take whichever region's surface
+    // they sit on, with the `input` outline doing the work, as shadcn's
+    // transparent inputs do. Other wells (a progress track) are the
+    // content surface.
+    visuals.extreme_bg_color = surface_of(theme, Surface::Content);
+    visuals.text_edit_bg_color = Some(Color32::TRANSPARENT);
     visuals.code_bg_color = ink(theme, INK_10);
     visuals.hyperlink_color = rgb(theme.accent);
     visuals.warn_fg_color = rgb(theme.warning);
@@ -720,6 +876,111 @@ mod tests {
                 "{} keeps its mode",
                 theme.id
             );
+        }
+    }
+
+    #[test]
+    fn every_region_has_its_own_surface_role_in_both_modes() {
+        for dark in [true, false] {
+            for (i, a) in Surface::ALL.iter().enumerate() {
+                for b in &Surface::ALL[i + 1..] {
+                    assert_ne!(
+                        a.role(dark),
+                        b.role(dark),
+                        "{a:?} and {b:?} share a role (dark: {dark})"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn neighbouring_regions_read_apart_in_every_theme() {
+        for theme in crate::theme::Catalog::built_in().themes() {
+            let dark = theme.mode == Mode::Dark;
+            for (a, b) in Surface::NEIGHBOURS {
+                assert_ne!(a.role(dark), b.role(dark), "{a:?} / {b:?} share a role");
+                assert_ne!(
+                    surface_of(theme, a),
+                    surface_of(theme, b),
+                    "{}: {a:?} and {b:?} are the same colour",
+                    theme.id
+                );
+            }
+            // The overlay floats over any region, so it differs from all.
+            for region in Surface::ALL {
+                if region != Surface::Overlay {
+                    assert_ne!(
+                        surface_of(theme, region),
+                        surface_of(theme, Surface::Overlay),
+                        "{}: a popover vanishes on {region:?}",
+                        theme.id
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn text_reads_at_aa_on_every_region_in_every_theme() {
+        for theme in crate::theme::Catalog::built_in().themes() {
+            for region in Surface::ALL {
+                let fill = surface_of(theme, region);
+                let fill = Rgb::new(fill.r(), fill.g(), fill.b());
+                // Faint text (times, units, steps not reached) lives on the
+                // docked regions; menus and the island use muted text, as
+                // Material's trailing text and icons do.
+                let faint = !matches!(region, Surface::Island | Surface::Overlay);
+                let inks = [
+                    ("text", theme.text, true),
+                    ("muted text", theme.text_muted, true),
+                    ("faint text", theme.text_faint, faint),
+                ];
+                for (what, ink, _) in inks.into_iter().filter(|(_, _, checked)| *checked) {
+                    let ratio = ink.contrast(fill);
+                    assert!(
+                        ratio >= crate::theme::SECONDARY_CONTRAST,
+                        "{}: {what} is {ratio:.2}:1 on {region:?}",
+                        theme.id
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_focus_ring_stands_out_on_every_region_in_every_theme() {
+        let rgb_of = |c: Color32| Rgb::new(c.r(), c.g(), c.b());
+        for theme in crate::theme::Catalog::built_in().themes() {
+            let ring = rgb_of(material_scheme(theme).get(ColorRole::Secondary));
+            for region in Surface::ALL {
+                let ratio = ring.contrast(rgb_of(surface_of(theme, region)));
+                assert!(
+                    ratio >= crate::theme::INDICATOR_CONTRAST,
+                    "{}: the focus ring is {ratio:.2}:1 on {region:?}",
+                    theme.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_regions_step_back_to_front_in_the_material_themes() {
+        // A rough lightness: the channel sum, enough to order greys.
+        let lightness = |c: Color32| u32::from(c.r()) + u32::from(c.g()) + u32::from(c.b());
+        for dark in [true, false] {
+            let theme = crate::theme::material(dark);
+            let levels: Vec<u32> = Surface::ALL
+                .into_iter()
+                .map(|region| lightness(surface_of(&theme, region)))
+                .collect();
+            for (back, front) in levels.iter().zip(levels.iter().skip(1)) {
+                let forward = if dark { back <= front } else { back >= front };
+                assert!(
+                    forward,
+                    "dark {dark}: the levels {levels:?} do not step forward"
+                );
+            }
         }
     }
 

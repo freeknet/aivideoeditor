@@ -129,7 +129,10 @@ pub fn draw(app: &mut App, ctx: &egui::Context, actions: &mut Vec<Action>) {
         .backdrop_color(super::theme::translucent(theme.app, 140))
         .show(ctx, |ui| {
             egui::Frame::new()
-                .fill(super::theme::rgb(theme.raised))
+                .fill(super::theme::surface(
+                    ui.ctx(),
+                    super::theme::Surface::Overlay,
+                ))
                 .stroke(egui::Stroke::new(1.0, super::theme::rgb(theme.border)))
                 .corner_radius(egui::CornerRadius::same(super::theme::RADIUS_LG))
                 .inner_margin(super::theme::margin(SPACE_MD))

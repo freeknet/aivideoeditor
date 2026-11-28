@@ -98,8 +98,9 @@ pub fn nav_item(ui: &mut Ui, theme: &Palette, label: &str, active: bool, compact
     let lift = hover_t(ui, response.id, response.hovered());
     let selected = fade(ui.ctx(), response.id.with("active"), active);
 
-    let fill = theme
-        .panel
+    // From the surface the sidebar sits on, so an idle item is invisible.
+    let under = theme::current_surface(ui.ctx());
+    let fill = Rgb::new(under.r(), under.g(), under.b())
         .lerp(theme.hover, lift * 0.8)
         .lerp(theme.selection, selected);
     let painter = ui.painter();
@@ -580,16 +581,67 @@ pub fn muted(ui: &mut Ui, theme: &Palette, text: &str) -> Response {
 }
 
 /// The keyboard focus ring, drawn only while the control has focus:
-/// Selects' `ring` (neutral-500), a hairline just outside the control.
-pub fn focus_ring(ui: &Ui, theme: &Palette, response: &Response) {
+/// Material's focus indicator, a 2 px line in [`theme::focus_ink`] (which
+/// clears 3:1 on every region) standing 2 px off the control, so a
+/// focused control is found at a glance on any surface.
+pub fn focus_ring(ui: &Ui, _theme: &Palette, response: &Response) {
     if response.has_focus() {
         ui.painter().rect_stroke(
-            response.rect.expand(1.0),
-            CornerRadius::same(theme::RADIUS_MD + 1),
-            Stroke::new(1.5, theme::ring(theme)),
+            response.rect.expand(2.0),
+            CornerRadius::same(theme::RADIUS_MD + 2),
+            Stroke::new(2.0, theme::focus_ink(ui.ctx())),
             egui::StrokeKind::Outside,
         );
     }
+}
+
+/// Draws the focus ring around whichever control holds keyboard focus,
+/// while the keyboard is in use: from a Tab press until the next pointer
+/// press (the web's `:focus-visible` rule). Called once per frame after
+/// everything else, so every hand-drawn clickable (a card, a row, a chip)
+/// shows where Tab has got to without each drawing its own ring. Text
+/// fields are left alone: their caret and outline already say it.
+pub fn focus_visible(ctx: &egui::Context) {
+    let key = egui::Id::unique("focus-visible-keyboard");
+    let (tabbed, pointed) = ctx.input(|input| {
+        let tabbed = input.events.iter().any(|event| {
+            matches!(
+                event,
+                egui::Event::Key {
+                    key: egui::Key::Tab,
+                    pressed: true,
+                    ..
+                }
+            )
+        });
+        (tabbed, input.pointer.any_pressed())
+    });
+    let was = ctx.data(|d| d.get_temp::<bool>(key)).unwrap_or(false);
+    let on = (was || tabbed) && !pointed;
+    if on != was {
+        ctx.data_mut(|d| d.insert_temp(key, on));
+    }
+    if !on {
+        return;
+    }
+    let Some(id) = ctx.memory(|m| m.focused()) else {
+        return;
+    };
+    if egui::TextEdit::load_state(ctx, id).is_some() {
+        return;
+    }
+    let Some(response) = ctx.read_response(id) else {
+        return;
+    };
+    if !response.interact_rect.is_positive() {
+        return;
+    }
+    ctx.layer_painter(response.layer_id).rect_stroke(
+        response.rect.expand(2.0),
+        CornerRadius::same(theme::RADIUS_MD + 2),
+        Stroke::new(2.0, theme::focus_ink(ctx)),
+        egui::StrokeKind::Outside,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1090,6 +1142,17 @@ pub fn glass_button(
         &format!("Show the {}", label.to_lowercase()),
         keys,
     )
+}
+
+/// Says why a control is disabled: `reason` as its tooltip while it is
+/// disabled (an enabled control keeps its own), and in the status bar's
+/// hint while the pointer is over it. A greyed-out control with no reason
+/// leaves the user guessing what to do first.
+pub fn why_disabled(response: Response, reason: &str) -> Response {
+    if !response.enabled() && response.contains_pointer() {
+        super::hint::set(&response.ctx, reason, "");
+    }
+    response.on_disabled_hover_text(reason)
 }
 
 /// A tooltip on `response`: `label`, then `keys` as [`kbd`] chips when
@@ -1616,6 +1679,7 @@ impl Menu<'_> {
             (true, true) => (Corner::TopRight, Corner::BottomRight),
         };
         let style = MenuStyle {
+            background_color: Some(theme::surface(&ctx, theme::Surface::Overlay)),
             min_width: self.width,
             max_width: self.width,
             ..MenuStyle::default()
@@ -1636,7 +1700,12 @@ impl Menu<'_> {
 /// A Material 3 context menu on `response`, opened by a secondary click:
 /// the drop-in for `Response::context_menu`.
 pub fn context_menu<R>(response: &Response, add_contents: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+    let style = egui_material3::menu::MenuStyle {
+        background_color: Some(theme::surface(&response.ctx, theme::Surface::Overlay)),
+        ..egui_material3::menu::MenuStyle::default()
+    };
     egui_material3::MaterialMenu::context(response.id.with("material-context"))
+        .style(style)
         .show_context_with(response, add_contents)
         .map(|inner| inner.inner)
 }
@@ -1653,14 +1722,15 @@ pub fn submenu<R>(
 }
 
 /// The frame of a popover or a hand-built menu, on Material's menu tokens:
-/// the surface container, no outline, the extra-small shape, the level-2
+/// the overlay surface (`theme::Surface::Overlay`, in front of every
+/// region), no outline, the extra-small shape, the level-2
 /// key shadow, a 4 px inset.
 pub fn popover_frame(theme: &Palette) -> egui::Frame {
     use egui_material3::tokens::{ColorRole, Elevation};
     let scheme = theme::material_scheme(theme);
     let [key, _ambient] = Elevation::Level2.shadows(scheme.get(ColorRole::Shadow));
     egui::Frame::new()
-        .fill(scheme.get(ColorRole::SurfaceContainer))
+        .fill(theme::surface_of(theme, theme::Surface::Overlay))
         .corner_radius(CornerRadius::same(theme::RADIUS))
         .shadow(key)
         .inner_margin(theme::margin(SPACE_XS))
@@ -1668,8 +1738,8 @@ pub fn popover_frame(theme: &Palette) -> egui::Frame {
 
 /// One entry in a menu or popover, on Material's menu-item tokens kept
 /// dense (32 px tall rather than 48): label-large text, 12 px sides, an
-/// optional Lucide icon, the shortcut right-aligned and faint, an
-/// on-surface state layer under the pointer, and a check when `checked`
+/// optional Lucide icon, the shortcut right-aligned in muted text
+/// (Material's trailing text), an on-surface state layer under the pointer, and a check when `checked`
 /// (pass `false` for a plain action).
 pub fn menu_item(
     ui: &mut Ui,
@@ -1738,7 +1808,7 @@ pub fn menu_item(
             Align2::RIGHT_CENTER,
             keys,
             theme::font(theme::SMALL_SIZE),
-            theme::rgb(theme.text_faint),
+            theme::rgb(theme.text_muted),
         );
     }
     response

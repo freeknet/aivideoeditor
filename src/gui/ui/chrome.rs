@@ -35,7 +35,7 @@ pub fn status_bar(app: &App, ui: &mut Ui) {
         .show_separator_line(true)
         .frame(
             egui::Frame::new()
-                .fill(theme::rgb(theme.panel))
+                .fill(theme::surface(ui.ctx(), theme::Surface::Chrome))
                 .inner_margin(theme::margin_xy(SPACE_MD, 0.0)),
         )
         .show(ui, |ui| {

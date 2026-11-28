@@ -246,7 +246,7 @@ pub(super) fn zoomed(
 
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, CornerRadius::same(4), theme::rgb(theme.raised));
-    painter.rect_filled(ruler, CornerRadius::ZERO, theme::rgb(theme.panel));
+    painter.rect_filled(ruler, CornerRadius::ZERO, theme::current_surface(ui.ctx()));
 
     // Section band and heavy section lines.
     for s in &map.sections {

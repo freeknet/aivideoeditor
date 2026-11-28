@@ -2344,7 +2344,7 @@ fn options_card(ctx: &PageCtx<'_>, ui: &mut Ui, ask: &Ask, input: egui::Id) -> O
     let theme = ctx.theme;
     let mut chosen = None;
     egui::Frame::new()
-        .fill(theme::rgb(theme.panel))
+        .fill(theme::current_surface(ui.ctx()))
         .stroke(Stroke::new(1.0, theme::accent_fill(theme)))
         .corner_radius(CornerRadius::same(theme::RADIUS_XL))
         .inner_margin(theme::margin_xy(SPACE_MD, 10.0))
