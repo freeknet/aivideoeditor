@@ -822,6 +822,7 @@ pub(super) fn progress(
                             widgets::icon_btn(ui, theme, icons::SQUARE, "Stop", "")
                         })
                         .inner;
+                    let r = widgets::why_disabled(r, "Already stopping");
                     if widgets::tip(r, theme, "Stop: what is finished is kept", "").clicked() {
                         stop = true;
                     }

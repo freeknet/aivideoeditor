@@ -503,13 +503,12 @@ pub(super) fn strip(
                 close.push(tab.name.clone());
                 ui.close();
             }
-            if ui
+            let others = ui
                 .add_enabled_ui(tabs.len() > 1, |ui| {
                     widgets::menu_item(ui, t, None, "Close other tabs", "", false)
                 })
-                .inner
-                .clicked()
-            {
+                .inner;
+            if widgets::why_disabled(others, "This is the only open tab").clicked() {
                 close_others = Some(tab.name.clone());
                 ui.close();
             }
@@ -551,13 +550,12 @@ pub(super) fn strip(
         .width(220.0)
         .gap(theme::SPACE_XS)
         .show(|ui| {
-            if ui
+            let new = ui
                 .add_enabled_ui(!busy, |ui| {
                     widgets::menu_item(ui, t, Some(icons::PLUS), "New cut…", "", false)
                 })
-                .inner
-                .clicked()
-            {
+                .inner;
+            if widgets::why_disabled(new, "Wait for the cut being drafted").clicked() {
                 draft = true;
                 ui.close();
             }

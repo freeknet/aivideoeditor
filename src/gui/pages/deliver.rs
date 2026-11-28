@@ -658,7 +658,7 @@ fn matrix_row(
                         let response = if ready {
                             response.hint(format!("Draft a first cut of {}", d.id))
                         } else {
-                            response.on_disabled_hover_text("Needs the shot log and the music map")
+                            widgets::why_disabled(response, "Needs the shot log and the music map")
                         };
                         if response.clicked()
                             && let Some(p) = ctx.project.as_ref()
@@ -1019,7 +1019,7 @@ fn render_bar(
                     &keys,
                 )
             } else {
-                response.on_disabled_hover_text(&note)
+                widgets::why_disabled(response, &note)
             };
             clicked = response.clicked();
             if !note.is_empty() {

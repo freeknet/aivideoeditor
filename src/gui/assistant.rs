@@ -2229,6 +2229,7 @@ fn toolbar(
                                 )
                             })
                             .inner;
+                        let r = widgets::why_disabled(r, blocked.unwrap_or("Type a message first"));
                         if r.clicked() {
                             *send = Some(state.input.clone());
                         }
@@ -2487,6 +2488,14 @@ fn comments_toolbar(ctx: &PageCtx<'_>, state: &mut State, ui: &mut Ui, input: eg
                         )
                     })
                     .inner;
+                let r = widgets::why_disabled(
+                    r,
+                    if state.turn.is_some() {
+                        "Wait for the reply to finish first"
+                    } else {
+                        "No open comments on this cut"
+                    },
+                );
                 let r = widgets::tip(
                     r,
                     theme,
@@ -2677,7 +2686,7 @@ fn add_menu(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                     )
                 })
                 .inner;
-            if r.clicked() {
+            if widgets::why_disabled(r, "Select something in the editor first").clicked() {
                 add.extend(selection.iter().cloned());
                 ui.close();
             }
@@ -4189,11 +4198,15 @@ fn proposal_card(
                         } else {
                             format!("Apply {n} of {}", p.ops.len())
                         };
-                        if ui
+                        let why = if card.result.is_err() {
+                            "This edit cannot be applied to the cut as it stands"
+                        } else {
+                            "Tick at least one change first"
+                        };
+                        let apply = ui
                             .add_enabled_ui(ok, |ui| widgets::primary_button(ui, theme, &label))
-                            .inner
-                            .clicked()
-                        {
+                            .inner;
+                        if widgets::why_disabled(apply, why).clicked() {
                             action = Some(CardAction::Apply);
                         }
                         let preview = ui
@@ -4207,6 +4220,7 @@ fn proposal_card(
                                 )
                             })
                             .inner;
+                        let preview = widgets::why_disabled(preview, why);
                         if widgets::tip(preview, theme, "Play the edited cut in the viewer", "")
                             .clicked()
                         {

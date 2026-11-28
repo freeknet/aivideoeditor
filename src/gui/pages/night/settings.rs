@@ -771,13 +771,11 @@ fn template_section(ui: &mut egui::Ui, theme: &crate::theme::Palette, state: &mu
                     .accessible_name("New template name")
             });
             let name = state.template_name.trim().to_owned();
-            if ui
+            let save = ui
                 .add_enabled_ui(!name.is_empty(), |ui| widgets::outline_button(ui, theme, "Save template"))
                 .inner
-                .hint("Keep this project's deliverables, rules, footage words and measures as a template of your own")
-                .on_disabled_hover_text("Name the template first")
-                .clicked()
-            {
+                .hint("Keep this project's deliverables, rules, footage words and measures as a template of your own");
+            if widgets::why_disabled(save, "Name the template first").clicked() {
                 state.template_undo = None;
                 state.template_note = Some(match crate::template::save(&name, &loaded.recipe) {
                     Ok(path) => format!("Saved {name} to {}.", path.display()),
@@ -998,13 +996,12 @@ fn rules_section(
         }
         ui.add_space(theme::SPACE_XS + 2.0);
         parts::form_row(ui, theme, "", |ui| {
-            if ui
+            let reset = ui
                 .add_enabled_ui(rules != defaults, |ui| {
                     widgets::ghost_button(ui, theme, "Back to the template's rules")
                 })
-                .inner
-                .clicked()
-            {
+                .inner;
+            if widgets::why_disabled(reset, "The rules are already the template's").clicked() {
                 rules.clone_from(defaults);
                 changed = true;
             }

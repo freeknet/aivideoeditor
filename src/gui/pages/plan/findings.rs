@@ -216,10 +216,13 @@ fn list(
             } else {
                 "Fixes change the cut being edited, not an old version or a locked cut"
             };
-            if widgets::tip(all, t, tip, "")
-                .on_disabled_hover_text(tip)
-                .clicked()
-            {
+            let why = if s.editable {
+                "None of these findings has an automatic fix"
+            } else {
+                tip
+            };
+            let all = widgets::why_disabled(all, why);
+            if widgets::tip(all, t, tip, "").clicked() {
                 act = Some(Act::FixAll);
             }
         });
@@ -338,10 +341,8 @@ fn item(ui: &mut Ui, s: &Shown<'_>, f: &Finding, n: usize, fix: Option<Vec<Fix>>
                 )
             })
             .inner;
-        if widgets::tip(button, t, &tip, "")
-            .on_disabled_hover_text(&tip)
-            .clicked()
-        {
+        let button = widgets::why_disabled(button, &tip);
+        if widgets::tip(button, t, &tip, "").clicked() {
             act = Some(Act::Fix(n));
         }
         let ask = widgets::button_with(
@@ -373,6 +374,7 @@ fn item(ui: &mut Ui, s: &Shown<'_>, f: &Finding, n: usize, fix: Option<Vec<Fix>>
                     )
                 })
                 .inner;
+            let accept = widgets::why_disabled(accept, super::comments::LOCKED);
             if widgets::tip(
                 accept,
                 t,

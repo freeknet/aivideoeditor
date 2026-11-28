@@ -1332,13 +1332,15 @@ fn header_right(ui: &mut egui::Ui, t: &Palette, info: &HeaderInfo) -> HeaderOut 
         let label = format!("Redo {}", info.redo.as_deref().unwrap_or(""))
             .trim_end()
             .to_owned();
-        out.redo = widgets::icon_btn(ui, t, icons::REDO, &label, "Ctrl+Shift+Z").clicked();
+        let redo = widgets::icon_btn(ui, t, icons::REDO, &label, "Ctrl+Shift+Z");
+        out.redo = widgets::why_disabled(redo, "Nothing to redo").clicked();
     });
     ui.add_enabled_ui(info.undo.is_some(), |ui| {
         let label = format!("Undo {}", info.undo.as_deref().unwrap_or(""))
             .trim_end()
             .to_owned();
-        out.undo = widgets::icon_btn(ui, t, icons::UNDO, &label, "Ctrl+Z").clicked();
+        let undo = widgets::icon_btn(ui, t, icons::UNDO, &label, "Ctrl+Z");
+        out.undo = widgets::why_disabled(undo, "Nothing to undo").clicked();
     });
     widgets::bar_divider(ui, t);
     let comments = widgets::icon_toggle(
@@ -1390,6 +1392,7 @@ fn header_right(ui: &mut egui::Ui, t: &Palette, info: &HeaderInfo) -> HeaderOut 
     };
     ui.add_enabled_ui(!info.versions.is_empty(), |ui| {
         let resp = text_menu_button(ui, t, Some(icons::HISTORY), &label);
+        let resp = widgets::why_disabled(resp, "No saved versions yet: the first save makes v1");
         let resp = widgets::tip(resp, t, "Versions: every save keeps a numbered copy", "");
         let latest = info.versions.last().map(|v| v.n);
         // The response is not needed: drawing it is the point.
@@ -1429,6 +1432,7 @@ fn header_right(ui: &mut egui::Ui, t: &Palette, info: &HeaderInfo) -> HeaderOut 
     if let Some(aspect) = info.aspect {
         ui.add_enabled_ui(info.editable, |ui| {
             let resp = text_menu_button(ui, t, None, aspect_key(aspect));
+            let resp = widgets::why_disabled(resp, comments::LOCKED);
             let resp = widgets::tip(resp, t, "Output aspect; crops follow each shot's cx", "");
             // The response is not needed: drawing it is the point.
             let _ = widgets::menu(&resp)

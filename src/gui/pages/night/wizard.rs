@@ -464,9 +464,9 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
                                             "Start analysis",
                                         )
                                     })
-                                    .inner
-                                    .on_disabled_hover_text("No analysis steps to run")
-                                    .clicked();
+                                    .inner;
+                                let go =
+                                    widgets::why_disabled(go, "No analysis steps to run").clicked();
                                 ui.label(
                                     egui::RichText::new(if approval.reading {
                                         "Estimating\u{2026}".to_owned()
@@ -499,11 +499,12 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
                                         .add_enabled_ui(has_clips, |ui| {
                                             widgets::primary_button(ui, theme, "Continue")
                                         })
-                                        .inner
-                                        .on_disabled_hover_text(
-                                            "Pick a folder with video clips in it first",
-                                        )
-                                        .clicked();
+                                        .inner;
+                                    let go = widgets::why_disabled(
+                                        go,
+                                        "Pick a folder with video clips in it first",
+                                    )
+                                    .clicked();
                                     if go {
                                         state.step = *next;
                                     }
@@ -1053,8 +1054,12 @@ fn approve_step(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) -> 
                         )
                         .inner
                     })
-                    .inner
-                    .changed();
+                    .inner;
+                let why = row
+                    .blocked
+                    .clone()
+                    .unwrap_or_else(|| "Nothing left to do for this step".to_owned());
+                let changed = widgets::why_disabled(changed, &why).changed();
                 if changed {
                     if on {
                         state.off.remove(row.key);

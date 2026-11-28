@@ -1275,13 +1275,12 @@ fn context_menu(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, v1_resp: &egu
         };
         ui.set_min_width(220.0);
         widgets::menu_heading(ui, t, &format!("Shot {}", k + 1));
-        if ui
+        let alternatives = ui
             .add_enabled_ui(s.editable, |ui| {
                 widgets::menu_item(ui, t, Some(icons::SPARKLES), "Alternatives", "A", false)
             })
-            .inner
-            .clicked()
-        {
+            .inner;
+        if widgets::why_disabled(alternatives, super::comments::LOCKED).clicked() {
             super::open_alternatives(state, s, k);
             ui.close();
         }
@@ -1289,7 +1288,7 @@ fn context_menu(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, v1_resp: &egu
             super::play_from(s, io, k);
             ui.close();
         }
-        if ui
+        let comment = ui
             .add_enabled_ui(s.editable, |ui| {
                 widgets::menu_item(
                     ui,
@@ -1300,9 +1299,8 @@ fn context_menu(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, v1_resp: &egu
                     false,
                 )
             })
-            .inner
-            .clicked()
-        {
+            .inner;
+        if widgets::why_disabled(comment, super::comments::LOCKED).clicked() {
             let at = s.timing.get(k).map_or(0.0, |&(a, _)| a);
             super::comments::add_at(state, at);
             ui.close();
@@ -1349,7 +1347,7 @@ fn context_menu(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, v1_resp: &egu
             }
         });
         widgets::menu_separator(ui, t);
-        if ui
+        let remove = ui
             .add_enabled_ui(s.editable && s.plan.shots.len() > 1, |ui| {
                 widgets::menu_item(
                     ui,
@@ -1360,9 +1358,13 @@ fn context_menu(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, v1_resp: &egu
                     false,
                 )
             })
-            .inner
-            .clicked()
-        {
+            .inner;
+        let why = if s.editable {
+            "A cut keeps at least one shot"
+        } else {
+            super::comments::LOCKED
+        };
+        if widgets::why_disabled(remove, why).clicked() {
             if state.apply(format!("lift {}", k + 1), |p| edit::lift(p, k)) {
                 io.select(&s.name, &BTreeSet::new());
                 state.alts = None;

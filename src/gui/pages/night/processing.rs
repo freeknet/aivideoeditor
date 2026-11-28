@@ -351,9 +351,8 @@ pub(crate) fn draw(
                         )
                     })
                     .inner
-                    .hint("Captions keep running in the background")
-                    .on_disabled_hover_text("Unlocks when indexing finishes")
-                    .clicked();
+                    .hint("Captions keep running in the background");
+                let open = widgets::why_disabled(open, "Unlocks when indexing finishes").clicked();
                 if open {
                     ctx.actions.push(Action::Go(Page::Review));
                 }

@@ -514,7 +514,7 @@ fn list(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui, new_keys: &str) {
         });
     });
     if stems.len() > 1 {
-        ui.add_enabled_ui(idle, |ui| {
+        let more = ui.add_enabled_ui(idle, |ui| {
             widgets::submenu(ui, "New chat about another cut", |ui| {
                 for s in &stems {
                     if widgets::menu_item(ui, theme, None, s, "", false).clicked() {
@@ -522,8 +522,10 @@ fn list(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui, new_keys: &str) {
                         ui.close();
                     }
                 }
-            });
+            })
         });
+        // The response only carries the reason now.
+        let _ = widgets::why_disabled(more.inner, "Wait for the reply to finish first");
     }
     widgets::menu_separator(ui, theme);
 
@@ -727,13 +729,14 @@ fn row_content(
     );
     bar.spacing_mut().item_spacing.x = 2.0;
     let named = |what: &str| format!("{what} {}", meta.title);
-    if bar
+    // Disabled while another chat is answering.
+    const BUSY: &str = "Wait for the reply in the open chat to finish first";
+    let delete = bar
         .add_enabled_ui(enabled, |ui| {
             widgets::icon_toggle_sized(ui, theme, icons::TRASH, &named("Delete"), "", false, 24.0)
         })
-        .inner
-        .clicked()
-    {
+        .inner;
+    if widgets::why_disabled(delete, BUSY).clicked() {
         asked = Some(RowAction::Delete);
     }
     let (glyph, verb) = if meta.archived {
@@ -741,13 +744,12 @@ fn row_content(
     } else {
         (icons::EYE_OFF, "Archive")
     };
-    if bar
+    let archive = bar
         .add_enabled_ui(enabled, |ui| {
             widgets::icon_toggle_sized(ui, theme, glyph, &named(verb), "", false, 24.0)
         })
-        .inner
-        .clicked()
-    {
+        .inner;
+    if widgets::why_disabled(archive, BUSY).clicked() {
         asked = Some(RowAction::Archive);
     }
     if widgets::icon_toggle_sized(

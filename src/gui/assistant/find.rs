@@ -220,7 +220,7 @@ pub(super) fn bar(ctx: &PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                 )
             })
             .inner;
-        if next.clicked() {
+        if widgets::why_disabled(next, "No matches").clicked() {
             find.step(true, total);
         }
         let previous = ui
@@ -236,7 +236,7 @@ pub(super) fn bar(ctx: &PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                 )
             })
             .inner;
-        if previous.clicked() {
+        if widgets::why_disabled(previous, "No matches").clicked() {
             find.step(false, total);
         }
         ui.add_space(SPACE_XS);

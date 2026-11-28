@@ -123,6 +123,14 @@ pub(super) fn selection_bar(
                     )
                 })
                 .inner;
+            let lift = widgets::why_disabled(
+                lift,
+                if s.editable {
+                    "A cut keeps at least one shot"
+                } else {
+                    super::comments::LOCKED
+                },
+            );
             if lift.clicked() {
                 super::lift_selected(state, s, io);
             }
@@ -239,6 +247,7 @@ pub(super) fn selection_bar(
                 widgets::field_frame(ui, t, field, buf, "Why this shot is here", Some(icons::PEN))
             })
             .inner;
+        let resp = widgets::why_disabled(resp, super::comments::LOCKED);
         if !resp.has_focus() && *buf != shot.note {
             if resp.lost_focus() {
                 let note = buf.clone();
@@ -279,6 +288,7 @@ pub(super) fn selection_bar(
                 )
             })
             .inner;
+        let resp = widgets::why_disabled(resp, super::comments::LOCKED);
         if widgets::tip(
             resp,
             t,

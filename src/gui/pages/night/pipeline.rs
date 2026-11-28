@@ -936,7 +936,7 @@ pub(crate) fn draw(
                 tip.push_str(&format!("\nSkips {}.", skipped.join("; ")));
             }
             let enabled = !all.is_empty() && !busy;
-            let clicked = ui
+            let run = ui
                 .add_enabled_ui(enabled, |ui| {
                     widgets::button_with(
                         ui,
@@ -947,13 +947,16 @@ pub(crate) fn draw(
                     )
                 })
                 .inner
-                .hint(tip)
-                .on_disabled_hover_text(if busy {
+                .hint(tip);
+            let clicked = widgets::why_disabled(
+                run,
+                if busy {
                     "The queue is running"
                 } else {
                     "Everything that can run has run"
-                })
-                .clicked();
+                },
+            )
+            .clicked();
             if clicked {
                 state.enqueue(ctx.jobs, all.clone());
                 state.selected = None;
@@ -1110,17 +1113,24 @@ fn bar(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui, views: Vec<V
                         .max_rect(button)
                         .layout(egui::Layout::left_to_right(egui::Align::Center)),
                 );
-                let pressed = child
-                    .add_enabled_ui(!busy, |ui| widgets::outline_button(ui, theme, label))
-                    .inner
-                    .on_disabled_hover_text("Waits for the step running now")
-                    .clicked();
-                let more_pressed = view.more.as_ref().is_some_and(|(glyph, tip, _)| {
+                const WAITS: &str = "Waits for the step running now";
+                let pressed = widgets::why_disabled(
                     child
-                        .add_enabled_ui(!busy, |ui| widgets::icon_btn(ui, theme, *glyph, tip, ""))
-                        .inner
-                        .on_disabled_hover_text("Waits for the step running now")
-                        .clicked()
+                        .add_enabled_ui(!busy, |ui| widgets::outline_button(ui, theme, label))
+                        .inner,
+                    WAITS,
+                )
+                .clicked();
+                let more_pressed = view.more.as_ref().is_some_and(|(glyph, tip, _)| {
+                    widgets::why_disabled(
+                        child
+                            .add_enabled_ui(!busy, |ui| {
+                                widgets::icon_btn(ui, theme, *glyph, tip, "")
+                            })
+                            .inner,
+                        WAITS,
+                    )
+                    .clicked()
                 });
                 if more_pressed && let Some((_, _, more)) = view.more {
                     clicked_run = Some(more);
