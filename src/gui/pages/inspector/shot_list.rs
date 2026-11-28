@@ -538,7 +538,7 @@ fn section_rows(
     marked: impl Fn(usize) -> bool,
     id_salt: impl egui::AsIdSalt,
 ) -> Vec<egui::Response> {
-    use egui_material3::{ListItem, MaterialList, VisualDensity};
+    use egui_material3::{ListItem, MaterialList};
     // The list insets custom content 16 px at each end.
     let inner = (ui.available_width() - 32.0).max(NUMBER_W * 2.0);
     let id = ui.make_persistent_id(id_salt);
@@ -554,8 +554,7 @@ fn section_rows(
             list.item(
                 ListItem::new(format!("Shot {}", line.k + 1))
                     .dense(true)
-                    .visual_density(VisualDensity::new(0.0, -4.0))
-                    .min_tile_height(height)
+                    .row_height(height)
                     .selected(selected(line.k))
                     .content_ui(move |ui, item| {
                         let needed = paint_row(ui, p, line, on, item.rect);

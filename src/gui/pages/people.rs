@@ -574,15 +574,10 @@ fn card_actions(
     if let (Some(name), Some((old, buffer))) = (&group.name, renaming.as_mut())
         && name == old
     {
-        let rect = view::name_rect(response.rect);
-        let edit = ui
-            .put(
-                rect,
-                egui::TextEdit::singleline(buffer)
-                    .font(theme::font(SMALL))
-                    .id(egui::Id::unique("people-rename")),
-            )
-            .accessible_name(format!("Rename {old}"));
+        // A 24 px field over the 20 px name line.
+        let rect = view::name_rect(response.rect).expand2(egui::vec2(0.0, 2.0));
+        let edit =
+            widgets::field_frame(ui, cx.palette, rect, buffer, &format!("Rename {old}"), None);
         if !edit.has_focus() && !edit.lost_focus() {
             edit.request_focus();
         }

@@ -307,7 +307,7 @@ pub(super) fn segment_rows(
     segs: &[(usize, RowLook)],
     id_salt: impl egui::AsIdSalt,
 ) -> Vec<egui::Response> {
-    use egui_material3::{ListItem, MaterialList, VisualDensity};
+    use egui_material3::{ListItem, MaterialList};
     // Every row's painter needs the thumbnail cache; the rows are built
     // before any of them paints, so they share it.
     let thumbs = std::cell::RefCell::new(thumbs);
@@ -323,8 +323,7 @@ pub(super) fn segment_rows(
             list.item(
                 ListItem::new(name)
                     .dense(true)
-                    .visual_density(VisualDensity::new(0.0, -4.0))
-                    .min_tile_height(ROW)
+                    .row_height(ROW)
                     .selected(look.picked)
                     .content_ui(move |ui, item| {
                         paint_segment(

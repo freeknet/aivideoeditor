@@ -186,7 +186,7 @@ pub fn draw(app: &mut App, ctx: &egui::Context, actions: &mut Vec<Action>) {
 /// the palette before the list sees them, so they move the highlight
 /// whatever has focus.
 fn rows(ui: &mut Ui, shown: &[(usize, &Command<Action>)], selected: usize) -> Option<usize> {
-    use egui_material3::{ListItem, MaterialList, VisualDensity};
+    use egui_material3::{ListItem, MaterialList};
     let list = shown.iter().fold(
         MaterialList::new()
             .id(ui.make_persistent_id("command-palette-rows"))
@@ -197,7 +197,7 @@ fn rows(ui: &mut Ui, shown: &[(usize, &Command<Action>)], selected: usize) -> Op
                 ListItem::new(command.title.clone())
                     .trailing_text(command.hint.clone())
                     .dense(true)
-                    .visual_density(VisualDensity::new(0.0, -4.0))
+                    .row_height(super::theme::CONTROL_HEIGHT)
                     .selected(*index == selected),
             )
         },

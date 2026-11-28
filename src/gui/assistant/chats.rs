@@ -583,36 +583,37 @@ fn list(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui, new_keys: &str) {
                 rows.iter().map(|_| std::cell::Cell::new(None)).collect();
             let shared = std::cell::RefCell::new(&mut *state);
             let shared_ctx = &*ctx;
-            let list = rows.iter().zip(&asked).enumerate().fold(
-                egui_material3::MaterialList::new()
-                    .id(ui.make_persistent_id("assistant-chat-rows"))
-                    .dividers(false)
-                    .fill_width(true),
-                |list, (at, (meta, asked))| {
-                    let active = current.as_ref().is_some_and(|c| c.id == meta.id);
-                    let item = egui_material3::ListItem::new(meta.title.clone());
-                    if renaming == Some(at) {
-                        let shared = &shared;
-                        return list.item(
-                            item.min_tile_height(theme::CONTROL_HEIGHT + SPACE_SM)
-                                .content_ui(move |ui, row| {
-                                    rename_field(
-                                        shared_ctx,
-                                        &mut shared.borrow_mut(),
-                                        ui,
-                                        row.rect.shrink2(Vec2::new(SPACE_XS, 2.0)),
-                                    );
-                                }),
-                        );
-                    }
-                    let enabled = idle || active;
-                    list.item(item.min_tile_height(52.0).selected(active).content_ui(
-                        move |ui, row| {
-                            asked.set(row_content(ui, theme, meta, row.rect, now, enabled));
-                        },
-                    ))
-                },
-            );
+            let list =
+                rows.iter().zip(&asked).enumerate().fold(
+                    egui_material3::MaterialList::new()
+                        .id(ui.make_persistent_id("assistant-chat-rows"))
+                        .dividers(false)
+                        .fill_width(true),
+                    |list, (at, (meta, asked))| {
+                        let active = current.as_ref().is_some_and(|c| c.id == meta.id);
+                        let item = egui_material3::ListItem::new(meta.title.clone());
+                        if renaming == Some(at) {
+                            let shared = &shared;
+                            return list.item(
+                                item.row_height(theme::CONTROL_HEIGHT + SPACE_SM)
+                                    .content_ui(move |ui, row| {
+                                        rename_field(
+                                            shared_ctx,
+                                            &mut shared.borrow_mut(),
+                                            ui,
+                                            row.rect.shrink2(Vec2::new(SPACE_XS, 2.0)),
+                                        );
+                                    }),
+                            );
+                        }
+                        let enabled = idle || active;
+                        list.item(item.row_height(52.0).selected(active).content_ui(
+                            move |ui, row| {
+                                asked.set(row_content(ui, theme, meta, row.rect, now, enabled));
+                            },
+                        ))
+                    },
+                );
             let shown = list.show(ui);
             for (at, ((meta, asked), response)) in
                 rows.iter().zip(&asked).zip(&shown.items).enumerate()

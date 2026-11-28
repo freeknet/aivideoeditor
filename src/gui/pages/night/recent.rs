@@ -494,7 +494,7 @@ pub(crate) fn rows(
     open: impl Fn(&Summary) -> bool,
     id_salt: &str,
 ) -> Vec<bool> {
-    use egui_material3::{ListItem, MaterialList, VisualDensity};
+    use egui_material3::{ListItem, MaterialList};
     let theme = ctx.theme;
     // Every row's painter needs the thumbnail cache; the rows are built
     // before any of them paints, so they share it.
@@ -509,8 +509,7 @@ pub(crate) fn rows(
             list.item(
                 ListItem::new(night.name.clone())
                     .dense(true)
-                    .visual_density(VisualDensity::new(0.0, -2.0))
-                    .min_tile_height(ROW_HEIGHT)
+                    .row_height(ROW_HEIGHT)
                     .selected(open(night))
                     .content_ui(move |ui, item| {
                         paint_row(ui, theme, &mut thumbs.borrow_mut(), night, item.rect);

@@ -851,7 +851,7 @@ fn sections(
     // A Material 3 list, a row per section: its colour, its name (a field
     // while it is renamed) and its bars. Click selects it; double-click or
     // the menu renames it.
-    use egui_material3::{ListItem, MaterialList, VisualDensity};
+    use egui_material3::{ListItem, MaterialList};
     let palette = ctx.theme;
     let focus_rename = std::mem::take(&mut state.focus_rename);
     let mut rename_slot = state.rename.as_mut().map(|(k, text)| (*k, text));
@@ -880,14 +880,14 @@ fn sections(
             list.item(
                 ListItem::new(s.name.clone())
                     .dense(true)
-                    .visual_density(VisualDensity::new(0.0, -4.0))
+                    .row_height(theme::CONTROL_HEIGHT)
                     .content_ui(move |ui, _item| {
                         ui.spacing_mut().item_spacing.x = theme::SPACE_SM;
                         let colour = section_color(palette, &s.name);
                         widgets::swatch(ui, palette, colour, egui::vec2(4.0, 16.0));
                         match editing {
                             Some(text) => {
-                                let response = widgets::input(text)
+                                let response = widgets::dense_input(text, 24.0)
                                     .label("Section name")
                                     .width(140.0)
                                     .show(ui)

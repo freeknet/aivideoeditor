@@ -894,11 +894,10 @@ pub fn lucide(glyph: char) -> egui_material3::Icon {
 }
 
 /// egui-material3's standard icon button, square-cornered, `size` across,
-/// drawing the Lucide `glyph`: a toggle when `on` is given. Material gives
-/// every icon button a 48 dp touch target; in ave's dense rows that target
-/// would overlap the neighbouring controls, so the button is laid out in a
-/// child clipped to its visible square, which is also where egui clips its
-/// hit area. The focus ring the clip cuts off is painted again outside it.
+/// drawing the Lucide `glyph`: a toggle when `on` is given. ave's rows are
+/// dense and pointer-driven, so the button takes exactly its square (no
+/// 48 dp touch target overlapping its neighbours), and its glyph is the
+/// app's 16 px Lucide size.
 fn material_icon_button(
     ui: &mut Ui,
     theme: &Palette,
@@ -908,44 +907,22 @@ fn material_icon_button(
     on: Option<bool>,
     size: f32,
 ) -> Response {
-    use egui_material3::iconbutton::{
-        IconButtonShape, IconButtonSize, MIN_TOUCH_TARGET, MaterialIconButton,
-    };
-    let (slot, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
+    use egui_material3::iconbutton::{IconButtonShape, IconButtonSize, MaterialIconButton};
     let enabled = ui.is_enabled();
     let mut selected = on.unwrap_or(false);
     let mut button = MaterialIconButton::standard(lucide(glyph))
         .size(IconButtonSize::Custom(size))
         .shape(IconButtonShape::Square)
+        .icon_size(icons::SIZE.min(size))
+        .min_touch_target(false)
         .label(label)
         .enabled(enabled);
     if on.is_some() {
         button = button.toggleable(&mut selected);
     }
-    let target = Rect::from_center_size(slot.center(), Vec2::splat(size.max(MIN_TOUCH_TARGET)));
-    let mut child = ui.new_child(
-        egui::UiBuilder::new()
-            .max_rect(target)
-            .layout(Layout::left_to_right(Align::Min)),
-    );
-    child.set_clip_rect(slot.intersect(ui.clip_rect()));
-    let response = child.add(button);
-    if response.has_focus() {
-        let radius = IconButtonSize::Custom(size)
-            .metrics()
-            .square_shape
-            .radius(slot);
-        egui_material3::paint::paint_focus_ring(
-            ui.painter(),
-            slot,
-            CornerRadius::same(radius.round().clamp(0.0, 255.0) as u8),
-            egui_material3::MaterialTheme::of(ui.ctx())
-                .color(egui_material3::tokens::ColorRole::Secondary),
-        );
-    }
+    let response = ui.add(button);
     tip(response, theme, label, keys)
 }
-
 /// A ghost dropdown trigger: `label` in 12 px Medium, muted until hovered
 /// (or `open`), and a trailing chevron, 28 px tall, 8 px corners. Hand the
 /// response to `egui::Popup::menu` for its menu. `tooltip` names it.
@@ -1147,6 +1124,17 @@ pub fn tip(response: Response, _theme: &Palette, label: &str, keys: &str) -> Res
     response
 }
 
+/// A plain tooltip that follows the pointer across `response`, for wide
+/// targets where what it says depends on where the pointer is (a
+/// timeline, a transport): Material's plain tooltip anchored to the
+/// pointer. `name` is what screen readers are told; `add_contents` lays
+/// out the text, in the tooltip's own ink ([`egui::Visuals::text_color`]).
+pub fn pointer_tip(response: &Response, name: &str, add_contents: impl FnOnce(&mut Ui)) {
+    // Whether it showed changes nothing for the caller.
+    let _ = egui_material3::MaterialTooltip::new(name)
+        .anchor(egui_material3::TooltipAnchor::Pointer)
+        .show_for_with(response, add_contents);
+}
 /// A rich tooltip on `response`: Material's rich tooltip (the raised
 /// surface container) holding whatever `add_contents` lays out, for a
 /// preview with several lines. `name` is what screen readers are told.
@@ -1474,83 +1462,54 @@ pub fn number<'a, N: egui::emath::Numeric>(
         .compact(true)
 }
 
-/// A hand-placed field in a row too short for [`input`]'s 32 px (a 24 or
-/// 28 px header or toolbar), optionally led by a Lucide icon: the field
-/// egui-material3 cannot draw yet, its own fill, hairline and focus ring.
-/// [`text_field`] at a given `rect`, with an optional leading icon: for a
-/// field placed by hand (the top bar's search). A field as tall as
-/// [`theme::BAR_CONTROL`] takes 14 px text, 12 px padding and a 16 px
-/// icon, as Selects' search pill; a smaller one 12 px text. Returns the
-/// text edit's response.
+/// Material's outlined text field `height` tall for a row too short for
+/// [`input`]'s 32 px: the 28 and 24 dp desktop densities (or that height
+/// exactly), with 14 px text in a field as tall as [`theme::BAR_CONTROL`]
+/// and 12 px in a shorter one. A dense field paints no floating label: a
+/// `label` becomes the placeholder and stays the accessible name. Finish
+/// it with `.show(ui)`.
+pub fn dense_input(text: &mut String, height: f32) -> egui_material3::MaterialInput<'_> {
+    let field = egui_material3::MaterialInput::outlined(text);
+    let field = if (height - egui_material3::input::DESKTOP_DENSITY_28).abs() < 0.5 {
+        field.density(-4)
+    } else if (height - egui_material3::input::DESKTOP_DENSITY_24).abs() < 0.5 {
+        field.density(-5)
+    } else {
+        field.height(height)
+    };
+    let size = if height >= theme::BAR_CONTROL {
+        theme::LARGE_SIZE
+    } else {
+        theme::BODY_SIZE
+    };
+    field.font(theme::font(size))
+}
+
+/// [`dense_input`] placed at `rect` (a 24 or 28 px header or toolbar row,
+/// the top bar), `hint` as its placeholder and accessible name, optionally
+/// led by a Lucide icon. Returns the text's response.
 pub fn field_frame(
     ui: &mut Ui,
-    theme: &Palette,
+    _theme: &Palette,
     rect: Rect,
     text: &mut String,
     hint: &str,
     leading: Option<char>,
 ) -> Response {
-    let large = rect.height() >= theme::BAR_CONTROL;
-    let (size, pad, icon_size) = if large {
-        (theme::LARGE_SIZE, SPACE_MD, icons::SIZE)
-    } else {
-        (theme::BODY_SIZE, SPACE_SM, icons::SMALL)
-    };
-    ui.painter().rect_filled(
-        rect,
-        CornerRadius::same(theme::RADIUS_MD),
-        theme::ink(theme, theme::INK_05),
-    );
-    let left = if leading.is_some() {
-        pad + icon_size + SPACE_SM
-    } else {
-        pad + 2.0
-    };
-    let edit = egui::TextEdit::singleline(text)
-        .hint_text(egui::RichText::new(hint).color(theme::rgb(theme.text_muted)))
-        .font(theme::font(size))
-        // A frame of our own replaces the theme's, margin included: the
-        // fill and outline are painted around the edit, not by it.
-        .frame(egui::Frame::NONE.inner_margin(egui::Margin {
-            left: theme::as_margin(left),
-            right: theme::as_margin(SPACE_SM),
-            top: 0,
-            bottom: 0,
-        }))
-        .min_size(rect.size())
-        .align(Align2::LEFT_CENTER)
-        .desired_width(rect.width());
-    let response = ui.put(rect, edit);
-    let hovered = response.hovered();
-    let stroke = if response.has_focus() {
-        Stroke::new(1.0, theme::ring(theme))
-    } else if hovered {
-        Stroke::new(1.0, theme::ink(theme, theme::INK_20))
-    } else {
-        theme::input_line(theme)
-    };
-    ui.painter().rect_stroke(
-        rect,
-        CornerRadius::same(theme::RADIUS_MD),
-        stroke,
-        egui::StrokeKind::Inside,
-    );
+    let mut field = dense_input(text, rect.height())
+        .label(hint)
+        .width(rect.width());
     if let Some(glyph) = leading {
-        let slot = Rect::from_center_size(
-            egui::pos2(rect.left() + pad + icon_size / 2.0, rect.center().y),
-            Vec2::splat(icon_size),
-        );
-        icons::paint(
-            ui.painter(),
-            slot,
-            glyph,
-            icon_size,
-            theme::rgb(theme.text_muted),
-        );
+        field = field.leading_icon(lucide(glyph));
     }
-    response
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(Layout::left_to_right(Align::Center)),
+        |ui| field.show(ui).response,
+    )
+    .inner
 }
-
 /// The id a [`menu`] anchored to `anchor` keeps its open state under,
 /// unless it is given one with [`Menu::id`].
 #[must_use]
