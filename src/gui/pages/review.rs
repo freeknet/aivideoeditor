@@ -2978,6 +2978,25 @@ mod tests {
 
             press_with(&mut h, Modifiers::SHIFT, Key::R);
             assert!(app(&h)?.ref_popup, "Shift+R still offers the intents");
+            // The intents are a menu worked from the keyboard: the first is
+            // highlighted, Down moves to "keep", Enter takes it.
+            let before = app(&h)?.refs.len();
+            press(&mut h, Key::ArrowDown);
+            press(&mut h, Key::Enter);
+            let a = app(&h)?;
+            assert!(!a.ref_popup, "picking an intent closes the menu");
+            let added = a.refs.get(before..).unwrap_or_default();
+            assert!(
+                !added.is_empty()
+                    && added
+                        .iter()
+                        .all(|r| r.modifier == crate::refs::Modifier::Keep),
+                "the selection is mentioned as keep: {added:?}"
+            );
+            press_with(&mut h, Modifiers::SHIFT, Key::R);
+            assert!(app(&h)?.ref_popup, "Shift+R opens it again");
+            press(&mut h, Key::Escape);
+            assert!(!app(&h)?.ref_popup, "Escape closes it");
             Ok(())
         }
 

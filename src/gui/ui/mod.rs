@@ -117,7 +117,8 @@ pub fn draw(app: &mut App, ui: &mut Ui) -> Vec<Action> {
     theme::apply(ui.ctx(), &app.theme);
     motion::set_reduced(app.reduce_motion);
 
-    let blocked = app.settings_open || app.commands.open || app.shortcuts_open;
+    // The Shift+R intent menu too: its arrow keys and Enter are its own.
+    let blocked = app.settings_open || app.commands.open || app.shortcuts_open || app.ref_popup;
     if !blocked {
         shortcuts(ui, app.keymap, &mut actions);
     }

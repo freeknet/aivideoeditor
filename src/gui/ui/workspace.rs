@@ -565,27 +565,36 @@ fn reference_popup(app: &mut App, ctx: &egui::Context, actions: &mut Vec<Action>
     if !app.ref_popup {
         return;
     }
+    // A Material menu centred in the window (it has no control to hang
+    // from): the first intent is highlighted, so Enter takes it, the arrow
+    // keys move, typing a word's first letter jumps to it, and Escape or a
+    // click outside closes it.
     let mut open = true;
-    let mut chosen = None;
-    egui::Window::new("Mention in chat as…")
-        .collapsible(false)
-        .resizable(false)
-        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-        .open(&mut open)
-        .show(ctx, |ui| {
-            ui.label(format!("{} selected", app.selection.len()));
-            for m in Modifier::ALL {
-                if ui.button(widgets::mention_label(m)).clicked() {
-                    chosen = Some(m);
-                }
-            }
-        });
-    if let Some(m) = chosen {
+    let menu = Modifier::ALL.iter().fold(
+        egui_material3::MaterialMenu::new(egui::Id::unique("mention-intent-menu"), &mut open)
+            .default_focus(egui_material3::FocusState::FirstItem)
+            .group(format!(
+                "{} selected \u{b7} mention in chat as",
+                app.selection.len()
+            )),
+        |menu, m| {
+            let item = egui_material3::menu_item(m.label());
+            menu.item(if m.prefix().is_empty() {
+                item
+            } else {
+                item.trailing_text(m.prefix())
+            })
+        },
+    );
+    let shown = menu.show(ctx);
+    // The group label is entry 0; the intents follow in order.
+    if let Some(m) = shown
+        .activated
+        .and_then(|i| i.checked_sub(1))
+        .and_then(|i| Modifier::ALL.get(i))
+    {
         let picked: Vec<Reference> = app.selection.clone();
-        actions.extend(widgets::mention_actions(&picked, m));
-        open = false;
-    }
-    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        actions.extend(widgets::mention_actions(&picked, *m));
         open = false;
     }
     app.ref_popup = open;
