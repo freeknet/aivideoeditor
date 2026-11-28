@@ -3,18 +3,24 @@
 // Description:  The Shots tab's list: dense, virtualised rows of the shot-log
 //               numbers, columns dropped by priority when the pane is narrow.
 //
-// Dependencies: egui; super (Paint, Item, Drawn, Sort), crate::gui::thumbs
+// Dependencies: egui, egui_material3; super (Paint, Item, Drawn, Sort),
+//               crate::gui::thumbs
 // ============================================================================
 
 //! The list view: one row per result with the numbers the shot log prints.
 //! Columns that do not fit are dropped, least useful first; the caption
 //! takes whatever width is left. Clicking a sortable header sorts by it.
 //!
-//! Rows are Selects' list rows: 28 px, 2 px apart, 8 px corners, a 16 px
-//! thumbnail, the name in 14 px and the numbers in 12 px tabular, muted.
+//! Rows are MaterialList's virtualised rows, 28 px each (an act's header
+//! is one too): only those in view are laid out. Each paints Selects' list
+//! row over its item: a 16 px thumbnail, the name in 14 px and the numbers
+//! in 12 px tabular, muted.
 
 use crate::gui::ui::hint::Hint as _;
+use std::cell::RefCell;
+
 use egui::{CornerRadius, Rect, Sense, StrokeKind, pos2, vec2};
+use egui_material3::{ListItem, MaterialList};
 
 use super::acts::{self, Row};
 use super::{Drawn, Item, Paint, Sort, Stack};
@@ -26,9 +32,6 @@ use crate::search::marks::Verdict;
 
 /// Row height (Selects' `h-7`).
 const ROW_H: f32 = theme::CONTROL_HEIGHT;
-
-/// Gap between rows.
-const ROW_GAP: f32 = 2.0;
 
 /// A row's inner padding at each end.
 const PAD_X: f32 = SPACE_XS + 2.0;
@@ -223,16 +226,18 @@ pub(super) fn draw(
         .hline(head.x_range(), head.bottom() - 0.5, theme::ink_line(theme));
 
     let n = paint.items.len();
+    // Every row (an act's header or a result) is one 28 px list row, so
+    // the list can be MaterialList's virtualised rows: uniform, no gaps.
     let layout = acts::layout(
         paint.acts,
         n,
         1,
         acts::Metrics {
             header: ROW_H,
-            header_gap: ROW_GAP,
-            header_lead: SPACE_SM,
+            header_gap: 0.0,
+            header_lead: 0.0,
             tiles: ROW_H,
-            tiles_gap: ROW_GAP,
+            tiles_gap: 0.0,
         },
     );
     let mut area = egui::ScrollArea::vertical()
@@ -244,39 +249,28 @@ pub(super) fn draw(
             area = area.vertical_scroll_offset(off);
         }
     }
+    let thumbs = RefCell::new(thumbs);
+    let headers = RefCell::new((Vec::new(), None));
     let mut responses = Vec::new();
-    let mut folds = Vec::new();
-    let mut scope = None;
     ui.add_space(SPACE_XS);
     let out = area.show_viewport(ui, |ui, viewport| {
-        let origin = ui.max_rect().min;
-        ui.set_min_size(vec2(inner_w, layout.total));
-        for k in layout.visible(viewport.min.y, viewport.max.y) {
-            let (top, h) = layout.span(k);
-            let rect = Rect::from_min_size(origin + vec2(0.0, top), vec2(inner_w, h));
-            match layout.rows.get(k) {
-                Some(Row::Header(a)) => {
-                    let Some(act) = paint.acts.get(*a) else {
-                        continue;
-                    };
-                    let head = acts::header(ui, paint, act, rect);
-                    if head.fold {
-                        folds.push(act.n);
-                    }
-                    if head.scope {
-                        scope = Some(act.n);
-                    }
-                }
-                Some(Row::Tiles { start, .. }) => {
-                    let i = *start;
-                    if let Some(item) = paint.items.get(i) {
-                        responses.push((i, row(ui, paint, thumbs, item, rect, &cols, i)));
-                    }
-                }
-                None => {}
+        ui.set_width(inner_w);
+        let (thumbs, headers, cols) = (&thumbs, &headers, cols.as_slice());
+        let shown = MaterialList::new()
+            .id(egui::Id::unique("review-list-rows"))
+            .dividers(false)
+            .show_rows(ui, viewport, layout.rows.len(), ROW_H, |k| {
+                list_row(paint, layout.rows.get(k).copied(), thumbs, headers, cols)
+            });
+        for (k, response) in shown.rows {
+            if let Some(Row::Tiles { start, .. }) = layout.rows.get(k)
+                && let Some(item) = paint.items.get(*start)
+            {
+                responses.push((*start, super::tooltip_on(response, paint, item)));
             }
         }
     });
+    let (folds, scope) = headers.into_inner();
     Drawn {
         responses,
         hover_scrub: None,
@@ -291,8 +285,60 @@ pub(super) fn draw(
     }
 }
 
-/// Paints one row: Selects' list row, 28 px with 8 px corners, `#262626`
-/// under the pointer and `#525252` when selected.
+/// What an act header clicked this frame: the acts to fold or unfold, and
+/// the act to scope the search to.
+type Headers = RefCell<(Vec<usize>, Option<usize>)>;
+
+/// List row `kind`: an act's header, or a result painted by [`row`] over a
+/// Material list item (which gives it its hover, selection and focus).
+fn list_row<'a>(
+    paint: &'a Paint<'a>,
+    kind: Option<Row>,
+    thumbs: &'a RefCell<&mut Thumbs>,
+    headers: &'a Headers,
+    cols: &'a [Col],
+) -> ListItem<'a> {
+    let theme = paint.theme;
+    match kind {
+        Some(Row::Header(a)) => {
+            let Some(act) = paint.acts.get(a) else {
+                return ListItem::new("").enabled(false);
+            };
+            ListItem::new(act.label()).content_ui(move |ui, state| {
+                let head = acts::header(ui, paint, act, state.rect);
+                let mut headers = headers.borrow_mut();
+                if head.fold {
+                    headers.0.push(act.n);
+                }
+                if head.scope {
+                    headers.1 = Some(act.n);
+                }
+            })
+        }
+        Some(Row::Tiles { start, .. }) => {
+            let (Some(item), Some(s)) = (
+                paint.items.get(start),
+                paint
+                    .items
+                    .get(start)
+                    .and_then(|item| paint.night.index.segments.get(item.seg)),
+            ) else {
+                return ListItem::new("").enabled(false);
+            };
+            ListItem::new(s.id.clone())
+                .dense(true)
+                .selected(paint.selected.contains(&s.id))
+                .selected_tile_color(theme::selected_row(theme))
+                .selected_color(theme::rgb(theme.text))
+                .content_ui(move |ui, state| {
+                    row(ui, paint, &mut thumbs.borrow_mut(), item, state.rect, cols);
+                })
+        }
+        None => ListItem::new("").enabled(false),
+    }
+}
+/// Paints one result's cells over its list row `rect`: Selects' list row,
+/// a 16 px thumbnail, the name in 14 px and the numbers in 12 px tabular.
 fn row(
     ui: &mut egui::Ui,
     paint: &Paint<'_>,
@@ -300,31 +346,13 @@ fn row(
     item: &Item,
     rect: Rect,
     cols: &[Col],
-    i: usize,
-) -> egui::Response {
+) {
     let theme = paint.theme;
     let Some(s) = paint.night.index.segments.get(item.seg) else {
-        return ui.interact(
-            rect,
-            egui::Id::unique(("review-row-missing", i)),
-            Sense::hover(),
-        );
+        return;
     };
-    let response = ui.interact(
-        rect,
-        egui::Id::unique(("review-row", &s.id)),
-        Sense::click(),
-    );
-    let selected = paint.selected.contains(&s.id);
-    let hovered = response.hovered();
     let mark = paint.night.marks.get(&s.id);
     let painter = ui.painter_at(rect);
-    let radius = CornerRadius::same(theme::RADIUS_MD);
-    if selected {
-        painter.rect_filled(rect, radius, theme::selected_row(theme));
-    } else if hovered {
-        painter.rect_filled(rect, radius, theme::rgb(theme.raised));
-    }
     let rejected = mark.verdict == Some(Verdict::Reject);
     let ink = if rejected {
         theme::rgb(theme.text_muted)
@@ -524,7 +552,6 @@ fn row(
         muted,
         rect.right() - x - CELL_PAD - PAD_X,
     );
-    super::tooltip_on(response, paint, item)
 }
 
 #[cfg(test)]
