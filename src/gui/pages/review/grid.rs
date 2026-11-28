@@ -22,7 +22,7 @@
 use crate::gui::ui::hint::Hint as _;
 use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 
-use super::acts::{self, Row};
+use super::acts;
 use super::{Drawn, Item, Paint, Stack};
 use crate::gui::thumbs::Thumbs;
 use crate::gui::ui::icons;
@@ -51,6 +51,39 @@ const INFO_H: f32 = SPACE_XS + NAME_H + 2.0 + CAPTION_H;
 /// Positions a hover scrub snaps to across a card, so scrubbing reuses
 /// decoded frames.
 const SCRUB_STEPS: f32 = 10.0;
+
+/// Space under an act's header.
+const HEADER_GAP: f32 = SPACE_SM;
+
+/// Extra space above an act's header that is not the first.
+const HEADER_LEAD: f32 = SPACE_XS;
+
+/// One run of the grid: an act's header (none when ungrouped) and the
+/// results under it, which `show_rows` lays out in rows of tiles.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Block {
+    /// The act heading the run, an index into the acts.
+    act: Option<usize>,
+    /// The results in the run.
+    items: std::ops::Range<usize>,
+}
+
+/// The grid's runs for `n` results: one per act, or one for them all.
+fn blocks(acts: &[acts::Act], n: usize) -> Vec<Block> {
+    if acts.is_empty() {
+        return vec![Block {
+            act: None,
+            items: 0..n,
+        }];
+    }
+    acts.iter()
+        .enumerate()
+        .map(|(k, act)| Block {
+            act: Some(k),
+            items: act.items.start.min(n)..act.items.end.min(n),
+        })
+        .collect()
+}
 
 /// Columns for a grid `inner` points wide whose cards are at most `card`
 /// wide: Selects' `max(1, ceil((width + gap) / (card + gap)))`, so cards
@@ -81,8 +114,8 @@ pub(super) fn draw(
         cols,
         acts::Metrics {
             header: theme::CONTROL_HEIGHT,
-            header_gap: SPACE_SM,
-            header_lead: SPACE_XS,
+            header_gap: HEADER_GAP,
+            header_lead: HEADER_LEAD,
             tiles: row_h,
             tiles_gap: GAP_Y,
         },
@@ -105,50 +138,78 @@ pub(super) fn draw(
     ui.add_space(SPACE_SM);
     let full_w = inner_w + OUTLINE_ROOM * 2.0;
     let out = area.show_viewport(ui, |ui, viewport| {
-        let origin = ui.max_rect().min;
         ui.set_min_size(vec2(full_w, layout.total));
-        for k in layout.visible(viewport.min.y, viewport.max.y) {
-            let (top, h) = layout.span(k);
-            let rect = Rect::from_min_size(origin + vec2(0.0, top), vec2(full_w, h));
-            match layout.rows.get(k) {
-                Some(Row::Header(a)) => {
-                    let Some(act) = paint.acts.get(*a) else {
-                        continue;
-                    };
-                    let head = acts::header(ui, paint, act, rect.shrink2(vec2(OUTLINE_ROOM, 0.0)));
-                    if head.fold {
-                        folds.push(act.n);
+        // The cards sit OUTLINE_ROOM in from both sides. The child starts at
+        // the content's top, so `viewport` stays in its coordinates.
+        let mut inner = ui.max_rect();
+        inner.min.x += OUTLINE_ROOM;
+        inner.max.x = inner.min.x + inner_w;
+        let clip = ui.clip_rect();
+        let seen = viewport.translate(ui.max_rect().min.to_vec2());
+        ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
+            ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+            for (k, block) in blocks(paint.acts, n).into_iter().enumerate() {
+                if let Some(a) = block.act {
+                    if k > 0 {
+                        ui.add_space(HEADER_LEAD);
                     }
-                    if head.scope {
-                        scope = Some(act.n);
-                    }
-                }
-                Some(Row::Tiles { start, end }) => {
-                    for i in *start..*end {
-                        let Some(item) = paint.items.get(i) else {
-                            break;
-                        };
-                        let c = i - start;
-                        let r = Rect::from_min_size(
-                            rect.min + vec2(OUTLINE_ROOM + c as f32 * (w + GAP_X), 0.0),
-                            vec2(w, row_h),
-                        );
-                        let drawn = card(ui, paint, thumbs, item, r, thumb_h);
-                        if let Some(t) = drawn.scrub {
-                            hover_scrub = Some((i, t));
+                    let rect =
+                        Rect::from_min_size(ui.cursor().min, vec2(inner_w, theme::CONTROL_HEIGHT));
+                    ui.add_space(theme::CONTROL_HEIGHT + HEADER_GAP);
+                    if rect.intersects(seen)
+                        && let Some(act) = paint.acts.get(a)
+                    {
+                        let head = acts::header(ui, paint, act, rect);
+                        if head.fold {
+                            folds.push(act.n);
                         }
-                        if drawn.toggled {
-                            toggles.push(i);
+                        if head.scope {
+                            scope = Some(act.n);
                         }
-                        if drawn.refer {
-                            refers.push(i);
-                        }
-                        responses.push((i, drawn.response));
                     }
                 }
-                None => {}
+                let rows = block.items.len().div_ceil(cols);
+                if rows == 0 {
+                    continue;
+                }
+                // Rows sit GAP_Y apart but the grid's gutter is GAP_X (the
+                // gap between columns), so each row of tiles carries the rest.
+                egui_material3::MaterialLayoutGrid::new()
+                    .id(egui::Id::unique(("review-grid-rows", block.act)))
+                    .columns(cols)
+                    .gutter(GAP_X)
+                    .margin(0.0)
+                    .show_rows(ui, viewport, rows, row_h + GAP_Y - GAP_X, |row, r| {
+                        let start = block.items.start + r * cols;
+                        let end = (start + cols).min(block.items.end);
+                        for i in start..end {
+                            let Some(item) = paint.items.get(i) else {
+                                break;
+                            };
+                            // Unnamed: the card inside is the button that
+                            // carries the shot's name.
+                            row.cell(1, |ui| {
+                                let r = Rect::from_min_size(ui.max_rect().min, vec2(w, row_h));
+                                // The selection ring and the hover wash
+                                // reach past the tile.
+                                ui.set_clip_rect(r.expand(OUTLINE_ROOM + 2.0).intersect(clip));
+                                let drawn = card(ui, paint, thumbs, item, r, thumb_h);
+                                if let Some(t) = drawn.scrub {
+                                    hover_scrub = Some((i, t));
+                                }
+                                if drawn.toggled {
+                                    toggles.push(i);
+                                }
+                                if drawn.refer {
+                                    refers.push(i);
+                                }
+                                responses.push((i, drawn.response));
+                            });
+                        }
+                    });
+                ui.add_space(GAP_X);
             }
-        }
+        });
     });
     Drawn {
         responses,
@@ -534,7 +595,64 @@ pub(super) fn q_color(theme: &crate::theme::Palette, q: f32) -> Color32 {
 
 #[cfg(test)]
 mod tests {
-    use super::columns;
+    use super::{GAP_X, GAP_Y, HEADER_GAP, HEADER_LEAD, acts, blocks, columns};
+
+    fn act(n: usize, items: std::ops::Range<usize>) -> acts::Act {
+        acts::Act {
+            n,
+            title: "Act".into(),
+            span: String::new(),
+            clips: 1,
+            why: String::new(),
+            shots: items.len(),
+            items,
+            folded: false,
+        }
+    }
+
+    /// The height the runs take stacked the way `draw` stacks them.
+    fn stacked(acts: &[acts::Act], n: usize, cols: usize, header: f32, tiles: f32) -> f32 {
+        let mut y = 0.0;
+        for (k, block) in blocks(acts, n).iter().enumerate() {
+            if block.act.is_some() {
+                if k > 0 {
+                    y += HEADER_LEAD;
+                }
+                y += header + HEADER_GAP;
+            }
+            let rows = block.items.len().div_ceil(cols);
+            if rows > 0 {
+                // What show_rows allocates, then the gap under the last row.
+                let stride = tiles + GAP_Y - GAP_X + GAP_X;
+                y += rows as f32 * stride - GAP_X + GAP_X;
+            }
+        }
+        y
+    }
+
+    #[test]
+    fn stacked_runs_line_up_with_the_act_layout() -> anyhow::Result<()> {
+        let m = acts::Metrics {
+            header: 28.0,
+            header_gap: HEADER_GAP,
+            header_lead: HEADER_LEAD,
+            tiles: 120.0,
+            tiles_gap: GAP_Y,
+        };
+        let grouped = [act(1, 0..5), act(2, 5..5), act(3, 5..12)];
+        for (acts, n) in [(&grouped[..], 12), (&[][..], 12), (&[][..], 0)] {
+            for cols in 1..6 {
+                let want = acts::layout(acts, n, cols, m).total;
+                let got = stacked(acts, n, cols, m.header, m.tiles);
+                assert!(
+                    (want - got).abs() < 0.01,
+                    "{} acts, {cols} columns: layout {want}, stacked {got}",
+                    acts.len()
+                );
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn cards_never_grow_past_their_width() -> anyhow::Result<()> {

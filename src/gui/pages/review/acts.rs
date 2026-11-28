@@ -290,23 +290,6 @@ impl Layout {
         )
     }
 
-    /// The rows that overlap `y0..y1` (content points).
-    pub(super) fn visible(&self, y0: f32, y1: f32) -> Range<usize> {
-        // The first row ending at or below y0: bottoms only grow.
-        let (mut first, mut hi) = (0, self.tops.len());
-        while first < hi {
-            let mid = first + (hi - first) / 2;
-            let (top, h) = self.span(mid);
-            if top + h < y0 {
-                first = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
-        let last = self.tops.partition_point(|t| *t < y1);
-        first..last.max(first)
-    }
-
     /// The row result `item` is in.
     pub(super) fn row_of(&self, item: usize) -> Option<usize> {
         self.rows
@@ -574,7 +557,7 @@ mod tests {
     }
 
     #[test]
-    fn layout_places_rows_by_kind_and_finds_the_visible_ones() -> anyhow::Result<()> {
+    fn layout_places_rows_by_kind() -> anyhow::Result<()> {
         let acts = [act(1, 0..5), act(2, 5..7)];
         let l = layout(&acts, 7, 3, M);
         assert_eq!(l.span(0), (0.0, 28.0), "the first header at the top");
@@ -590,9 +573,6 @@ mod tests {
             "a later header gets its lead above it"
         );
         assert_eq!(l.total, 272.0 + 28.0 + 8.0 + 100.0 + 16.0, "content height");
-        assert_eq!(l.visible(0.0, 30.0), 0..1, "only the first header");
-        assert_eq!(l.visible(130.0, 280.0), 1..4, "rows overlapping the window");
-        assert_eq!(l.visible(1000.0, 1200.0), 5..5, "nothing below the end");
         assert_eq!(l.row_of(6), Some(4), "result 6 is in the last row");
         assert_eq!(l.row_of(9), None, "no such result");
         Ok(())
