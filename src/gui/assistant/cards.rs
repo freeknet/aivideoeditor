@@ -306,11 +306,11 @@ fn aspect_label(a: Aspect) -> &'static str {
     }
 }
 
-/// Selects' option-card frame: radius 14, a `tone-700` hairline, the panel
-/// fill, padding 10 × 12.
-fn card_frame(theme: &Palette) -> egui::Frame {
+/// Selects' option-card frame: radius 14, a `tone-700` hairline, the fill
+/// of the surface it sits on, padding 10 × 12.
+fn card_frame(theme: &Palette, ctx: &egui::Context) -> egui::Frame {
     egui::Frame::new()
-        .fill(theme::rgb(theme.panel))
+        .fill(theme::current_surface(ctx))
         .stroke(Stroke::new(1.0, theme::accent_fill(theme)))
         .corner_radius(CornerRadius::same(theme::RADIUS_XL))
         .inner_margin(theme::margin_xy(SPACE_MD, 10.0))
@@ -337,7 +337,7 @@ pub(super) fn first_cut(
     selection: &[Reference],
 ) -> Option<Choice> {
     let mut choice = None;
-    card_frame(theme).show(ui, |ui| {
+    card_frame(theme, ui.ctx()).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.spacing_mut().item_spacing = Vec2::new(SPACE_XS, SPACE_SM);
         ui.horizontal(|ui| {
@@ -747,6 +747,7 @@ pub(super) fn approval(ui: &mut Ui, theme: &Palette, a: &Approval) -> Option<Cho
                 let go = ui
                     .add_enabled_ui(!blocked, |ui| widgets::primary_button(ui, theme, "Approve"))
                     .inner;
+                let go = widgets::why_disabled(go, "This step cannot start; the reason is above");
                 if widgets::tip(go, theme, "Start it; progress shows in the chat", "").clicked() {
                     choice = Some(Choice::Go);
                 }

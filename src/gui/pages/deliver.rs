@@ -446,6 +446,7 @@ fn summary(ctx: &PageCtx<'_>, state: &mut State, ui: &mut egui::Ui, rows: &[Row]
                     widgets::icon_btn(ui, theme, icons::ROTATE_CCW, "Clear the ticks", "")
                 })
                 .inner;
+            let clear = widgets::why_disabled(clear, "Nothing is ticked");
             if clear.clicked() {
                 state.ticked.clear();
             }
@@ -460,6 +461,7 @@ fn summary(ctx: &PageCtx<'_>, state: &mut State, ui: &mut egui::Ui, rows: &[Row]
                     )
                 })
                 .inner;
+            let tick = widgets::why_disabled(tick, "No cut passes its check yet");
             if tick.clicked() {
                 state.ticked.extend(passing.iter().cloned());
             }
@@ -884,6 +886,7 @@ fn options(ctx: &PageCtx<'_>, state: &mut State, ui: &mut egui::Ui, out: &Path) 
                     )
                 })
                 .inner;
+            let open = widgets::why_disabled(open, "The folder is made by the first render");
             if open.clicked() {
                 files::open_folder(out);
             }

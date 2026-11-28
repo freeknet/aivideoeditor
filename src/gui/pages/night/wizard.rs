@@ -410,7 +410,7 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
         stepper(ctx, state, ui);
         ui.add_space(theme::SPACE_LG);
         egui::Frame::new()
-            .fill(theme::rgb(theme.panel))
+            .fill(theme::surface(ui.ctx(), theme::Surface::Content))
             .stroke(egui::Stroke::new(1.0, theme::accent_fill(theme)))
             .corner_radius(egui::CornerRadius::same(theme::RADIUS_XL))
             .inner_margin(theme::margin(theme::SPACE_LG + theme::SPACE_XS))
@@ -465,6 +465,7 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
                                         )
                                     })
                                     .inner
+                                    .on_disabled_hover_text("No analysis steps to run")
                                     .clicked();
                                 ui.label(
                                     egui::RichText::new(if approval.reading {

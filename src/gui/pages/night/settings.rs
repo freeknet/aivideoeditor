@@ -775,6 +775,7 @@ fn template_section(ui: &mut egui::Ui, theme: &crate::theme::Palette, state: &mu
                 .add_enabled_ui(!name.is_empty(), |ui| widgets::outline_button(ui, theme, "Save template"))
                 .inner
                 .hint("Keep this project's deliverables, rules, footage words and measures as a template of your own")
+                .on_disabled_hover_text("Name the template first")
                 .clicked()
             {
                 state.template_undo = None;

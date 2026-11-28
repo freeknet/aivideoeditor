@@ -430,7 +430,9 @@ pub(super) fn menu(ui: &mut Ui, t: &Palette, info: &MenuInfo) -> Option<Pick> {
             if older.is_empty() {
                 ui.horizontal(|ui| {
                     ui.add_space(theme::SPACE_SM);
-                    ui.label(egui::RichText::new("No earlier versions").color(theme::ink(t, 102)));
+                    ui.label(
+                        egui::RichText::new("No earlier versions").color(theme::rgb(t.text_muted)),
+                    );
                 });
             }
             egui::ScrollArea::vertical()
@@ -617,7 +619,7 @@ pub(super) fn view(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut U
         .fold(0.1_f32, f32::max);
 
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, CornerRadius::ZERO, theme::rgb(t.panel));
+    painter.rect_filled(rect, CornerRadius::ZERO, theme::current_surface(ui.ctx()));
 
     // Toolbar.
     let bar = Rect::from_min_size(rect.min, vec2(rect.width(), BAR_H));
@@ -674,6 +676,14 @@ pub(super) fn view(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut U
                         )
                     })
                     .inner;
+                let adopt = widgets::why_disabled(
+                    adopt,
+                    if s.editable {
+                        "A and B are the same"
+                    } else {
+                        super::comments::LOCKED
+                    },
+                );
                 let adopt = widgets::tip(
                     adopt,
                     t,
@@ -805,7 +815,7 @@ pub(super) fn view(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut U
                 lp.rect_filled(
                     block,
                     CornerRadius::same(4),
-                    theme::translucent(t.panel, 153),
+                    theme::current_surface(lp.ctx()).gamma_multiply(0.6),
                 );
             }
             let name = match mark {

@@ -36,6 +36,10 @@ use crate::gui::ui::{icons, theme, widgets};
 use crate::plan::{COMMENT_COLORS, Comment, Plan};
 use crate::refs::{Reference, Target};
 
+/// Why an edit control on the timeline is disabled: an older version is
+/// open, or the plan is locked.
+pub(super) const LOCKED: &str = "Viewing an older version, or the cut is locked";
+
 /// A labelled change to the plan, applied after the list is drawn.
 type Edit = (String, Box<dyn FnOnce(&mut Plan) -> bool>);
 
@@ -238,6 +242,7 @@ pub(super) fn panel(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut 
                         )
                     })
                     .inner;
+                let send = widgets::why_disabled(send, "No open comments to send");
                 if send.clicked()
                     && let Some(text) = chat_text(&s.name, comments, &s.timing)
                 {
@@ -249,6 +254,7 @@ pub(super) fn panel(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut 
                         widgets::icon_btn(ui, t, icons::PLUS, "Add a marker at the playhead", "M")
                     })
                     .inner;
+                let add = widgets::why_disabled(add, LOCKED);
                 if add.clicked() {
                     add_at_playhead(state, s, io);
                 }
@@ -426,6 +432,7 @@ fn item(
                             )
                         })
                         .inner;
+                    let delete = widgets::why_disabled(delete, LOCKED);
                     if delete.clicked() {
                         state.comment_edit = None;
                         state.comment_sel = None;
@@ -459,6 +466,7 @@ fn item(
                             )
                         })
                         .inner;
+                    let resolve = widgets::why_disabled(resolve, LOCKED);
                     if resolve.clicked() {
                         let done = !c.resolved;
                         edits.push((

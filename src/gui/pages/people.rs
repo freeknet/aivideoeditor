@@ -331,6 +331,7 @@ fn toolbar(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui, ops: &mut Vec<
                     widgets::icon_btn(ui, palette, icons::UNDO, &undo, &undo_keys)
                 })
                 .inner;
+            let response = widgets::why_disabled(response, "Nothing to undo");
             if response.clicked() {
                 ops.push(Op::Undo);
             }
@@ -1245,6 +1246,10 @@ fn dialog(ctx: &mut PageCtx<'_>, state: &mut State, ui: &Ui, ops: &mut Vec<Op>) 
                     let assign = ui
                         .add_enabled_ui(valid, |ui| widgets::key_button(ui, ctx.theme, "Assign"))
                         .inner;
+                    let assign = widgets::why_disabled(
+                        assign,
+                        "Pick a clip, a name, and an end after the start",
+                    );
                     if assign.clicked() {
                         ops.push(Op::AssignRange(
                             clip.clone(),

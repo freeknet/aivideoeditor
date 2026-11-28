@@ -498,6 +498,7 @@ fn list(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui, new_keys: &str) {
                     )
                 })
                 .inner;
+            let r = widgets::why_disabled(r, "Wait for the reply to finish first");
             let about = current.as_ref().map_or("", |c| c.plan.as_str());
             if widgets::tip(
                 r,
@@ -865,6 +866,7 @@ pub(super) fn tab_strip(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                     widgets::icon_toggle_sized(ui, theme, icons::PLUS, "New chat", "", false, 28.0)
                 })
                 .inner;
+            let r = widgets::why_disabled(r, "Wait for the reply to finish first");
             if r.clicked() {
                 new = true;
             }

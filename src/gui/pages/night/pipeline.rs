@@ -1034,7 +1034,7 @@ fn bar(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui, views: Vec<V
             painter.rect(
                 rect,
                 egui::CornerRadius::same(theme::RADIUS_LG),
-                theme::rgb(theme.panel),
+                theme::surface(ui.ctx(), theme::Surface::Content),
                 border,
                 egui::StrokeKind::Inside,
             );
@@ -1113,11 +1113,13 @@ fn bar(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui, views: Vec<V
                 let pressed = child
                     .add_enabled_ui(!busy, |ui| widgets::outline_button(ui, theme, label))
                     .inner
+                    .on_disabled_hover_text("Waits for the step running now")
                     .clicked();
                 let more_pressed = view.more.as_ref().is_some_and(|(glyph, tip, _)| {
                     child
                         .add_enabled_ui(!busy, |ui| widgets::icon_btn(ui, theme, *glyph, tip, ""))
                         .inner
+                        .on_disabled_hover_text("Waits for the step running now")
                         .clicked()
                 });
                 if more_pressed && let Some((_, _, more)) = view.more {
@@ -1272,7 +1274,7 @@ fn log(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) {
         Status::Failed(_) => super::parts::Mark::Failed,
     };
     egui::Frame::new()
-        .fill(theme::rgb(theme.panel))
+        .fill(theme::surface(ui.ctx(), theme::Surface::Content))
         .stroke(theme::ink_line(theme))
         .corner_radius(egui::CornerRadius::same(theme::RADIUS_LG))
         .inner_margin(theme::margin_xy(theme::SPACE_LG, theme::SPACE_MD))

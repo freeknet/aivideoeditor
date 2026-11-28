@@ -565,7 +565,7 @@ pub(super) fn strip(
             if reopenable.is_empty() {
                 ui.horizontal(|ui| {
                     ui.add_space(theme::SPACE_SM);
-                    ui.label(egui::RichText::new("All cuts open").color(theme::ink(t, 102)));
+                    ui.label(egui::RichText::new("All cuts open").color(theme::rgb(t.text_muted)));
                 });
             }
             for n in &reopenable {

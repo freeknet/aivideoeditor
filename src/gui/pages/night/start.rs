@@ -240,6 +240,7 @@ fn composer(ctx: &PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) -> bool {
                                     )
                                 })
                                 .inner;
+                            let send = widgets::why_disabled(send, "Type what you want made first");
                             pick |= send.clicked();
                         });
                     });
