@@ -213,7 +213,6 @@ your own on those pages.
 | one status line | `parts::status_line(ui, theme, kind, text)` | icon and text in the kind's colour |
 | a step's mark | `parts::mark(ui, theme, rect, Mark::Running)` | `Mark::{Queued, Running, Done, Failed, Stopped, Skipped}`; a spinner while running |
 | a frame | `parts::thumb(thumbs, ui, theme, rect, Some((path, t)))` | 2 px corners, ink 10 % hairline; a raised fill when there is no frame |
-| a list row's fill | `parts::row_fill(ui, theme, &response, selected)` | selected row colour, or ink 8 % under the pointer, 8 px corners |
 | elapsed / remaining time | `parts::clock(secs)` | `1:05`, `12:40`, `1:02:03` |
 
 ## Components: which to use for what
@@ -237,7 +236,8 @@ your own on those pages.
 | nothing to show | `empty_state(ui, theme, icons::FILM, "No shots yet", "Index the night to fill this.", \|ui\| { .. })` | centred in the space left |
 | a single-line field | `text_field(ui, theme, &mut text, "Placeholder")`, `input(&mut text).label(..).show(ui)` | Material's outlined field at 32 px; `dense_input(&mut text, 28.0)` for a 28 or 24 px row (the desktop densities, 12 px text), `field_frame(ui, theme, rect, ..)` to place one at a rect with an optional Lucide leading icon |
 | a number | `ui.add(number(&mut value, "Name").range(..).suffix(" s"))` | Material's number field, 32 px: drag, Up/Down steps, typing |
-| a list of rows | `egui_material3::MaterialList` with `ListItem::content_ui` | its own state layer, selected fill, arrow keys and screen-reader names; `ListItem::row_height(28.0)` for an exact row height; `MaterialList::show_rows` inside `ScrollArea::show_viewport` for a long list (only the rows in view are built); `row_sense(Sense::drag())` for rows that drag |
+| a list of rows | `egui_material3::MaterialList` with `ListItem::content_ui` | its own state layer, selected fill, arrow keys and screen-reader names; `ListItem::row_height(28.0)` for an exact row height; `MaterialList::show_rows` inside `ScrollArea::show_viewport` for a long list (only the rows in view are built); `row_sense(Sense::drag())` for rows that drag; `row_sense_exact(Sense::hover())` for status rows nothing clicks (no Tab stop); `row_gap(2.0)` and `ListItem::corner_radius(8)` for Selects' rows, 2 px apart on 8 px corners |
+| a long grid of tiles | `egui_material3::MaterialLayoutGrid::show_rows(ui, viewport, rows, row_height, \|row, i\| row.labeled_cell(1, name, \|ui\| ..))` inside `ScrollArea::show_viewport` | only the rows in view are built; the gutter is also the row gap, so a taller gap rides on `row_height` |
 | a menu | `ui.menu_button(..)` / `egui::Popup::menu(&response)` with `menu_item`, `menu_heading`, `menu_separator` | items 14 px, 32 tall, `accent` hover, check when current |
 | a custom popover | `popover_frame(theme).show(ui, ..)` | popover fill, hairline, radius 8, shadow |
 | something floating over footage | `glass_frame(theme)`, `glass_button(..)` | radius 12, glass fill, white-10 % border |

@@ -547,105 +547,136 @@ fn clips(
         });
     });
     ui.add_space(theme::SPACE_XS);
-    ui.spacing_mut().item_spacing.y = 2.0;
-    for row in rows {
-        let width = ui.available_width();
-        let (rect, response) = ui.allocate_exact_size(
-            egui::vec2(width, super::recent::ROW_HEIGHT),
-            egui::Sense::hover(),
-        );
-        if !ui.is_rect_visible(rect) {
-            continue;
-        }
-        parts::row_fill(ui, theme, &response, false);
+    // Status rows: each says where its clip stands and takes the pointer's
+    // hover, but there is nothing to click, so none is a Tab stop.
+    let thumbs = std::cell::RefCell::new(&mut *ctx.thumbs);
+    let list = rows.iter().fold(clip_list(ui), |list, row| {
+        let thumbs = &thumbs;
         let working = analysing.contains(&row.id);
-        let thumb = egui::Rect::from_min_size(
-            egui::pos2(rect.left() + theme::SPACE_XS + 2.0, rect.center().y - 13.5),
-            egui::vec2(48.0, 27.0),
-        );
-        let t = row.duration.map_or(1.0, |d| d * 0.4);
-        parts::thumb(ctx.thumbs, ui, theme, thumb, Some((row.path.as_path(), t)));
-        let y = rect.center().y;
-        let (word, tone) = if working {
-            ("analysing", widgets::Tone::Neutral)
-        } else {
-            match row.state {
-                RowState::Pending => ("queued", widgets::Tone::Neutral),
-                RowState::Indexed => ("indexed", widgets::Tone::Neutral),
-                RowState::Captioned => ("captioned", widgets::Tone::Success),
-                RowState::Failed => ("failed", widgets::Tone::Danger),
-            }
-        };
-        let badge_w =
-            super::recent::paint_badge(ui, theme, rect.right() - theme::SPACE_SM, y, word, tone);
-        let mut right = rect.right() - theme::SPACE_SM - badge_w - theme::SPACE_MD;
-        if working && row.captions.1 == 0 {
-            let spin = egui::Rect::from_center_size(
-                egui::pos2(right - icons::SMALL / 2.0, y),
-                egui::Vec2::splat(icons::SMALL),
-            );
-            parts::mark(ui, theme, spin, parts::Mark::Running);
-            right = spin.left() - theme::SPACE_MD;
-        }
-        if row.reason.is_none() && row.captions.1 > 0 {
-            let count = format!("{}/{}", row.captions.0, row.captions.1);
-            let galley = ui.painter().layout_no_wrap(
-                count,
-                theme::tabular(ui.ctx(), theme::SMALL_SIZE),
-                theme::rgb(theme.text_muted),
-            );
-            let text_x = right - galley.size().x;
-            ui.painter().galley(
-                egui::pos2(text_x, y - galley.size().y / 2.0),
-                galley,
-                theme::rgb(theme.text_muted),
-            );
-            let bar = egui::Rect::from_min_size(
-                egui::pos2(text_x - theme::SPACE_SM - 96.0, y - 3.0),
-                egui::vec2(96.0, 6.0),
-            );
-            parts::paint_progress(
-                ui,
-                theme,
-                bar,
-                egui::Id::unique(("processing-clip", &row.id)),
-                row.captions.0 as f32 / row.captions.1 as f32,
-            );
-            right = bar.left() - theme::SPACE_MD;
-        }
-        let x = thumb.right() + theme::SPACE_SM + 2.0;
-        let room = egui::Rect::from_min_max(
-            egui::pos2(x, rect.top()),
-            egui::pos2(right.max(x), rect.bottom()),
-        );
-        let painter = ui.painter().with_clip_rect(room.intersect(ui.clip_rect()));
-        let name = painter.layout_no_wrap(
-            row.id.clone(),
-            theme::font(theme::LARGE_SIZE),
-            theme::rgb(theme.text),
-        );
-        let name_w = name.size().x;
-        painter.galley(
-            egui::pos2(x, y - name.size().y / 2.0),
-            name,
-            theme::rgb(theme.text),
-        );
-        let length = row.duration.map_or_else(|| "\u{2014}".to_owned(), clock);
-        let after = match &row.reason {
-            Some(reason) => (format!("{length} \u{b7} {reason}"), theme.danger),
-            None => (length, theme.text_muted),
-        };
-        painter.text(
-            egui::pos2(x + name_w + theme::SPACE_SM, y),
-            egui::Align2::LEFT_CENTER,
-            after.0,
-            theme::tabular(ui.ctx(), theme::BODY_SIZE),
-            theme::rgb(after.1),
-        );
+        list.item(
+            egui_material3::ListItem::new(row.id.clone())
+                .dense(true)
+                .row_height(super::recent::ROW_HEIGHT)
+                .corner_radius(theme::RADIUS_MD)
+                .content_ui(move |ui, item| {
+                    clip_row(ui, theme, &mut thumbs.borrow_mut(), row, working, item.rect);
+                }),
+        )
+    });
+    let shown = list.show(ui);
+    for (row, response) in rows.iter().zip(shown.items) {
         if let Some(reason) = &row.reason {
             response.hint(reason);
         }
     }
+}
+
+/// The clip list: hover-only Material rows, 2 px apart.
+fn clip_list<'a>(ui: &egui::Ui) -> egui_material3::MaterialList<'a> {
+    egui_material3::MaterialList::new()
+        .id(ui.make_persistent_id("processing-clips"))
+        .dividers(false)
+        .fill_width(true)
+        .row_gap(2.0)
+        .row_sense_exact(egui::Sense::hover())
+}
+
+/// Paints one clip's row into `rect`: frame, name, length, captions done
+/// and a badge for where it stands.
+fn clip_row(
+    ui: &mut egui::Ui,
+    theme: &crate::theme::Palette,
+    thumbs: &mut crate::gui::thumbs::Thumbs,
+    row: &ClipRow,
+    working: bool,
+    rect: egui::Rect,
+) {
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    let thumb = egui::Rect::from_min_size(
+        egui::pos2(rect.left() + theme::SPACE_XS + 2.0, rect.center().y - 13.5),
+        egui::vec2(48.0, 27.0),
+    );
+    let t = row.duration.map_or(1.0, |d| d * 0.4);
+    parts::thumb(thumbs, ui, theme, thumb, Some((row.path.as_path(), t)));
+    let y = rect.center().y;
+    let (word, tone) = if working {
+        ("analysing", widgets::Tone::Neutral)
+    } else {
+        match row.state {
+            RowState::Pending => ("queued", widgets::Tone::Neutral),
+            RowState::Indexed => ("indexed", widgets::Tone::Neutral),
+            RowState::Captioned => ("captioned", widgets::Tone::Success),
+            RowState::Failed => ("failed", widgets::Tone::Danger),
+        }
+    };
+    let badge_w =
+        super::recent::paint_badge(ui, theme, rect.right() - theme::SPACE_SM, y, word, tone);
+    let mut right = rect.right() - theme::SPACE_SM - badge_w - theme::SPACE_MD;
+    if working && row.captions.1 == 0 {
+        let spin = egui::Rect::from_center_size(
+            egui::pos2(right - icons::SMALL / 2.0, y),
+            egui::Vec2::splat(icons::SMALL),
+        );
+        parts::mark(ui, theme, spin, parts::Mark::Running);
+        right = spin.left() - theme::SPACE_MD;
+    }
+    if row.reason.is_none() && row.captions.1 > 0 {
+        let count = format!("{}/{}", row.captions.0, row.captions.1);
+        let galley = ui.painter().layout_no_wrap(
+            count,
+            theme::tabular(ui.ctx(), theme::SMALL_SIZE),
+            theme::rgb(theme.text_muted),
+        );
+        let text_x = right - galley.size().x;
+        ui.painter().galley(
+            egui::pos2(text_x, y - galley.size().y / 2.0),
+            galley,
+            theme::rgb(theme.text_muted),
+        );
+        let bar = egui::Rect::from_min_size(
+            egui::pos2(text_x - theme::SPACE_SM - 96.0, y - 3.0),
+            egui::vec2(96.0, 6.0),
+        );
+        parts::paint_progress(
+            ui,
+            theme,
+            bar,
+            egui::Id::unique(("processing-clip", &row.id)),
+            row.captions.0 as f32 / row.captions.1 as f32,
+        );
+        right = bar.left() - theme::SPACE_MD;
+    }
+    let x = thumb.right() + theme::SPACE_SM + 2.0;
+    let room = egui::Rect::from_min_max(
+        egui::pos2(x, rect.top()),
+        egui::pos2(right.max(x), rect.bottom()),
+    );
+    let painter = ui.painter().with_clip_rect(room.intersect(ui.clip_rect()));
+    let name = painter.layout_no_wrap(
+        row.id.clone(),
+        theme::font(theme::LARGE_SIZE),
+        theme::rgb(theme.text),
+    );
+    let name_w = name.size().x;
+    painter.galley(
+        egui::pos2(x, y - name.size().y / 2.0),
+        name,
+        theme::rgb(theme.text),
+    );
+    let length = row.duration.map_or_else(|| "\u{2014}".to_owned(), clock);
+    let after = match &row.reason {
+        Some(reason) => (format!("{length} \u{b7} {reason}"), theme.danger),
+        None => (length, theme.text_muted),
+    };
+    painter.text(
+        egui::pos2(x + name_w + theme::SPACE_SM, y),
+        egui::Align2::LEFT_CENTER,
+        after.0,
+        theme::tabular(ui.ctx(), theme::BODY_SIZE),
+        theme::rgb(after.1),
+    );
 }
 
 #[cfg(test)]

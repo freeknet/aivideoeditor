@@ -410,28 +410,6 @@ pub(crate) fn thumb(
     );
 }
 
-/// The fill behind a list row: the selected row colour, or ink 8 % under
-/// the pointer (faded in), on 8 px corners.
-pub(crate) fn row_fill(ui: &Ui, theme: &Palette, response: &Response, selected: bool) {
-    let rect = response.rect;
-    if selected {
-        ui.painter().rect_filled(
-            rect,
-            CornerRadius::same(theme::RADIUS_MD),
-            theme::selected_row(theme),
-        );
-        return;
-    }
-    let lift = widgets::hover_t(ui, response.id.with("row"), response.hovered());
-    if lift > 0.0 {
-        ui.painter().rect_filled(
-            rect,
-            CornerRadius::same(theme::RADIUS_MD),
-            theme::ink(theme, (f32::from(theme::INK_HOVER) * lift).round() as u8),
-        );
-    }
-}
-
 /// A clock for elapsed and remaining time: "1:05", "12:40", "1:02:03".
 pub(crate) fn clock(secs: f64) -> String {
     let s = secs.max(0.0).round() as u64;
