@@ -403,7 +403,7 @@ pub(super) fn menu(ui: &mut Ui, t: &Palette, info: &MenuInfo) -> Option<Pick> {
     let resp = widgets::icon_toggle(ui, t, icons::COMPARE, "Compare cuts", "Shift+C", info.open);
     let mut pick = None;
     // The response is not needed: drawing it is the point.
-    let _ = egui::Popup::menu(&resp)
+    let _ = widgets::menu(&resp)
         .width(300.0)
         .gap(theme::SPACE_XS)
         .show(|ui| {
@@ -844,7 +844,8 @@ pub(super) fn view(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut U
                 clicked_shot = Some((lane.side, k));
             }
             let tip_note = shot.note.clone();
-            resp.on_hover_ui(|ui| {
+            // The response has been read above; only the tooltip is left.
+            let _ = widgets::rich_tip(resp, &name, |ui| {
                 ui.label(
                     egui::RichText::new(describe(shot))
                         .font(theme::medium(ui.ctx(), theme::BODY_SIZE))

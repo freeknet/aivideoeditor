@@ -83,8 +83,31 @@ impl Hint for Response {
         if self.hovered() {
             set(&self.ctx, text, "");
         }
-        self.on_hover_text(text)
+        name_for_screen_readers(&self, text);
+        // Whether it showed changes nothing: the response goes back either way.
+        let _ = egui_material3::MaterialTooltip::new(text).show_for(&self);
+        self
     }
+}
+
+/// Gives `response`'s widget `text` as its accessible description, and as
+/// its name when it has none (an icon-only button, an unlabelled tick box),
+/// as egui's own text tooltips do: a Material tooltip names only itself.
+pub fn name_for_screen_readers(response: &Response, text: &str) {
+    if !response.ctx.has_accesskit_node(response.id) {
+        return;
+    }
+    response.ctx.accesskit_node_builder(response.id, |node| {
+        if node.description().is_none() {
+            node.set_description(text);
+        }
+        if node.role() != egui::accesskit::Role::Label
+            && node.labelled_by().is_empty()
+            && node.label().is_none_or(str::is_empty)
+        {
+            node.set_label(text);
+        }
+    });
 }
 
 /// Writes the description of a shared control labelled `label` while it is

@@ -432,7 +432,7 @@ fn rename_field(ctx: &PageCtx<'_>, state: &mut State, ui: &mut Ui, rect: Rect) {
 pub(super) fn menu(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
     let theme = ctx.theme;
     let id = ui.make_persistent_id("assistant-chats");
-    let open = egui::Popup::is_id_open(ui.ctx(), id);
+    let open = widgets::menu_is_open(ui.ctx(), id);
     state.list_open = open;
     // Another chat's rename lives in the list: it ends when the list closes.
     let elsewhere = state
@@ -445,7 +445,7 @@ pub(super) fn menu(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
     let hint = keymap::command("chat-new").map_or_else(String::new, |c| c.hint(ctx.keymap));
     let button = widgets::icon_toggle_sized(ui, theme, icons::MENU, "Chats", "", open, 32.0);
     // The response is not needed: drawing it is the point.
-    let _ = egui::Popup::menu(&button)
+    let _ = widgets::menu(&button)
         .id(id)
         .width(320.0)
         .gap(SPACE_XS)
@@ -514,7 +514,7 @@ fn list(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui, new_keys: &str) {
     });
     if stems.len() > 1 {
         ui.add_enabled_ui(idle, |ui| {
-            ui.menu_button("New chat about another cut", |ui| {
+            widgets::submenu(ui, "New chat about another cut", |ui| {
                 for s in &stems {
                     if widgets::menu_item(ui, theme, None, s, "", false).clicked() {
                         new_on = Some(s.clone());
@@ -572,17 +572,57 @@ fn list(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui, new_keys: &str) {
                 });
                 ui.add_space(SPACE_SM);
             }
-            for meta in &rows {
+            // A Material 3 list: each chat a row on the list's container,
+            // state layer and selected fill, reached with the arrow keys; the
+            // chat being renamed is a row holding its title field.
+            let renaming = state
+                .renaming
+                .as_ref()
+                .and_then(|r| rows.iter().position(|meta| meta.id == r.id));
+            let asked: Vec<std::cell::Cell<Option<RowAction>>> =
+                rows.iter().map(|_| std::cell::Cell::new(None)).collect();
+            let shared = std::cell::RefCell::new(&mut *state);
+            let shared_ctx = &*ctx;
+            let list = rows.iter().zip(&asked).enumerate().fold(
+                egui_material3::MaterialList::new()
+                    .id(ui.make_persistent_id("assistant-chat-rows"))
+                    .dividers(false)
+                    .fill_width(true),
+                |list, (at, (meta, asked))| {
+                    let active = current.as_ref().is_some_and(|c| c.id == meta.id);
+                    let item = egui_material3::ListItem::new(meta.title.clone());
+                    if renaming == Some(at) {
+                        let shared = &shared;
+                        return list.item(
+                            item.min_tile_height(theme::CONTROL_HEIGHT + SPACE_SM)
+                                .content_ui(move |ui, row| {
+                                    rename_field(
+                                        shared_ctx,
+                                        &mut shared.borrow_mut(),
+                                        ui,
+                                        row.rect.shrink2(Vec2::new(SPACE_XS, 2.0)),
+                                    );
+                                }),
+                        );
+                    }
+                    let enabled = idle || active;
+                    list.item(item.min_tile_height(52.0).selected(active).content_ui(
+                        move |ui, row| {
+                            asked.set(row_content(ui, theme, meta, row.rect, now, enabled));
+                        },
+                    ))
+                },
+            );
+            let shown = list.show(ui);
+            for (at, ((meta, asked), response)) in
+                rows.iter().zip(&asked).zip(&shown.items).enumerate()
+            {
                 let active = current.as_ref().is_some_and(|c| c.id == meta.id);
-                if state.renaming.as_ref().is_some_and(|r| r.id == meta.id) {
-                    let (rect, _) = ui.allocate_exact_size(
-                        Vec2::new(ui.available_width(), theme::CONTROL_HEIGHT + SPACE_SM),
-                        Sense::hover(),
-                    );
-                    rename_field(ctx, state, ui, rect.shrink2(Vec2::new(SPACE_XS, 2.0)));
-                    continue;
-                }
-                if let Some(a) = row(ui, theme, meta, active, now, idle || active) {
+                let picked = asked.get().or_else(|| {
+                    (renaming != Some(at) && (idle || active) && response.clicked())
+                        .then_some(RowAction::Open)
+                });
+                if let Some(a) = picked {
                     action = Some((a, meta.clone()));
                 }
             }
@@ -635,30 +675,17 @@ fn list(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui, new_keys: &str) {
     }
 }
 
-/// One chat in the list: the title in 14 px; the plan and the time under
-/// it; rename, archive and delete at the row's end. Returns
-/// what was asked for.
-fn row(
+/// One chat row's content, painted into the list row `rect`: the title in
+/// 14 px; the plan and the time under it; rename, archive and delete at
+/// the row's end. Returns which of those was asked for.
+fn row_content(
     ui: &mut Ui,
     theme: &Palette,
     meta: &store::ChatMeta,
-    active: bool,
+    rect: Rect,
     now: u64,
     enabled: bool,
 ) -> Option<RowAction> {
-    let width = ui.available_width();
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 52.0), Sense::click());
-    response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::Role::Button, enabled, active, &meta.title)
-    });
-    let lift = widgets::hover_t(ui, response.id, response.hovered());
-    if active || lift > 0.0 {
-        ui.painter().rect_filled(
-            rect,
-            CornerRadius::same(theme::RADIUS),
-            theme::accent_fill(theme).gamma_multiply(if active { 1.0 } else { lift }),
-        );
-    }
     let inner = rect.shrink2(Vec2::new(SPACE_MD, SPACE_SM));
     let painter = ui.painter();
     // The three 24 px actions, centred at the row's end; the text keeps
@@ -733,9 +760,6 @@ fn row(
     .clicked()
     {
         asked = Some(RowAction::Rename);
-    }
-    if asked.is_none() && enabled && response.clicked() {
-        asked = Some(RowAction::Open);
     }
     asked
 }
@@ -860,7 +884,7 @@ pub(super) fn tab_strip(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                                 if out.close {
                                     close = Some(meta.id.clone());
                                 }
-                                out.response.context_menu(|ui| {
+                                widgets::context_menu(&out.response, |ui| {
                                     if widgets::menu_item(ui, theme, None, "Close tab", "", false)
                                         .clicked()
                                     {
@@ -977,7 +1001,7 @@ fn chat_tab(
     let mut x = rect.left() + 8.0;
     if streaming {
         let spin = Rect::from_center_size(egui::pos2(x + 5.0, rect.center().y), Vec2::splat(10.0));
-        ui.put(spin, egui::Spinner::new().size(10.0));
+        ui.put(spin, widgets::spinner(10.0, theme::rgb(theme.text)));
         x += lead;
     }
     ui.painter().galley(

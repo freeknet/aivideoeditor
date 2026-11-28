@@ -14,7 +14,7 @@
 //! theme or page shows up here without anyone remembering to add it, and
 //! running an entry pushes the same `Action` a button or shortcut would.
 
-use super::theme::{SPACE_MD, SPACE_SM, SPACE_XS};
+use super::theme::{SPACE_MD, SPACE_SM};
 use super::widgets;
 use crate::command_palette::Command;
 use crate::gui::app::{Action, App};
@@ -135,12 +135,13 @@ pub fn draw(app: &mut App, ctx: &egui::Context, actions: &mut Vec<Action>) {
                 .inner_margin(super::theme::margin(SPACE_MD))
                 .show(ui, |ui| {
                     ui.set_width(WIDTH);
-                    let field = ui.add(
-                        egui::TextEdit::singleline(&mut state.query)
-                            .hint_text("Type a command")
-                            .desired_width(f32::INFINITY)
-                            .font(super::theme::font(super::theme::TITLE_SIZE)),
-                    );
+                    let field = egui_material3::MaterialInput::outlined(&mut state.query)
+                        .label("Command")
+                        .placeholder("Type a command")
+                        .density(-1)
+                        .fill_width(true)
+                        .show(ui)
+                        .response;
                     field.request_focus();
                     if field.changed() {
                         state.selected = 0;
@@ -150,10 +151,16 @@ pub fn draw(app: &mut App, ctx: &egui::Context, actions: &mut Vec<Action>) {
                         widgets::muted(ui, &theme, "No command matches.");
                     }
                     let first = state.selected.saturating_sub(VISIBLE - 1);
-                    for (index, command) in matches.iter().enumerate().skip(first).take(VISIBLE) {
-                        if row(ui, &theme, command, index == state.selected).clicked() {
-                            chosen = Some(command.action.clone());
-                        }
+                    let shown: Vec<(usize, &Command<Action>)> = matches
+                        .iter()
+                        .copied()
+                        .enumerate()
+                        .skip(first)
+                        .take(VISIBLE)
+                        .collect();
+                    let clicked = rows(ui, &shown, state.selected);
+                    if let Some((_, command)) = clicked.and_then(|i| shown.get(i)) {
+                        chosen = Some(command.action.clone());
                     }
                 });
         });
@@ -172,45 +179,30 @@ pub fn draw(app: &mut App, ctx: &egui::Context, actions: &mut Vec<Action>) {
     }
 }
 
-/// One match: its title, its hint, and a fill when highlighted.
-fn row(
-    ui: &mut Ui,
-    theme: &crate::theme::Palette,
-    command: &Command<Action>,
-    selected: bool,
-) -> egui::Response {
-    let width = ui.available_width();
-    let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(width, super::theme::CONTROL_HEIGHT),
-        egui::Sense::click(),
+/// The matches on screen as a Material 3 list: each its title, its hint
+/// as trailing text, the highlighted one (`selected`, an index into all
+/// the matches) with the list's selected fill. Returns the position in
+/// `shown` of the row clicked, if one was. Up, Down and Enter are read by
+/// the palette before the list sees them, so they move the highlight
+/// whatever has focus.
+fn rows(ui: &mut Ui, shown: &[(usize, &Command<Action>)], selected: usize) -> Option<usize> {
+    use egui_material3::{ListItem, MaterialList, VisualDensity};
+    let list = shown.iter().fold(
+        MaterialList::new()
+            .id(ui.make_persistent_id("command-palette-rows"))
+            .dividers(false)
+            .fill_width(true),
+        |list, (index, command)| {
+            list.item(
+                ListItem::new(command.title.clone())
+                    .trailing_text(command.hint.clone())
+                    .dense(true)
+                    .visual_density(VisualDensity::new(0.0, -4.0))
+                    .selected(*index == selected),
+            )
+        },
     );
-    let lift = widgets::hover_t(ui, response.id, response.hovered());
-    let fill = theme
-        .raised
-        .lerp(theme.hover, lift)
-        .lerp(theme.selection, if selected { 1.0 } else { 0.0 });
-    let painter = ui.painter();
-    painter.rect_filled(
-        rect,
-        egui::CornerRadius::same(super::theme::RADIUS),
-        super::theme::rgb(fill),
-    );
-    let inset = egui::vec2(SPACE_SM + SPACE_XS, 0.0);
-    painter.text(
-        rect.left_center() + inset,
-        egui::Align2::LEFT_CENTER,
-        &command.title,
-        super::theme::font(super::theme::BODY_SIZE),
-        super::theme::rgb(theme.text),
-    );
-    painter.text(
-        rect.right_center() - inset,
-        egui::Align2::RIGHT_CENTER,
-        &command.hint,
-        super::theme::font(12.0),
-        super::theme::rgb(theme.text_faint),
-    );
-    response
+    list.show(ui).items.iter().position(egui::Response::clicked)
 }
 
 #[cfg(test)]

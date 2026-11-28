@@ -17,8 +17,8 @@ use crate::gui::ui::hint::Hint as _;
 use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, Ui, pos2, vec2};
 
 use crate::gui::thumbs::Thumbs;
-use crate::gui::ui::icons;
 use crate::gui::ui::theme::{self, SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XS};
+use crate::gui::ui::{icons, widgets};
 use crate::index::Index;
 use crate::theme::Palette;
 
@@ -290,10 +290,80 @@ pub(super) struct RowLook {
     pub(super) playing: bool,
 }
 
-/// A segment row, as Selects' list rows: 28 px, 8 px corners, a 16 px
-/// thumbnail, the caption in 14 px and the length in 12 px tabular, muted.
-/// The id, times, quality, flags and performer are in its tooltip.
-pub(super) fn segment_row(
+/// One clip's segment rows as a Material 3 list: rows sense drags as well
+/// as clicks (so a drag starting on one is the row's, not the scroll
+/// area's), take the arrow keys when focused, show the list's selected
+/// fill when picked, and are named by their caption for screen readers.
+/// Each row holds a 16 px thumbnail (ringed in the key colour while it is
+/// in the viewer), the caption and the length in tabular figures; the id,
+/// times, quality, flags and performer are in its tooltip. Returns one
+/// response per segment, in order.
+pub(super) fn segment_rows(
+    ui: &mut Ui,
+    thumbs: &mut Thumbs,
+    palette: &Palette,
+    index: &Index,
+    model: &Model,
+    segs: &[(usize, RowLook)],
+    id_salt: impl egui::AsIdSalt,
+) -> Vec<egui::Response> {
+    use egui_material3::{ListItem, MaterialList, VisualDensity};
+    // Every row's painter needs the thumbnail cache; the rows are built
+    // before any of them paints, so they share it.
+    let thumbs = std::cell::RefCell::new(thumbs);
+    let list = segs.iter().fold(
+        MaterialList::new()
+            .id(ui.make_persistent_id(id_salt))
+            .row_sense(Sense::drag())
+            .dividers(false)
+            .fill_width(true),
+        |list, (i, look)| {
+            let thumbs = &thumbs;
+            let name = index.segments.get(*i).map_or_else(String::new, summary);
+            list.item(
+                ListItem::new(name)
+                    .dense(true)
+                    .visual_density(VisualDensity::new(0.0, -4.0))
+                    .min_tile_height(ROW)
+                    .selected(look.picked)
+                    .content_ui(move |ui, item| {
+                        paint_segment(
+                            ui,
+                            &mut thumbs.borrow_mut(),
+                            palette,
+                            index,
+                            model,
+                            *i,
+                            look,
+                            item.rect,
+                        );
+                    }),
+            )
+        },
+    );
+    let shown = list.show(ui);
+    segs.iter()
+        .zip(shown.items)
+        .map(|((i, _), response)| match index.segments.get(*i) {
+            Some(seg) => segment_tip(response, palette, seg),
+            None => response,
+        })
+        .collect()
+}
+
+/// What a segment row says: its caption's summary, or its id.
+fn summary(seg: &crate::index::Scored) -> String {
+    seg.caption
+        .as_ref()
+        .map_or_else(|| seg.id.clone(), |c| c.summary.clone())
+}
+
+/// Paints segment `i`'s row content inside the list item at `rect`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a row painter, given what one row needs to draw"
+)]
+fn paint_segment(
     ui: &mut Ui,
     thumbs: &mut Thumbs,
     palette: &Palette,
@@ -301,26 +371,17 @@ pub(super) fn segment_row(
     model: &Model,
     i: usize,
     look: &RowLook,
-) -> egui::Response {
-    let width = ui.available_width();
-    let (rect, response) = ui.allocate_exact_size(vec2(width, ROW), Sense::click_and_drag());
-    if !ui.is_rect_visible(rect) {
-        return response;
-    }
+    rect: Rect,
+) {
     let Some(seg) = index.segments.get(i) else {
-        return response;
+        return;
     };
-    let radius = CornerRadius::same(theme::RADIUS_MD);
-    if look.picked {
-        ui.painter()
-            .rect_filled(rect, radius, theme::selected_row(palette));
-    } else if response.hovered() {
-        ui.painter()
-            .rect_filled(rect, radius, theme::rgb(palette.raised));
-    }
-    let pad = SPACE_XS + 2.0;
+    let inner = Rect::from_min_max(
+        pos2(ui.max_rect().left(), rect.top()),
+        pos2(ui.max_rect().right(), rect.bottom()),
+    );
     let thumb = Rect::from_min_size(
-        pos2(rect.left() + pad, rect.center().y - THUMB_H / 2.0),
+        pos2(inner.left(), inner.center().y - THUMB_H / 2.0),
         vec2(THUMB_H * 16.0 / 9.0, THUMB_H),
     );
     frame(ui, thumbs, palette, thumb, index, model, i);
@@ -344,27 +405,34 @@ pub(super) fn segment_row(
         .size()
         .x;
     ui.painter().text(
-        pos2(rect.right() - pad, rect.center().y),
+        pos2(inner.right(), inner.center().y),
         Align2::RIGHT_CENTER,
         length,
         numbers,
         muted,
     );
     let x = thumb.right() + SPACE_SM;
-    let w = (rect.right() - pad - length_w - SPACE_SM - x).max(10.0);
-    let summary = seg
-        .caption
-        .as_ref()
-        .map_or_else(|| seg.id.clone(), |c| c.summary.clone());
+    let w = (inner.right() - length_w - SPACE_SM - x).max(10.0);
     let font = theme::font(theme::LARGE_SIZE);
     ui.painter().text(
-        pos2(x, rect.center().y),
+        pos2(x, inner.center().y),
         Align2::LEFT_CENTER,
-        elide(ui, &summary, font.clone(), w),
+        elide(ui, &summary(seg), font.clone(), w),
         font,
         ink,
     );
-    response.on_hover_ui(|ui| {
+}
+
+/// A segment row's tooltip: the id, the caption and performer, and the
+/// times, quality and flags.
+fn segment_tip(
+    response: egui::Response,
+    palette: &Palette,
+    seg: &crate::index::Scored,
+) -> egui::Response {
+    let ink = theme::rgb(palette.text);
+    let muted = theme::rgb(palette.text_muted);
+    widgets::rich_tip(response, &seg.id, |ui| {
         ui.set_max_width(300.0);
         ui.label(
             egui::RichText::new(&seg.id)

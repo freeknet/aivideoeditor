@@ -1393,7 +1393,7 @@ fn header_right(ui: &mut egui::Ui, t: &Palette, info: &HeaderInfo) -> HeaderOut 
         let resp = widgets::tip(resp, t, "Versions: every save keeps a numbered copy", "");
         let latest = info.versions.last().map(|v| v.n);
         // The response is not needed: drawing it is the point.
-        let _ = egui::Popup::menu(&resp)
+        let _ = widgets::menu(&resp)
             .width(340.0)
             .gap(theme::SPACE_XS)
             .show(|ui| {
@@ -1431,7 +1431,7 @@ fn header_right(ui: &mut egui::Ui, t: &Palette, info: &HeaderInfo) -> HeaderOut 
             let resp = text_menu_button(ui, t, None, aspect_key(aspect));
             let resp = widgets::tip(resp, t, "Output aspect; crops follow each shot's cx", "");
             // The response is not needed: drawing it is the point.
-            let _ = egui::Popup::menu(&resp)
+            let _ = widgets::menu(&resp)
                 .width(180.0)
                 .gap(theme::SPACE_XS)
                 .show(|ui| {
@@ -1464,7 +1464,7 @@ fn header_right(ui: &mut egui::Ui, t: &Palette, info: &HeaderInfo) -> HeaderOut 
     }
     if let Some(drafting) = &info.drafting {
         ui.label(egui::RichText::new(drafting).font(small).color(muted));
-        ui.spinner();
+        ui.add(widgets::spinner(icons::SMALL - 2.0, muted));
     }
     out
 }
@@ -1498,7 +1498,7 @@ fn text_menu_button(
     let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), text));
     let painter = ui.painter();
-    let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
+    let open = widgets::menu_is_open(ui.ctx(), widgets::menu_id(&resp));
     if resp.hovered() || open {
         painter.rect_filled(
             rect,
@@ -1609,7 +1609,10 @@ fn lock_banner(palette: &Palette, ui: &mut egui::Ui) {
                 .font(theme::font(theme::BODY_SIZE))
                 .color(theme::rgb(palette.text)),
             );
-            ui.spinner();
+            ui.add(widgets::spinner(
+                icons::SMALL - 2.0,
+                theme::rgb(palette.text),
+            ));
         },
     );
 }
@@ -1720,46 +1723,52 @@ fn draft_window(
                 .spacing([10.0, 8.0])
                 .show(ui, |ui| {
                     ui.label("Name");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut form.name)
-                            .hint_text("reel-30")
-                            .desired_width(180.0),
-                    );
+                    widgets::input(&mut form.name)
+                        .label("Name")
+                        .placeholder("reel-30")
+                        .width(180.0)
+                        .show(ui);
                     ui.end_row();
                     ui.label("Aspect");
                     ui.horizontal(|ui| {
-                        let before = form.aspect;
-                        for a in [Aspect::Vertical, Aspect::Feed, Aspect::Wide] {
-                            ui.selectable_value(&mut form.aspect, a, aspect_key(a));
-                        }
-                        if form.aspect != before {
+                        let aspects = [Aspect::Vertical, Aspect::Feed, Aspect::Wide]
+                            .map(|a| (a, aspect_key(a)));
+                        if widgets::segmented(ui, palette, &mut form.aspect, &aspects) {
                             form.end_card = end_card_for(project, form.aspect);
                         }
                     });
                     ui.end_row();
                     ui.label("Length");
                     ui.horizontal(|ui| {
-                        for secs in [15.0, 30.0, 60.0] {
-                            ui.selectable_value(&mut form.seconds, secs, format!("{secs:.0}s"));
-                        }
+                        // The preset lengths; any other is typed in the field.
+                        widgets::segmented(
+                            ui,
+                            palette,
+                            &mut form.seconds,
+                            &[(15.0, "15s"), (30.0, "30s"), (60.0, "60s")],
+                        );
                         ui.add(
-                            egui::DragValue::new(&mut form.seconds)
+                            widgets::number(&mut form.seconds, "Length")
                                 .range(8.0..=240.0)
-                                .suffix(" s"),
+                                .drag_points_per_step(1.0)
+                                .suffix(" s")
+                                .width(100.0),
                         );
                     });
                     ui.end_row();
                     ui.label("End card");
                     ui.horizontal(|ui| {
+                        widgets::input(&mut form.end_card)
+                            .label("End card")
+                            .placeholder("image path (optional)")
+                            .width(180.0)
+                            .show(ui);
                         ui.add(
-                            egui::TextEdit::singleline(&mut form.end_card)
-                                .hint_text("image path (optional)")
-                                .desired_width(180.0),
-                        );
-                        ui.add(
-                            egui::DragValue::new(&mut form.card_bars)
+                            widgets::number(&mut form.card_bars, "End card length")
                                 .range(0..=8)
-                                .suffix(" bars"),
+                                .drag_points_per_step(1.0)
+                                .suffix(" bars")
+                                .width(100.0),
                         );
                     });
                     ui.end_row();
@@ -1786,10 +1795,12 @@ fn draft_window(
             }
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                if ui.button("Draft").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                if widgets::key_button(ui, palette, "Draft").clicked()
+                    || ui.input(|i| i.key_pressed(egui::Key::Enter))
+                {
                     go = true;
                 }
-                if ui.button("Cancel").clicked() {
+                if widgets::ghost_button(ui, palette, "Cancel").clicked() {
                     cancel = true;
                 }
             });

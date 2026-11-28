@@ -32,7 +32,7 @@
 
 use std::path::PathBuf;
 
-use egui::{Align, Sense, Ui};
+use egui::{Align, Ui};
 
 use super::PageCtx;
 use super::rows::{self, SMALL, text};
@@ -436,13 +436,20 @@ pub(super) fn draw(ctx: &mut PageCtx<'_>, plans: &mut Plans, state: &mut State, 
                                 };
                                 rows::section_with(ui, palette, title, &note);
                             });
-                        for line in lines.get(from..to).unwrap_or_default() {
+                        let section_lines = lines.get(from..to).unwrap_or_default();
+                        let responses = section_rows(
+                            ui,
+                            palette,
+                            section_lines,
+                            &is_selected,
+                            |k| playing && active == Some(k),
+                            ("inspector-shot-rows", from),
+                        );
+                        for (line, resp) in section_lines.iter().zip(responses) {
                             let reference = Reference::new(Target::Shot {
                                 plan: name.clone(),
                                 index: line.k + 1,
                             });
-                            let marked = playing && active == Some(line.k);
-                            let resp = row(ui, palette, line, is_selected(line.k), marked);
                             if scroll_to == Some(line.k) {
                                 resp.scroll_to_me(Some(Align::Center));
                             }
@@ -452,7 +459,7 @@ pub(super) fn draw(ctx: &mut PageCtx<'_>, plans: &mut Plans, state: &mut State, 
                             if resp.double_clicked() {
                                 ops.push(Op::Play(line.k));
                             }
-                            resp.context_menu(|ui| {
+                            widgets::context_menu(&resp, |ui| {
                                 widgets::mention_menu(ui, &mut actions, &reference);
                             });
                         }
@@ -510,107 +517,169 @@ pub(super) fn draw(ctx: &mut PageCtx<'_>, plans: &mut Plans, state: &mut State, 
     }
 }
 
-/// One shot's row; returns its click response (labelled `Shot <n>`).
-fn row(ui: &mut Ui, p: &Palette, line: &Line, selected: bool, marked: bool) -> egui::Response {
-    let bg = ui.painter().add(egui::Shape::Noop);
-    let inner = egui::Frame::new()
-        .inner_margin(egui::Margin {
-            left: theme::as_margin(theme::SPACE_SM),
-            right: theme::as_margin(theme::SPACE_SM),
-            top: 3,
-            bottom: 3,
+/// Top and bottom padding inside a shot row.
+const ROW_PAD_Y: f32 = 3.0;
+
+/// Gap between a row's lines.
+const LINE_GAP: f32 = 2.0;
+
+/// One song section's shots as a Material 3 list: a row per shot, on the
+/// list's own state layer and selected fill, named `Shot <n>` for screen
+/// readers and taking the arrow keys when focused. A row is as tall as its
+/// wrapped note and caption: estimated from the text the first time, then
+/// the height its content took when it was last laid out. Returns one
+/// response per line, in order, with the shot's check problems as its
+/// tooltip.
+fn section_rows(
+    ui: &mut Ui,
+    p: &Palette,
+    lines: &[Line],
+    selected: &dyn Fn(usize) -> bool,
+    marked: impl Fn(usize) -> bool,
+    id_salt: impl egui::AsIdSalt,
+) -> Vec<egui::Response> {
+    use egui_material3::{ListItem, MaterialList, VisualDensity};
+    // The list insets custom content 16 px at each end.
+    let inner = (ui.available_width() - 32.0).max(NUMBER_W * 2.0);
+    let id = ui.make_persistent_id(id_salt);
+    let ctx = ui.ctx().clone();
+    let list = lines.iter().fold(
+        MaterialList::new().id(id).dividers(false).fill_width(true),
+        |list, line| {
+            let key = id.with(("height", line.k));
+            let height = ctx
+                .data(|d| d.get_temp::<f32>(key))
+                .unwrap_or_else(|| row_height(ui, line, inner));
+            let on = marked(line.k);
+            list.item(
+                ListItem::new(format!("Shot {}", line.k + 1))
+                    .dense(true)
+                    .visual_density(VisualDensity::new(0.0, -4.0))
+                    .min_tile_height(height)
+                    .selected(selected(line.k))
+                    .content_ui(move |ui, item| {
+                        let needed = paint_row(ui, p, line, on, item.rect);
+                        if (needed - height).abs() > 0.5 {
+                            ui.ctx().data_mut(|d| d.insert_temp(key, needed));
+                            ui.ctx().request_repaint();
+                        }
+                    }),
+            )
+        },
+    );
+    let shown = list.show(ui);
+    lines
+        .iter()
+        .zip(shown.items)
+        .map(|(line, resp)| {
+            let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+            if line.problems.is_empty() {
+                resp
+            } else {
+                widgets::tip(resp, p, &line.problems.join("\n"), "")
+            }
         })
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.spacing_mut().item_spacing = egui::vec2(theme::SPACE_SM, 2.0);
-            let muted = theme::rgb(p.text_muted);
-            let number = if marked { theme::rgb(p.accent) } else { muted };
-            ui.horizontal(|ui| {
-                ui.allocate_ui_with_layout(
-                    egui::vec2(NUMBER_W, SMALL + 4.0),
-                    egui::Layout::left_to_right(Align::Center),
-                    |ui| {
-                        ui.set_width(NUMBER_W);
-                        ui.label(
-                            egui::RichText::new((line.k + 1).to_string())
-                                .font(theme::tabular(ui.ctx(), SMALL))
-                                .color(number),
-                        );
-                    },
-                );
-                ui.label(
-                    egui::RichText::new(clock(line.start))
-                        .font(theme::tabular(ui.ctx(), SMALL))
-                        .color(if marked { number } else { theme::rgb(p.text) }),
-                );
-                let bar = if line.beat == 1 {
-                    format!("bar {}", line.bar)
-                } else {
-                    format!("bar {}.{}", line.bar, line.beat)
-                };
-                ui.label(
-                    egui::RichText::new(bar)
-                        .font(theme::tabular(ui.ctx(), SMALL))
-                        .color(muted),
-                );
-                ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                    if !line.problems.is_empty() {
-                        ui.label(
-                            egui::RichText::new(icons::TRIANGLE_ALERT.to_string())
-                                .font(theme::font(icons::SMALL))
-                                .color(theme::rgb(p.warning)),
-                        );
-                    }
-                    ui.add(
-                        egui::Label::new(text(&line.seg, SMALL, muted))
-                            .wrap_mode(egui::TextWrapMode::Truncate),
-                    );
-                });
-            });
-            let indent = NUMBER_W + theme::SPACE_SM;
-            if !line.note.is_empty() {
-                ui.horizontal_top(|ui| {
-                    ui.add_space(indent);
-                    ui.add(egui::Label::new(text(&line.note, SMALL, theme::rgb(p.text))).wrap());
-                });
-            }
-            if !line.caption.is_empty() {
-                ui.horizontal_top(|ui| {
-                    ui.add_space(indent);
-                    ui.add(egui::Label::new(text(&line.caption, SMALL, muted)).wrap());
-                });
-            }
-        });
-    let rect = inner.response.rect;
-    let resp = ui.interact(
-        rect,
-        ui.scope_id().with(("shot-list-row", line.k)),
-        Sense::click(),
-    );
-    let n = line.k + 1;
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Shot {n}")));
-    let fill = if selected {
-        theme::selected_fill(p)
-    } else if resp.hovered() {
-        theme::ink(p, theme::INK_08)
-    } else {
-        egui::Color32::TRANSPARENT
+        .collect()
+}
+
+/// The height a row needs for `line` at content width `inner`: the top
+/// line, then the note and the caption wrapped under it.
+fn row_height(ui: &Ui, line: &Line, inner: f32) -> f32 {
+    let wrap = (inner - NUMBER_W - theme::SPACE_SM).max(1.0);
+    let font = theme::font(SMALL);
+    let wrapped = |s: &str| {
+        if s.is_empty() {
+            0.0
+        } else {
+            LINE_GAP
+                + ui.painter()
+                    .layout(s.to_owned(), font.clone(), egui::Color32::PLACEHOLDER, wrap)
+                    .size()
+                    .y
+        }
     };
-    ui.painter().set(
-        bg,
-        egui::Shape::rect_filled(rect, egui::CornerRadius::same(theme::RADIUS), fill),
+    ROW_PAD_Y * 2.0 + SMALL + 4.0 + wrapped(&line.note) + wrapped(&line.caption)
+}
+
+/// Paints one shot's row inside the list item at `rect`: number, time, bar,
+/// segment and problem mark, then the note and the caption; a lime bar at
+/// the left edge when the playhead is on it (`marked`). Returns the row
+/// height the content needs.
+fn paint_row(ui: &mut Ui, p: &Palette, line: &Line, marked: bool, rect: egui::Rect) -> f32 {
+    let area = egui::Rect::from_min_max(
+        egui::pos2(ui.max_rect().left(), rect.top() + ROW_PAD_Y),
+        egui::pos2(ui.max_rect().right(), rect.bottom() - ROW_PAD_Y),
     );
+    let mut ui = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(area)
+            .layout(egui::Layout::top_down(Align::Min)),
+    );
+    let ui = &mut ui;
+    ui.spacing_mut().item_spacing = egui::vec2(theme::SPACE_SM, LINE_GAP);
+    let muted = theme::rgb(p.text_muted);
+    let number = if marked { theme::rgb(p.accent) } else { muted };
+    ui.horizontal(|ui| {
+        ui.allocate_ui_with_layout(
+            egui::vec2(NUMBER_W, SMALL + 4.0),
+            egui::Layout::left_to_right(Align::Center),
+            |ui| {
+                ui.set_width(NUMBER_W);
+                ui.label(
+                    egui::RichText::new((line.k + 1).to_string())
+                        .font(theme::tabular(ui.ctx(), SMALL))
+                        .color(number),
+                );
+            },
+        );
+        ui.label(
+            egui::RichText::new(clock(line.start))
+                .font(theme::tabular(ui.ctx(), SMALL))
+                .color(if marked { number } else { theme::rgb(p.text) }),
+        );
+        let bar = if line.beat == 1 {
+            format!("bar {}", line.bar)
+        } else {
+            format!("bar {}.{}", line.bar, line.beat)
+        };
+        ui.label(
+            egui::RichText::new(bar)
+                .font(theme::tabular(ui.ctx(), SMALL))
+                .color(muted),
+        );
+        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+            if !line.problems.is_empty() {
+                ui.label(
+                    egui::RichText::new(icons::TRIANGLE_ALERT.to_string())
+                        .font(theme::font(icons::SMALL))
+                        .color(theme::rgb(p.warning)),
+                );
+            }
+            ui.add(
+                egui::Label::new(text(&line.seg, SMALL, muted))
+                    .wrap_mode(egui::TextWrapMode::Truncate),
+            );
+        });
+    });
+    let indent = NUMBER_W + theme::SPACE_SM;
+    if !line.note.is_empty() {
+        ui.horizontal_top(|ui| {
+            ui.add_space(indent);
+            ui.add(egui::Label::new(text(&line.note, SMALL, theme::rgb(p.text))).wrap());
+        });
+    }
+    if !line.caption.is_empty() {
+        ui.horizontal_top(|ui| {
+            ui.add_space(indent);
+            ui.add(egui::Label::new(text(&line.caption, SMALL, muted)).wrap());
+        });
+    }
     if marked {
         let bar = egui::Rect::from_min_size(rect.min, egui::vec2(2.0, rect.height()));
         ui.painter()
             .rect_filled(bar, egui::CornerRadius::same(1), theme::rgb(p.accent));
     }
-    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-    if line.problems.is_empty() {
-        resp
-    } else {
-        widgets::tip(resp, p, &line.problems.join("\n"), "")
-    }
+    ui.min_rect().height() + ROW_PAD_Y * 2.0
 }
 
 #[cfg(test)]

@@ -539,11 +539,10 @@ fn clips(
                     .color(theme::rgb(theme.text_muted)),
             );
             if reading {
-                ui.add(
-                    egui::Spinner::new()
-                        .size(icons::SMALL - 2.0)
-                        .color(theme::rgb(theme.text_muted)),
-                );
+                ui.add(widgets::spinner(
+                    icons::SMALL - 2.0,
+                    theme::rgb(theme.text_muted),
+                ));
             }
         });
     });

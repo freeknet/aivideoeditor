@@ -1310,14 +1310,14 @@ fn settings(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
             } else {
                 let at = store::prefs_path().map(|p| p.display().to_string()).unwrap_or_default();
                 ui.horizontal(|ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut state.key_draft)
-                            .password(true)
-                            .hint_text(if prefs.api_key.is_some() { "saved — paste to replace" } else { "sk-ant-…" })
-                            .desired_width(ui.available_width() - 64.0),
-                    )
-                    .accessible_name("Claude API key")
-                    .hint(format!("Stored in plain text at {at}. Or set ANTHROPIC_API_KEY. Keys: console.anthropic.com."));
+                    widgets::input(&mut state.key_draft)
+                        .password(true)
+                        .label("Claude API key")
+                        .placeholder(if prefs.api_key.is_some() { "saved — paste to replace" } else { "sk-ant-…" })
+                        .width(ui.available_width() - 64.0)
+                        .show(ui)
+                        .response
+                        .hint(format!("Stored in plain text at {at}. Or set ANTHROPIC_API_KEY. Keys: console.anthropic.com."));
                     if widgets::outline_button(ui, theme, "Save").clicked() {
                         let key = state.key_draft.trim().to_owned();
                         prefs.api_key = (!key.is_empty()).then_some(key);
@@ -1328,8 +1328,11 @@ fn settings(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
             }
             widgets::menu_heading(ui, theme, "Local model server");
             ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut state.url_draft).desired_width(ui.available_width() - 64.0))
-                    .accessible_name("Local model server")
+                widgets::input(&mut state.url_draft)
+                    .label("Local model server")
+                    .width(ui.available_width() - 64.0)
+                    .show(ui)
+                    .response
                     .hint("llama.cpp's server (AVE_LLM_URL). Small local models plan poorly; use it offline.");
                 if widgets::outline_button(ui, theme, "Save").clicked() {
                     prefs.local_url = Some(state.url_draft.trim().to_owned());
@@ -2269,7 +2272,7 @@ fn model_menu(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
         .map_or(current.as_str(), |(_, l)| l)
         .to_owned();
     let id = ui.make_persistent_id("assistant-model");
-    let open = egui::Popup::is_id_open(ui.ctx(), id);
+    let open = widgets::menu_is_open(ui.ctx(), id);
     let trigger = widgets::tip(
         look::picker(ui, theme, &label, "Model", open),
         theme,
@@ -2280,7 +2283,7 @@ fn model_menu(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
     let mut pick: Option<&str> = None;
     let mut permission: Option<bool> = None;
     // The response is not needed: drawing it is the point.
-    let _ = egui::Popup::menu(&trigger)
+    let _ = widgets::menu(&trigger)
         .id(id)
         .width(240.0)
         .gap(SPACE_XS)
@@ -2646,7 +2649,7 @@ fn add_menu(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
     let selection = ctx.selection.clone();
     let mut add: Vec<Reference> = Vec::new();
     let id = ui.make_persistent_id("assistant-add");
-    let open = egui::Popup::is_id_open(ui.ctx(), id);
+    let open = widgets::menu_is_open(ui.ctx(), id);
     let button = widgets::icon_toggle_sized(
         ui,
         theme,
@@ -2657,7 +2660,7 @@ fn add_menu(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
         32.0,
     );
     // The response is not needed: drawing it is the point.
-    let _ = egui::Popup::menu(&button)
+    let _ = widgets::menu(&button)
         .id(id)
         .width(240.0)
         .gap(SPACE_XS)
@@ -2695,7 +2698,7 @@ fn add_menu(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                 ui.close();
             }
             widgets::menu_separator(ui, theme);
-            ui.menu_button(icons::with_label(icons::FILM, "Shot"), |ui| {
+            widgets::submenu(ui, icons::with_label(icons::FILM, "Shot"), |ui| {
                 egui::ScrollArea::vertical()
                     .max_height(320.0)
                     .show(ui, |ui| {
@@ -2710,7 +2713,7 @@ fn add_menu(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                         }
                     });
             });
-            ui.menu_button(icons::with_label(icons::USER, "Person"), |ui| {
+            widgets::submenu(ui, icons::with_label(icons::USER, "Person"), |ui| {
                 egui::ScrollArea::vertical()
                     .max_height(320.0)
                     .show(ui, |ui| {
@@ -2722,7 +2725,7 @@ fn add_menu(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                         }
                     });
             });
-            ui.menu_button(icons::with_label(icons::MUSIC, "Bars"), |ui| {
+            widgets::submenu(ui, icons::with_label(icons::MUSIC, "Bars"), |ui| {
                 for (from, to, label) in &src.bars {
                     if ui.button(format!("{label}  (bars {from}–{to})")).clicked() {
                         add.push(Reference::new(Target::Bars {
@@ -2733,7 +2736,7 @@ fn add_menu(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui) {
                     }
                 }
             });
-            ui.menu_button(icons::with_label(icons::LAYERS, "Plan"), |ui| {
+            widgets::submenu(ui, icons::with_label(icons::LAYERS, "Plan"), |ui| {
                 for name in &src.plans {
                     if ui.button(name).clicked() {
                         add.push(Reference::new(Target::Plan { name: name.clone() }));

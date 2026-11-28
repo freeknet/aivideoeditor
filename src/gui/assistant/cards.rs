@@ -370,9 +370,9 @@ pub(super) fn first_cut(
                 );
                 if card.length == Length::Custom {
                     ui.add(
-                        egui::DragValue::new(&mut card.custom)
+                        widgets::number(&mut card.custom, "Target length")
                             .range(8.0..=240.0)
-                            .speed(1.0)
+                            .drag_points_per_step(1.0)
                             .suffix(" s"),
                     )
                     .hint("Target length in seconds; the cut lands on whole phrases");

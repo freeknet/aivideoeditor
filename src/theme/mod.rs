@@ -30,7 +30,8 @@
 //!
 //! ## The catalog
 //!
-//! [`Catalog::load`] starts with the signature theme, adds the built-in
+//! [`Catalog::load`] starts with the Material 3 themes ([`material`], Night
+//! first, so it is the default) and the signature theme, adds the built-in
 //! themes from `assets/themes.toml` (compiled in with `include_str!`), then
 //! any `*.toml` in [`user_theme_dir`]. A user theme whose `id` matches an
 //! existing one replaces it, which is how a shipped theme is tweaked. `id`
@@ -395,6 +396,91 @@ fn signature_spec(accent: Rgb) -> ThemeSpec {
     }
 }
 
+/// The id of the Material 3 dark theme, the default.
+pub const MATERIAL_NIGHT: &str = "material-night";
+
+/// The id of the Material 3 light theme.
+pub const MATERIAL_LIGHT: &str = "material-light";
+
+/// What a Material 3 baseline scheme states, as a theme: every surface,
+/// outline, text and status colour is the scheme's own role.
+///
+/// The scheme has no warning or success role, so those two are Material's
+/// orange and green at the tone M3 uses for its error role in each mode.
+#[must_use]
+pub fn material_spec(dark: bool) -> ThemeSpec {
+    use egui_material3::tokens::{ColorRole, ColorScheme};
+    let scheme = ColorScheme::baseline(dark);
+    let hex = |role: ColorRole| {
+        let color = scheme.get(role);
+        Rgb::new(color.r(), color.g(), color.b()).to_hex()
+    };
+    // Back to front. In a dark scheme the containers get lighter as they
+    // come forward and in a light one darker, which is the direction the
+    // palette's `mode` already expects.
+    let (app, panel, raised, hover) = if dark {
+        (
+            ColorRole::SurfaceContainerLowest,
+            ColorRole::SurfaceContainerLow,
+            ColorRole::SurfaceContainerHigh,
+            ColorRole::SurfaceContainerHighest,
+        )
+    } else {
+        // The light containers sit closer together than the dark ones;
+        // high against highest falls under the layer-separation rule, so
+        // the hover surface is the dim surface, a step further on.
+        (
+            ColorRole::SurfaceContainerLowest,
+            ColorRole::SurfaceContainerLow,
+            ColorRole::SurfaceContainerHigh,
+            ColorRole::SurfaceDim,
+        )
+    };
+    let (id, name, mode, warning, success) = if dark {
+        (
+            MATERIAL_NIGHT,
+            "Material Night",
+            Mode::Dark,
+            "#ffb74d",
+            "#81c784",
+        )
+    } else {
+        (
+            MATERIAL_LIGHT,
+            "Material Light",
+            Mode::Light,
+            "#8a5100",
+            "#2e6b30",
+        )
+    };
+    ThemeSpec {
+        id: id.to_string(),
+        name: name.to_string(),
+        mode,
+        app: hex(app),
+        panel: hex(panel),
+        raised: hex(raised),
+        hover: hex(hover),
+        border: hex(ColorRole::OutlineVariant),
+        accent: hex(ColorRole::Primary),
+        text: hex(ColorRole::OnSurface),
+        text_muted: hex(ColorRole::OnSurfaceVariant),
+        danger: hex(ColorRole::Error),
+        warning: warning.to_string(),
+        success: success.to_string(),
+        rainbow_span: None,
+    }
+}
+
+/// The Material 3 theme, dark (`Material Night`) or light.
+///
+/// The baseline scheme is checked against the readability rules by the
+/// tests; if it ever failed to derive, the signature theme stands in.
+#[must_use]
+pub fn material(dark: bool) -> Palette {
+    Palette::derive(&material_spec(dark)).unwrap_or_else(signature)
+}
+
 /// The signature theme's key colour: Selects' lime (Tailwind lime-400),
 /// with dark text on it.
 pub const SIGNATURE_ACCENT: Rgb = Rgb::new(0xa3, 0xe6, 0x35);
@@ -468,7 +554,7 @@ fn emergency() -> Palette {
 /// Every theme available to the app.
 #[derive(Clone, Debug)]
 pub struct Catalog {
-    /// The themes, in catalog order. Never empty: the signature theme is
+    /// The themes, in catalog order. Never empty: Material Night is
     /// always first.
     themes: Vec<Palette>,
     /// Theme sources that could not be used, as `(source, reason)`.
@@ -487,11 +573,12 @@ struct CatalogFile {
 }
 
 impl Catalog {
-    /// The signature theme and the built-in catalog, without user themes.
+    /// The Material 3 themes, the signature theme and the built-in catalog,
+    /// without user themes. Material Night is first, so it is the default.
     #[must_use]
     pub fn built_in() -> Self {
         let mut catalog = Self {
-            themes: vec![signature()],
+            themes: vec![material(true), material(false), signature()],
             problems: Vec::new(),
         };
         catalog.absorb("built-in", BUILT_IN);
@@ -754,5 +841,34 @@ mod tests {
     fn an_unknown_theme_id_falls_back_rather_than_failing() {
         let catalog = Catalog::built_in();
         assert_eq!(catalog.get(Some("no-such-theme")).id, catalog.get(None).id);
+    }
+
+    #[test]
+    fn both_material_themes_derive_and_are_readable() {
+        for dark in [true, false] {
+            let spec = material_spec(dark);
+            let palette = Palette::derive(&spec);
+            assert!(palette.is_some(), "{} derives", spec.id);
+            let issues = material(dark).readability_issues();
+            assert!(issues.is_empty(), "{}: {issues:?}", spec.id);
+        }
+    }
+
+    #[test]
+    fn material_night_is_the_default_and_carries_the_schemes_own_colours() {
+        use egui_material3::tokens::{ColorRole, ColorScheme};
+        let default = Catalog::built_in().get(None);
+        assert_eq!(default.id, MATERIAL_NIGHT, "the default theme");
+        assert_eq!(default.mode, Mode::Dark, "night is dark");
+        let scheme = ColorScheme::baseline(true);
+        let as_rgb = |role: ColorRole| {
+            let c = scheme.get(role);
+            Rgb::new(c.r(), c.g(), c.b())
+        };
+        assert_eq!(default.accent, as_rgb(ColorRole::Primary), "accent");
+        assert_eq!(default.text, as_rgb(ColorRole::OnSurface), "text");
+        assert_eq!(default.danger, as_rgb(ColorRole::Error), "danger");
+        let light = Catalog::built_in().get(Some(MATERIAL_LIGHT));
+        assert_eq!(light.mode, Mode::Light, "the light theme is in the catalog");
     }
 }

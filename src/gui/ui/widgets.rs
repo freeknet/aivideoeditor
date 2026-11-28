@@ -2,10 +2,12 @@
 // Module:       gui::ui::widgets
 // Description:  The app's own controls: panel headers, buttons, icon buttons,
 //               tabs, segmented controls, badges, key chips, empty states,
-//               fields, menus, switches, cards, meters and swatches, all
-//               painted from the active palette.
+//               fields, menus, switches, cards, meters and swatches, from
+//               egui-material3's widgets where it has one, else painted from
+//               the active palette.
 //
-// Dependencies: egui; super::{theme, motion, icons}, crate::theme::Palette
+// Dependencies: egui; egui_material3; super::{theme, motion, icons},
+//               crate::theme::Palette
 // ============================================================================
 
 //! The app's controls: the design system's components.
@@ -25,9 +27,9 @@
 //! | views of one panel | [`tab_strip`] |
 //! | a mode, an option set | [`segmented`] |
 //! | a status, a count | [`pill`] |
-//! | a shortcut | [`kbd`], or a tooltip via [`tip`] |
+//! | a shortcut | [`kbd`], or a tooltip via [`tip`] ([`rich_tip`] for a preview) |
 //! | nothing to show | [`empty_state`] |
-//! | a field | [`text_field`] |
+//! | a field | [`text_field`], [`input`]; [`number`] for a number |
 //! | a menu | [`menu_item`], [`menu_heading`], [`menu_separator`] in `ui.menu_button` |
 //!
 //! Every colour comes from the [`Palette`] passed in. Every animation goes
@@ -310,7 +312,7 @@ pub fn mention_menu_many(
     if references.is_empty() {
         return;
     }
-    ui.menu_button("Mention in chat", |ui| {
+    submenu(ui, "Mention in chat", |ui| {
         for intent in crate::refs::Modifier::ALL {
             if ui.button(mention_label(intent)).clicked() {
                 actions.extend(mention_actions(references, intent));
@@ -371,73 +373,68 @@ pub fn button(ui: &mut Ui, theme: &Palette, label: &str, emphasis: Emphasis) -> 
 /// An on/off switch with its label to the left. Returns the response; the
 /// value is flipped in place when clicked.
 pub fn switch(ui: &mut Ui, theme: &Palette, on: &mut bool, label: &str) -> Response {
-    // Selects' menu switch: a 32 x 18 track, key when on, ink 20 % when
-    // off; a 14 px knob in the panel colour.
-    let track = Vec2::new(32.0, 18.0);
+    // Material's dense switch (a 39 x 24 track in a 40 px touch target: a
+    // primary track and an on-primary thumb when on, an outlined surface
+    // track when off) at the right end of a full-width row, named for
+    // screen readers by the row's label; a click on the label toggles it.
+    use egui_material3::switch::{DENSE_TOUCH_TARGET, DENSE_TRACK_HEIGHT, DENSE_TRACK_WIDTH};
     let width = ui.available_width();
-    let (rect, mut response) =
-        ui.allocate_exact_size(Vec2::new(width, theme::CONTROL_HEIGHT), Sense::click());
-    if response.clicked() {
-        *on = !*on;
-        response.mark_changed();
-    }
-    let value = *on;
-    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Switch, true, value, label));
-    let t = fade(ui.ctx(), response.id, value);
-    let lift = hover_t(ui, response.id.with("hover"), response.hovered());
-    let painter = ui.painter();
-    painter.text(
+    let height = theme::CONTROL_HEIGHT.max(DENSE_TRACK_HEIGHT + SPACE_SM);
+    let (rect, mut response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
+    ui.painter().text(
         rect.left_center(),
         Align2::LEFT_CENTER,
         label,
         theme::font(theme::BODY_SIZE),
         theme::rgb(theme.text),
     );
-    let track_rect =
-        Rect::from_center_size(rect.right_center() - Vec2::new(track.x / 2.0, 0.0), track);
-    let off = theme.panel.lerp(theme.text, (0.2 + 0.08 * lift).min(1.0));
-    painter.rect_filled(
-        track_rect,
-        CornerRadius::same(9),
-        blend(off, theme.accent, t),
+    // The touch target is taller than the row; centred on it, it reaches
+    // a little into the rows around, as Material's targets do.
+    let slot = Rect::from_center_size(
+        rect.right_center() - Vec2::new(DENSE_TRACK_WIDTH / 2.0, 0.0),
+        Vec2::new(DENSE_TRACK_WIDTH, DENSE_TOUCH_TARGET),
     );
-    let knob_x = egui::lerp((track_rect.left() + 9.0)..=(track_rect.right() - 9.0), t);
-    painter.circle_filled(
-        egui::pos2(knob_x, track_rect.center().y),
-        7.0,
-        theme::rgb(theme.panel),
+    let enabled = ui.is_enabled();
+    let switch = ui.put(
+        slot,
+        egui_material3::MaterialSwitch::new(on)
+            .dense(true)
+            .accessible_label(label)
+            .enabled(enabled),
     );
-    focus_ring(ui, theme, &response);
+    if response.clicked() {
+        *on = !*on;
+        response.mark_changed();
+    }
+    if switch.changed() {
+        response.mark_changed();
+    }
+    let value = *on;
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Switch, enabled, value, label));
+    let response = response | switch;
     super::hint::auto(&response, label);
     response
 }
 
-/// A card: a raised surface that lifts under the pointer and carries an
-/// accent edge when selected. Click anywhere on it to select it.
+/// A card: Material's outlined card, clickable, with its state layer under
+/// the pointer and its selected look when `selected`. Click anywhere on it
+/// to select it.
 pub fn card(
     ui: &mut Ui,
-    theme: &Palette,
+    _theme: &Palette,
     id: egui::Id,
     selected: bool,
     add_contents: impl FnOnce(&mut Ui),
 ) -> Response {
-    let hovered_before = ui.ctx().read_response(id).is_some_and(|r| r.hovered());
-    let lift = hover_t(ui, id.with("lift"), hovered_before);
-    let chosen = fade(ui.ctx(), id.with("chosen"), selected);
-    let border = theme
-        .border
-        .lerp(theme.border_strong, lift)
-        .lerp(theme.accent, chosen);
-    let inner = egui::Frame::new()
-        .fill(blend(theme.raised, theme.hover, lift * 0.6))
-        .stroke(Stroke::new(1.0 + chosen, theme::rgb(border)))
-        .corner_radius(CornerRadius::same(theme::RADIUS_LG))
-        .inner_margin(theme::margin(SPACE_MD + SPACE_XS))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            add_contents(ui);
-        });
-    ui.interact(inner.response.rect, id, Sense::click())
+    ui.push_id(id, |ui| {
+        ui.add(
+            egui_material3::MaterialCard2::outlined()
+                .clickable(true)
+                .selected(selected)
+                .content(add_contents),
+        )
+    })
+    .inner
 }
 
 /// Lays `count` cards out in as many equal columns of at least `minimum`
@@ -481,16 +478,63 @@ pub fn grid_layout(available: f32, minimum: f32, gap: f32, count: usize) -> (usi
     (columns, width.max(0.0))
 }
 
+/// A busy mark `size` across in `color`: Material's indeterminate circular
+/// progress indicator, the stroke scaled to the size so a 10 px one in a
+/// list row still reads. Add it with `ui.add` or place it with `ui.put`.
+pub fn spinner(size: f32, color: Color32) -> egui_material3::MaterialProgress {
+    egui_material3::MaterialProgress::circular()
+        .indeterminate(true)
+        .size(Vec2::splat(size))
+        .stroke_width((size / 7.0).max(1.5))
+        .active_color(color)
+}
+
+/// A dropdown of `options` with `selected` the chosen index: Material's
+/// compact (32 px) outlined select, its menu scrolling past 300 px. The
+/// response is marked changed when a new option is picked.
+pub fn select<S: AsRef<str>>(
+    ui: &mut Ui,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
+    selected: &mut usize,
+    options: &[S],
+    width: f32,
+) -> Response {
+    let mut pick = Some(*selected);
+    let mut field = egui_material3::MaterialSelect::new(&mut pick)
+        .id_salt(egui::IdSalt::new(id_salt))
+        .variant(egui_material3::SelectVariant::Outlined)
+        .compact(true)
+        .width(width)
+        .menu_max_height(300.0);
+    for (index, option) in options.iter().enumerate() {
+        field = field.option(index, option.as_ref());
+    }
+    let mut response = ui.add(field);
+    if let Some(index) = pick
+        && index != *selected
+        && index < options.len()
+    {
+        *selected = index;
+        response.mark_changed();
+    }
+    response
+}
+
 /// A horizontal meter, `fraction` full, that settles rather than jumps.
 pub fn meter(ui: &mut Ui, theme: &Palette, id: egui::Id, fraction: f32, fill: Rgb) -> Response {
+    // Material's linear progress indicator (active track, gap, inactive
+    // track, stop dot), fed the settled value so it still glides.
     let width = ui.available_width();
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 6.0), Sense::hover());
     let shown = level(ui.ctx(), id, fraction.clamp(0.0, 1.0));
-    let painter = ui.painter();
-    painter.rect_filled(rect, CornerRadius::same(3), theme::rgb(theme.hover));
-    let filled = Rect::from_min_size(rect.min, Vec2::new(rect.width() * shown, rect.height()));
-    painter.rect_filled(filled, CornerRadius::same(3), theme::rgb(fill));
-    response
+    ui.add(
+        egui_material3::MaterialProgress::linear()
+            .value(shown)
+            .max(1.0)
+            .width(width)
+            .height(6.0)
+            .active_color(theme::rgb(fill))
+            .track_color(theme::rgb(theme.hover)),
+    )
 }
 
 /// A colour swatch with a hairline, so a swatch matching its surface still
@@ -680,9 +724,12 @@ pub enum ButtonKind {
     Destructive,
 }
 
-/// A button: `kind`, an optional leading Lucide icon, and a label. 28 px
-/// tall, label in SemiBold 12, 8 px corners, as Selects' `xs` buttons.
-/// An empty `label` with an icon makes a square icon button.
+/// A button: `kind`, an optional leading Lucide icon, and a label, drawn
+/// by egui-material3's `MaterialButton` (Ghost is a text button, Outline
+/// outlined, Secondary filled tonal, Primary and Key filled, Destructive
+/// filled in the error colour). 28 px tall in panels, fully rounded, label
+/// in Material's label-medium. An empty `label` with an icon makes a
+/// square icon button.
 pub fn button_with(
     ui: &mut Ui,
     theme: &Palette,
@@ -704,98 +751,61 @@ pub fn button_sized(
     label: &str,
     height: f32,
 ) -> Response {
-    let font = theme::semibold(ui.ctx(), theme::BODY_SIZE);
-    let galley = (!label.is_empty()).then(|| {
-        ui.painter()
-            .layout_no_wrap(label.to_owned(), font, Color32::PLACEHOLDER)
-    });
-    let icon_size = if galley.is_some() {
-        icons::SMALL
-    } else {
-        icons::SIZE
-    };
-    let text_width = galley.as_ref().map_or(0.0, |g| g.size().x);
-    let width = match (icon.is_some(), galley.is_some()) {
-        (true, false) | (false, false) => height,
-        (false, true) => text_width + SPACE_MD * 2.0 - 2.0,
-        (true, true) => text_width + icon_size + SPACE_XS + 2.0 + SPACE_MD * 2.0 - 2.0,
-    };
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
-    let lift = hover_t(ui, response.id, response.hovered());
-    let pressed = response.is_pointer_button_down_on();
-    let (fill, text, stroke) = match kind {
-        ButtonKind::Ghost => (
-            theme::accent_fill(theme).gamma_multiply(lift),
-            blend(theme.text_muted, theme.text, lift),
-            Stroke::NONE,
-        ),
-        ButtonKind::Outline => (
-            if lift > 0.0 {
-                theme::ink(
-                    theme,
-                    egui::lerp(f32::from(theme::INK_05)..=f32::from(theme::INK_15), lift).round()
-                        as u8,
-                )
-            } else {
-                theme::ink(theme, theme::INK_05)
-            },
-            theme::rgb(theme.text),
-            theme::input_line(theme),
-        ),
-        ButtonKind::Secondary => (
-            blend(theme.raised, theme.raised.lerp(theme.hover, 0.6), lift),
-            theme::rgb(theme.text),
-            Stroke::NONE,
-        ),
-        ButtonKind::Primary => {
-            let rest = theme::primary_fill(theme);
-            (
-                blend(rest, rest.lerp(theme.text_muted, 0.25), lift),
-                theme::primary_text(theme),
-                Stroke::NONE,
-            )
-        }
-        ButtonKind::Key => (
-            blend(theme.accent, theme.accent.lerp(theme.panel, 0.1), lift),
-            theme::rgb(theme.text_on_accent),
-            Stroke::NONE,
-        ),
-        ButtonKind::Destructive => (
-            blend(theme.danger, theme.danger_hover, lift),
-            theme::rgb(theme.text_on_danger),
-            Stroke::NONE,
-        ),
-    };
-    let rect_drawn = if pressed { rect.shrink(0.5) } else { rect };
-    let painter = ui.painter();
-    painter.rect(
-        rect_drawn,
-        CornerRadius::same(theme::RADIUS_MD),
-        fill,
-        stroke,
-        egui::StrokeKind::Inside,
-    );
-    let content = text_width
-        + match (icon.is_some(), galley.is_some()) {
-            (true, true) => icon_size + SPACE_XS + 2.0,
-            (true, false) => icon_size,
-            (false, true) | (false, false) => 0.0,
-        };
-    let mut x = rect.center().x - content / 2.0;
+    use egui_material3::MaterialButton;
+    // The label is one layout job, ave's Lucide glyph and then the text in
+    // Material's label-medium style, so the library's button keeps the
+    // app's icons (it only knows Material Symbols by name) and lays the
+    // pair out as one centred line in its own content colour.
+    let mut job = egui::text::LayoutJob::default();
+    let colour = Color32::PLACEHOLDER;
     if let Some(glyph) = icon {
-        let slot = Rect::from_min_size(
-            egui::pos2(x, rect.center().y - icon_size / 2.0),
-            Vec2::splat(icon_size),
+        let size = if label.is_empty() {
+            icons::SIZE
+        } else {
+            icons::SMALL
+        };
+        job.append(
+            &glyph.to_string(),
+            0.0,
+            egui::TextFormat::simple(
+                crate::gui::font::weight(ui.ctx(), crate::gui::font::ICONS, size),
+                colour,
+            ),
         );
-        icons::paint(painter, slot, glyph, icon_size, text);
-        x += icon_size + SPACE_XS + 2.0;
     }
-    if let Some(galley) = galley {
-        let y = rect.center().y - galley.size().y / 2.0;
-        painter.galley(egui::pos2(x, y), galley, text);
+    if !label.is_empty() {
+        let style = egui_material3::tokens::TypeRole::LabelMedium.style();
+        let leading = if icon.is_some() { SPACE_SM } else { 0.0 };
+        job.append(
+            label,
+            leading,
+            egui::TextFormat {
+                font_id: style.font_id(ui.ctx()),
+                extra_letter_spacing: style.tracking,
+                color: colour,
+                ..egui::TextFormat::default()
+            },
+        );
     }
-    focus_ring(ui, theme, &response);
+    let content_width = ui.painter().layout_job(job.clone()).size().x;
+    let width = if label.is_empty() {
+        height
+    } else {
+        content_width + SPACE_LG * 2.0
+    };
+    let button = match kind {
+        ButtonKind::Ghost => MaterialButton::text(job),
+        ButtonKind::Outline => MaterialButton::outlined(job),
+        ButtonKind::Secondary => MaterialButton::filled_tonal(job),
+        ButtonKind::Primary | ButtonKind::Key => MaterialButton::filled(job),
+        ButtonKind::Destructive => MaterialButton::filled(job)
+            .fill(theme::rgb(theme.danger))
+            .text_color(theme::rgb(theme.text_on_danger)),
+    };
+    // `small` drops Material's 40 px minimum so the button fits the dense
+    // rows (28 px in a panel header); the width keeps M3's 16 px sides.
+    let response = ui.add(button.small().min_size(Vec2::new(width, height)));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
     super::hint::auto(&response, label);
     response
 }
@@ -837,16 +847,17 @@ pub fn key_button(ui: &mut Ui, theme: &Palette, label: &str) -> Response {
     button_with(ui, theme, ButtonKind::Key, None, label)
 }
 
-/// A ghost icon button: 28 px square, the icon muted until hovered, a
-/// tooltip naming it and its shortcut (`keys` empty for none). Every
-/// icon-only control in the app is one of these or an [`icon_toggle`].
+/// A ghost icon button: 28 px square, a tooltip naming it and its
+/// shortcut (`keys` empty for none). Every icon-only control in the app is
+/// one of these or an [`icon_toggle`].
 pub fn icon_btn(ui: &mut Ui, theme: &Palette, glyph: char, label: &str, keys: &str) -> Response {
-    icon_toggle(ui, theme, glyph, label, keys, false)
+    material_icon_button(ui, theme, glyph, label, keys, None, theme::CONTROL_HEIGHT)
 }
 
-/// An icon button that shows whether what it toggles is on: the selected
-/// fill (ink 12 %) and a full-strength icon when on, muted when off; ink
-/// 12 % and the foreground colour under the pointer.
+/// An icon button that shows whether what it toggles is on: Material's
+/// standard toggle icon button, the icon in the primary colour when on.
+/// It reports the toggled state to screen readers; the caller flips its
+/// own state on `clicked`.
 pub fn icon_toggle(
     ui: &mut Ui,
     theme: &Palette,
@@ -869,20 +880,69 @@ pub fn icon_toggle_sized(
     on: bool,
     size: f32,
 ) -> Response {
-    let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
-    response
-        .widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), on, label));
-    let lift = hover_t(ui, response.id, response.hovered());
-    paint_ghost(ui, theme, rect, on, lift, theme::RADIUS_MD);
-    let rest = if on { theme.text } else { theme.text_muted };
-    icons::paint(
-        ui.painter(),
-        rect,
+    material_icon_button(ui, theme, glyph, label, keys, Some(on), size)
+}
+
+/// A Lucide `glyph` as an egui-material3 icon, drawn from the app's icon
+/// family.
+#[must_use]
+pub fn lucide(glyph: char) -> egui_material3::Icon {
+    egui_material3::Icon::glyph(
         glyph,
-        icons::SIZE,
-        blend(rest, theme.text, lift),
+        egui::FontFamily::Name(crate::gui::font::ICONS.into()),
+    )
+}
+
+/// egui-material3's standard icon button, square-cornered, `size` across,
+/// drawing the Lucide `glyph`: a toggle when `on` is given. Material gives
+/// every icon button a 48 dp touch target; in ave's dense rows that target
+/// would overlap the neighbouring controls, so the button is laid out in a
+/// child clipped to its visible square, which is also where egui clips its
+/// hit area. The focus ring the clip cuts off is painted again outside it.
+fn material_icon_button(
+    ui: &mut Ui,
+    theme: &Palette,
+    glyph: char,
+    label: &str,
+    keys: &str,
+    on: Option<bool>,
+    size: f32,
+) -> Response {
+    use egui_material3::iconbutton::{
+        IconButtonShape, IconButtonSize, MIN_TOUCH_TARGET, MaterialIconButton,
+    };
+    let (slot, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
+    let enabled = ui.is_enabled();
+    let mut selected = on.unwrap_or(false);
+    let mut button = MaterialIconButton::standard(lucide(glyph))
+        .size(IconButtonSize::Custom(size))
+        .shape(IconButtonShape::Square)
+        .label(label)
+        .enabled(enabled);
+    if on.is_some() {
+        button = button.toggleable(&mut selected);
+    }
+    let target = Rect::from_center_size(slot.center(), Vec2::splat(size.max(MIN_TOUCH_TARGET)));
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(target)
+            .layout(Layout::left_to_right(Align::Min)),
     );
-    focus_ring(ui, theme, &response);
+    child.set_clip_rect(slot.intersect(ui.clip_rect()));
+    let response = child.add(button);
+    if response.has_focus() {
+        let radius = IconButtonSize::Custom(size)
+            .metrics()
+            .square_shape
+            .radius(slot);
+        egui_material3::paint::paint_focus_ring(
+            ui.painter(),
+            slot,
+            CornerRadius::same(radius.round().clamp(0.0, 255.0) as u8),
+            egui_material3::MaterialTheme::of(ui.ctx())
+                .color(egui_material3::tokens::ColorRole::Secondary),
+        );
+    }
     tip(response, theme, label, keys)
 }
 
@@ -1056,35 +1116,65 @@ pub fn glass_button(
 }
 
 /// A tooltip on `response`: `label`, then `keys` as [`kbd`] chips when
-/// there are any. Put hints here, not in a line of text under a control.
-pub fn tip(response: Response, theme: &Palette, label: &str, keys: &str) -> Response {
+/// there are any, in Material's plain tooltip. Put hints here, not in a
+/// line of text under a control. The tooltip takes its colours from the
+/// Material theme, so the palette is not read.
+pub fn tip(response: Response, _theme: &Palette, label: &str, keys: &str) -> Response {
     if label.is_empty() {
         return response;
     }
     if response.hovered() {
         super::hint::set(&response.ctx, label, keys);
     }
-    response.on_hover_ui(|ui| {
+    let name = if keys.is_empty() {
+        label.to_owned()
+    } else {
+        format!("{label} ({keys})")
+    };
+    super::hint::name_for_screen_readers(&response, &name);
+    // Whether it showed changes nothing here: the response is returned
+    // either way.
+    let _ = egui_material3::MaterialTooltip::new(name).show_for_with(&response, |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = SPACE_SM;
-            ui.label(egui::RichText::new(label).color(theme::rgb(theme.text)));
+            ui.label(label);
             if !keys.is_empty() {
-                kbd(ui, theme, keys);
+                let ink = ui.visuals().text_color();
+                kbd_in(ui, keys, ink);
             }
         });
-    })
+    });
+    response
+}
+
+/// A rich tooltip on `response`: Material's rich tooltip (the raised
+/// surface container) holding whatever `add_contents` lays out, for a
+/// preview with several lines. `name` is what screen readers are told.
+/// Like egui's tooltips it closes when the pointer leaves the control.
+pub fn rich_tip(response: Response, name: &str, add_contents: impl FnOnce(&mut Ui)) -> Response {
+    // Neither the tooltip's response nor the content's return value is
+    // needed: it has no actions.
+    let _ = egui_material3::RichTooltip::new(name)
+        .persistent(false)
+        .show_for_with(&response, add_contents);
+    response
 }
 
 /// A keyboard shortcut as chips: `Ctrl+Shift+R` becomes three, one per
 /// key; anything with a space in it (`Space / K`) stays one chip.
 pub fn kbd(ui: &mut Ui, theme: &Palette, keys: &str) -> Response {
+    kbd_in(ui, keys, theme::rgb(theme.text_muted))
+}
+
+/// [`kbd`] in `ink`, the chips tinted from it: on the inverse surface of a
+/// tooltip the palette's muted ink would not show.
+fn kbd_in(ui: &mut Ui, keys: &str, ink: Color32) -> Response {
     let parts: Vec<&str> = if keys.contains(' ') || keys.len() == 1 {
         vec![keys]
     } else {
         keys.split('+').filter(|part| !part.is_empty()).collect()
     };
     let font = theme::medium(ui.ctx(), theme::TINY_SIZE);
-    let ink = theme::rgb(theme.text_muted);
     let gap = 2.0;
     let galleys: Vec<_> = parts
         .into_iter()
@@ -1108,8 +1198,8 @@ pub fn kbd(ui: &mut Ui, theme: &Palette, keys: &str) -> Response {
         ui.painter().rect(
             chip,
             CornerRadius::same(4),
-            theme::ink(theme, theme::INK_08),
-            Stroke::new(1.0, theme::ink(theme, theme::INK_05)),
+            ink.gamma_multiply(0.12),
+            Stroke::new(1.0, ink.gamma_multiply(0.2)),
             egui::StrokeKind::Inside,
         );
         ui.painter()
@@ -1118,30 +1208,70 @@ pub fn kbd(ui: &mut Ui, theme: &Palette, keys: &str) -> Response {
     response
 }
 
-/// Views of one panel (Shots / People / Music): text tabs, the open one
-/// filled with Selects' `accent`. Returns whether the choice changed.
+/// Views of one panel (Shots / People / Music): Material secondary tabs,
+/// the open one underlined in primary. Returns whether the choice changed.
 pub fn tab_strip<T: PartialEq + Copy>(
     ui: &mut Ui,
-    theme: &Palette,
+    _theme: &Palette,
     current: &mut T,
     items: &[(T, &str)],
 ) -> bool {
-    let mut changed = false;
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 2.0;
-        for &(value, label) in items {
-            if tab(ui, theme, label, *current == value).clicked() && *current != value {
-                *current = value;
-                changed = true;
-            }
-        }
+    // Material's secondary tabs (an on-surface label and a primary
+    // underline on the open one), each as wide as its label, on the
+    // header's own fill and without the bar's divider (the header has its
+    // hairline). Even in its content layout the library claims the whole
+    // row, so it gets a box exactly as wide as its tabs, and the header
+    // keeps its other controls.
+    use egui_material3::tabs::{TAB_HORIZONTAL_PADDING, TabLayout};
+    if items.is_empty() {
+        return false;
+    }
+    let style = egui_material3::tokens::TypeRole::TitleSmall.style();
+    let font = style.font_id(ui.ctx());
+    let width: f32 = items
+        .iter()
+        .map(|&(_, label)| {
+            ui.painter()
+                .layout_no_wrap(label.to_owned(), font.clone(), Color32::PLACEHOLDER)
+                .size()
+                .x
+                + TAB_HORIZONTAL_PADDING * 2.0
+        })
+        .sum();
+    let height = theme::CONTROL_HEIGHT + SPACE_XS;
+    let before = items.iter().position(|&(value, _)| value == *current);
+    let mut index = before.unwrap_or(0);
+    let salt = items
+        .iter()
+        .map(|&(_, label)| label)
+        .collect::<Vec<_>>()
+        .join("|");
+    let tabs = items.iter().fold(
+        egui_material3::MaterialTabs::secondary(&mut index)
+            .id_salt(salt)
+            .layout(TabLayout::Content)
+            .transparent()
+            .divider(false)
+            .height(height),
+        |tabs, &(_, label)| tabs.tab(label),
+    );
+    ui.allocate_ui(Vec2::new(width, height), |ui| {
+        ui.set_width(width);
+        ui.add(tabs)
     });
-    changed
+    match items.get(index) {
+        Some(&(value, _)) if Some(index) != before => {
+            *current = value;
+            true
+        }
+        Some(_) | None => false,
+    }
 }
 
-/// A segmented control, as shadcn's Tabs: a muted track, the chosen
-/// option a raised pill in the panel colour. For a mode or a small option
-/// set. Returns whether the choice changed.
+/// A segmented control: Material's segmented button at its densest (28 px,
+/// the height of the controls around it), connected outlined segments with
+/// the chosen one in the secondary container, no check mark. For a mode or
+/// a small option set. Returns whether the choice changed.
 pub fn segmented<T: PartialEq + Copy>(
     ui: &mut Ui,
     theme: &Palette,
@@ -1156,85 +1286,52 @@ pub fn segmented<T: PartialEq + Copy>(
 /// drawn faint, does not take a click, and says why on hover.
 pub fn segmented_gated<T: PartialEq + Copy>(
     ui: &mut Ui,
-    theme: &Palette,
+    _theme: &Palette,
     current: &mut T,
     items: &[(T, &str)],
     off: impl Fn(T) -> Option<String>,
 ) -> bool {
-    let font = theme::medium(ui.ctx(), theme::BODY_SIZE);
-    let galleys: Vec<_> = items
+    use egui_material3::{Segment, SegmentedButton};
+    if items.is_empty() {
+        return false;
+    }
+    let before = items.iter().position(|&(value, _)| value == *current);
+    let mut index = before;
+    let group = items
         .iter()
-        .map(|&(_, label)| {
-            ui.painter()
-                .layout_no_wrap(label.to_owned(), font.clone(), Color32::PLACEHOLDER)
-        })
-        .collect();
-    let pad = 2.0;
-    let widths: Vec<f32> = galleys
-        .iter()
-        .map(|g| g.size().x + SPACE_MD * 2.0 - SPACE_XS)
-        .collect();
-    let total = widths.iter().sum::<f32>() + pad * 2.0;
-    let (track, _) =
-        ui.allocate_exact_size(Vec2::new(total, theme::CONTROL_HEIGHT), Sense::hover());
-    ui.painter().rect_filled(
-        track,
-        CornerRadius::same(theme::RADIUS_MD),
-        theme::popover_fill(theme),
+        .map(|&(_, label)| label)
+        .collect::<Vec<_>>()
+        .join(" / ");
+    let reasons: Vec<Option<String>> = items.iter().map(|&(value, _)| off(value)).collect();
+    let button = items.iter().zip(&reasons).fold(
+        SegmentedButton::single_optional(&mut index)
+            .id_salt(group.clone())
+            .label(group.clone())
+            .density(-3)
+            .show_check(false),
+        |button, (&(_, label), why)| {
+            button.segment(match why {
+                Some(why) => Segment::new(label).enabled(false).hover_text(why.clone()),
+                None => Segment::new(label),
+            })
+        },
     );
-    let mut changed = false;
-    let mut x = track.left() + pad;
-    for ((&(value, label), galley), width) in items.iter().zip(galleys).zip(widths) {
-        let rect = Rect::from_min_size(
-            egui::pos2(x, track.top() + pad),
-            Vec2::new(width, track.height() - pad * 2.0),
-        );
-        x += width;
-        let id = ui.scope_id().with(("segment", label));
-        let why_off = off(value);
-        let enabled = why_off.is_none();
-        let sense = if enabled {
-            Sense::click()
-        } else {
-            Sense::hover()
-        };
-        let mut response = ui.interact(rect, id, sense);
-        match &why_off {
-            None => super::hint::auto(&response, label),
-            Some(why) => response = super::hint::Hint::hint(response, why),
-        }
-        let on = *current == value;
-        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, enabled, on, label));
-        let lift = hover_t(ui, id, response.hovered());
-        let painter = ui.painter();
-        if on {
-            painter.add(egui::epaint::RectShape::filled(
-                rect,
-                CornerRadius::same(theme::RADIUS),
-                theme::rgb(theme.panel),
-            ));
-            painter.rect_stroke(
-                rect,
-                CornerRadius::same(theme::RADIUS),
-                Stroke::new(1.0, theme::ink(theme, theme::INK_05)),
-                egui::StrokeKind::Inside,
-            );
-        }
-        let ink = if !enabled {
-            theme::rgb(theme.text_faint).gamma_multiply(0.55)
-        } else if on {
-            theme::rgb(theme.text)
-        } else {
-            blend(theme.text_muted, theme.text, lift)
-        };
-        painter.galley(rect.center() - galley.size() / 2.0, galley, ink);
-        focus_ring(ui, theme, &response);
-        if enabled && response.clicked() && !on {
-            *current = value;
-            changed = true;
+    let shown = button.show(ui);
+    // The status bar names what a segment does, or why it is off.
+    for ((segment, &(_, label)), why) in shown.segments.iter().zip(items).zip(&reasons) {
+        match why {
+            Some(why) if segment.hovered() => super::hint::set(ui.ctx(), why, ""),
+            Some(_) => {}
+            None => super::hint::auto(segment, label),
         }
     }
-    changed
+    match index.and_then(|i| items.get(i)) {
+        Some(&(value, _)) if index != before => {
+            *current = value;
+            true
+        }
+        Some(_) | None => false,
+    }
 }
 
 /// The colour a [`pill`] takes.
@@ -1252,45 +1349,39 @@ pub enum Tone {
     Danger,
 }
 
-/// A badge: short text on a tinted fill of its tone (Selects' `badge`:
-/// colour at 10–15 % behind text in that colour), 20 px tall, 6 px
-/// corners.
-pub fn pill(ui: &mut Ui, theme: &Palette, text: &str, tone: Tone) -> Response {
+/// A badge: short text on its tone's container colour, drawn as
+/// Material's labelled badge. Success and warning are egui-material3's
+/// theme-harmonised extended colours, danger the error container, key the
+/// primary container, neutral the highest surface container.
+pub fn pill(ui: &mut Ui, _theme: &Palette, text: &str, tone: Tone) -> Response {
+    use egui_material3::tokens::ColorRole;
+    let scheme = egui_material3::MaterialTheme::of(ui.ctx());
+    let roles = |fill: ColorRole, ink: ColorRole| (scheme.color(fill), scheme.color(ink));
     let (fill, ink) = match tone {
-        Tone::Neutral => (
-            theme::ink(theme, theme::INK_10),
-            theme::rgb(theme.text_muted),
+        Tone::Neutral => roles(
+            ColorRole::SurfaceContainerHighest,
+            ColorRole::OnSurfaceVariant,
         ),
-        Tone::Key => (
-            theme::translucent(theme.accent, 38),
-            theme::rgb(theme.accent),
-        ),
-        Tone::Success => (
-            theme::translucent(theme.success, 38),
-            theme::rgb(theme.success),
-        ),
-        Tone::Warning => (
-            theme::translucent(theme.warning, 38),
-            theme::rgb(theme.warning),
-        ),
-        Tone::Danger => (
-            theme::translucent(theme.danger, 38),
-            theme::rgb(theme.danger),
-        ),
+        Tone::Key => roles(ColorRole::PrimaryContainer, ColorRole::OnPrimaryContainer),
+        Tone::Success => {
+            let group = scheme.success();
+            (group.color_container, group.on_color_container)
+        }
+        Tone::Warning => {
+            let group = scheme.warning();
+            (group.color_container, group.on_color_container)
+        }
+        Tone::Danger => roles(ColorRole::ErrorContainer, ColorRole::OnErrorContainer),
     };
-    let galley = ui.painter().layout_no_wrap(
-        text.to_owned(),
-        theme::medium(ui.ctx(), theme::SMALL_SIZE),
-        ink,
+    // Material's labelled badge (16 px, label-small, fully rounded) in the
+    // tone's tint, inline rather than pinned to a corner.
+    let response = ui.add(
+        egui_material3::MaterialBadge::new(text)
+            .color(egui_material3::BadgeColor::Custom(fill, ink))
+            .description(text),
     );
-    let size = Vec2::new(galley.size().x + SPACE_SM + SPACE_XS, SPACE_LG + SPACE_XS);
-    let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
-    // Painted text: name it, so a screen reader reads the status.
+    // Name it as text, so a screen reader reads the status.
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, text));
-    ui.painter()
-        .rect_filled(rect, CornerRadius::same(theme::RADIUS), fill);
-    ui.painter()
-        .galley(rect.center() - galley.size() / 2.0, galley, ink);
     response
 }
 
@@ -1354,15 +1445,38 @@ pub fn empty_state(
     ui.advance_cursor_after_rect(area);
 }
 
-/// A single-line field with Selects' input look: the `input` hairline, 8 px
-/// corners, 28 px tall, the `ring` colour around it while focused, and
-/// `hint` as the placeholder.
-pub fn text_field(ui: &mut Ui, theme: &Palette, text: &mut String, hint: &str) -> Response {
-    let width = ui.available_width();
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, theme::CONTROL_HEIGHT), Sense::hover());
-    field_frame(ui, theme, rect, text, hint, None)
+/// A single-line field filling the row: Material's outlined text field
+/// at its densest (32 px, no floating label), `hint` as the placeholder.
+pub fn text_field(ui: &mut Ui, _theme: &Palette, text: &mut String, hint: &str) -> Response {
+    input(text)
+        .placeholder(hint)
+        .fill_width(true)
+        .show(ui)
+        .response
 }
 
+/// Material's outlined text field at its densest (32 px, no floating
+/// label: a `label` becomes the placeholder unless one is set, and stays
+/// the accessible name), for forms and dialogs. Finish it with `.show(ui)`.
+pub fn input(text: &mut String) -> egui_material3::MaterialInput<'_> {
+    egui_material3::MaterialInput::outlined(text).compact(true)
+}
+
+/// Material's outlined number field at its densest (32 px), named `label`
+/// for screen readers: drag it sideways, step it with Up and Down, or type.
+/// Finish it with `ui.add(..)`.
+pub fn number<'a, N: egui::emath::Numeric>(
+    value: &'a mut N,
+    label: &str,
+) -> egui_material3::MaterialNumberField<'a, N> {
+    egui_material3::MaterialNumberField::new(value)
+        .label(label)
+        .compact(true)
+}
+
+/// A hand-placed field in a row too short for [`input`]'s 32 px (a 24 or
+/// 28 px header or toolbar), optionally led by a Lucide icon: the field
+/// egui-material3 cannot draw yet, its own fill, hairline and focus ring.
 /// [`text_field`] at a given `rect`, with an optional leading icon: for a
 /// field placed by hand (the top bar's search). A field as tall as
 /// [`theme::BAR_CONTROL`] takes 14 px text, 12 px padding and a 16 px
@@ -1437,21 +1551,167 @@ pub fn field_frame(
     response
 }
 
-/// The frame of a popover or a hand-built menu: the `popover` surface,
-/// a hairline, 8 px corners, a soft shadow, a 4 px inset.
+/// The id a [`menu`] anchored to `anchor` keeps its open state under,
+/// unless it is given one with [`Menu::id`].
+#[must_use]
+pub fn menu_id(anchor: &Response) -> egui::Id {
+    anchor.id.with("material-menu")
+}
+
+/// Whether the [`menu`] with this id is open (to draw its anchor pressed).
+#[must_use]
+pub fn menu_is_open(ctx: &egui::Context, id: egui::Id) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(id.with("open")))
+        .unwrap_or(false)
+}
+
+/// Opens the [`menu`] with this id if it is closed, closes it if open.
+pub fn toggle_menu(ctx: &egui::Context, id: egui::Id) {
+    let open = menu_is_open(ctx, id);
+    ctx.data_mut(|d| d.insert_temp(id.with("open"), !open));
+}
+
+/// A Material 3 menu anchored to a control: the drop-in for
+/// `egui::Popup::menu`. A click on the anchor opens and closes it; it
+/// closes on a click outside, on Escape, and (by default) when an entry
+/// inside is clicked. Build its content with ave's rows ([`menu_item`],
+/// [`menu_heading`], [`menu_separator`]) and nest submenus with
+/// [`submenu`].
+pub fn menu(anchor: &Response) -> Menu<'_> {
+    Menu {
+        anchor,
+        id: menu_id(anchor),
+        width: None,
+        gap: SPACE_XS,
+        above: false,
+        end: false,
+        close: egui::PopupCloseBehavior::CloseOnClick,
+    }
+}
+
+/// A menu being built; see [`menu`].
+#[must_use = "show it with `.show(...)`"]
+pub struct Menu<'a> {
+    /// The control it opens from.
+    anchor: &'a Response,
+    /// Where its open state lives.
+    id: egui::Id,
+    /// A fixed width, or the content's own within Material's 112–280.
+    width: Option<f32>,
+    /// The space between the anchor and the menu.
+    gap: f32,
+    /// Opens above the anchor rather than below.
+    above: bool,
+    /// Lines up with the anchor's end edge rather than its start.
+    end: bool,
+    /// What clicks close it.
+    close: egui::PopupCloseBehavior,
+}
+
+impl Menu<'_> {
+    /// Keeps the open state under `id` (read it with [`menu_is_open`]).
+    pub fn id(mut self, id: egui::Id) -> Self {
+        self.id = id;
+        self
+    }
+
+    /// A fixed width.
+    pub fn width(mut self, width: f32) -> Self {
+        self.width = Some(width);
+        self
+    }
+
+    /// The space between the anchor and the menu.
+    pub fn gap(mut self, gap: f32) -> Self {
+        self.gap = gap;
+        self
+    }
+
+    /// Where it opens: above the anchor (`egui::RectAlign::TOP_START` or
+    /// `TOP_END`) or below it (any other), at the start or end edge.
+    pub fn align(mut self, align: egui::RectAlign) -> Self {
+        self.above = align == egui::RectAlign::TOP_START || align == egui::RectAlign::TOP_END;
+        self.end = align == egui::RectAlign::TOP_END || align == egui::RectAlign::BOTTOM_END;
+        self
+    }
+
+    /// What clicks close it (default: any click inside or outside).
+    pub fn close_behavior(mut self, close: egui::PopupCloseBehavior) -> Self {
+        self.close = close;
+        self
+    }
+
+    /// Shows it while open; the content's value while it is.
+    pub fn show<R>(self, add_contents: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+        use egui_material3::menu::{Corner, MenuStyle};
+        let ctx = self.anchor.ctx.clone();
+        let key = self.id.with("open");
+        let mut open = ctx.data(|d| d.get_temp::<bool>(key)).unwrap_or(false);
+        if self.anchor.clicked() {
+            open = !open;
+        }
+        let (anchor_corner, menu_corner) = match (self.above, self.end) {
+            (false, false) => (Corner::BottomLeft, Corner::TopLeft),
+            (false, true) => (Corner::BottomRight, Corner::TopRight),
+            (true, false) => (Corner::TopLeft, Corner::BottomLeft),
+            (true, true) => (Corner::TopRight, Corner::BottomRight),
+        };
+        let style = MenuStyle {
+            min_width: self.width,
+            max_width: self.width,
+            ..MenuStyle::default()
+        };
+        let shown = egui_material3::MaterialMenu::new(self.id, &mut open)
+            .anchor_rect(self.anchor.rect)
+            .anchor_corner(anchor_corner)
+            .menu_corner(menu_corner)
+            .y_offset(if self.above { -self.gap } else { self.gap })
+            .close_behavior(self.close)
+            .style(style)
+            .show_with(&ctx, add_contents);
+        ctx.data_mut(|d| d.insert_temp(key, open));
+        shown.map(|inner| inner.inner)
+    }
+}
+
+/// A Material 3 context menu on `response`, opened by a secondary click:
+/// the drop-in for `Response::context_menu`.
+pub fn context_menu<R>(response: &Response, add_contents: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+    egui_material3::MaterialMenu::context(response.id.with("material-context"))
+        .show_context_with(response, add_contents)
+        .map(|inner| inner.inner)
+}
+
+/// A row in a menu that opens a nested Material 3 submenu (on hover, a
+/// click, Enter or the Right arrow): the drop-in for `ui.menu_button`.
+/// Returns the row's response.
+pub fn submenu<R>(
+    ui: &mut Ui,
+    label: impl Into<String>,
+    add_contents: impl FnOnce(&mut Ui) -> R,
+) -> Response {
+    egui_material3::MaterialMenu::submenu(ui, label, add_contents).0
+}
+
+/// The frame of a popover or a hand-built menu, on Material's menu tokens:
+/// the surface container, no outline, the extra-small shape, the level-2
+/// key shadow, a 4 px inset.
 pub fn popover_frame(theme: &Palette) -> egui::Frame {
+    use egui_material3::tokens::{ColorRole, Elevation};
+    let scheme = theme::material_scheme(theme);
+    let [key, _ambient] = Elevation::Level2.shadows(scheme.get(ColorRole::Shadow));
     egui::Frame::new()
-        .fill(theme::popover_fill(theme))
-        .stroke(theme::ink_line(theme))
-        .corner_radius(CornerRadius::same(theme::RADIUS_MD))
-        .shadow(theme::float_shadow())
+        .fill(scheme.get(ColorRole::SurfaceContainer))
+        .corner_radius(CornerRadius::same(theme::RADIUS))
+        .shadow(key)
         .inner_margin(theme::margin(SPACE_XS))
 }
 
-/// One entry in a menu or popover, as Selects' menu items: 14 px text,
-/// 6 x 8 padding (32 px tall), 6 px corners, an optional icon, the
-/// shortcut right-aligned and faint, `accent` (`#404040`) under the
-/// pointer, and a check when `checked` (pass `false` for a plain action).
+/// One entry in a menu or popover, on Material's menu-item tokens kept
+/// dense (32 px tall rather than 48): label-large text, 12 px sides, an
+/// optional Lucide icon, the shortcut right-aligned and faint, an
+/// on-surface state layer under the pointer, and a check when `checked`
+/// (pass `false` for a plain action).
 pub fn menu_item(
     ui: &mut Ui,
     theme: &Palette,
@@ -1469,15 +1729,17 @@ pub fn menu_item(
         egui::WidgetInfo::selected(egui::Role::MenuItem, ui.is_enabled(), checked, label)
     });
     let lift = hover_t(ui, response.id, response.hovered());
-    if lift > 0.0 {
-        ui.painter().rect_filled(
-            rect,
-            CornerRadius::same(theme::RADIUS),
-            theme::accent_fill(theme).gamma_multiply(lift),
-        );
-    }
+    // Material's menu item: an on-surface state layer (8 % hovered, 10 %
+    // pressed or focused) and the label in label-large.
+    egui_material3::paint::paint_state_layer(
+        ui.painter(),
+        rect,
+        CornerRadius::same(theme::RADIUS),
+        theme::rgb(theme.text),
+        egui_material3::tokens::InteractionState::from_response(&response),
+    );
     let painter = ui.painter();
-    let mut x = rect.left() + SPACE_SM;
+    let mut x = rect.left() + SPACE_MD;
     let ink = theme::rgb(theme.text);
     if let Some(glyph) = icon {
         let slot = Rect::from_center_size(
@@ -1497,10 +1759,12 @@ pub fn menu_item(
         egui::pos2(x, rect.center().y),
         Align2::LEFT_CENTER,
         label,
-        theme::font(theme::LARGE_SIZE),
+        egui_material3::tokens::TypeRole::LabelLarge
+            .style()
+            .font_id(ui.ctx()),
         ink,
     );
-    let mut right = rect.right() - SPACE_SM;
+    let mut right = rect.right() - SPACE_MD;
     if checked {
         let slot = Rect::from_center_size(
             egui::pos2(right - icons::SMALL / 2.0, rect.center().y),
@@ -1534,17 +1798,12 @@ pub fn menu_heading(ui: &mut Ui, theme: &Palette, text: &str) -> Response {
     )
 }
 
-/// The hairline between groups in a menu, running to the menu's edges.
-pub fn menu_separator(ui: &mut Ui, theme: &Palette) {
-    let (rect, _) = ui.allocate_exact_size(
-        Vec2::new(ui.available_width(), SPACE_SM + 1.0),
-        Sense::hover(),
-    );
-    ui.painter().hline(
-        rect.x_range().expand(SPACE_XS),
-        rect.center().y,
-        theme::ink_line(theme),
-    );
+/// The divider between groups in a menu: Material's divider (1 px in the
+/// outline-variant colour) with 4 px of air above and below.
+pub fn menu_separator(ui: &mut Ui, _theme: &Palette) {
+    ui.add_space(SPACE_XS);
+    ui.add(egui_material3::MaterialDivider::new());
+    ui.add_space(SPACE_XS);
 }
 
 /// A vertical hairline between groups of controls in a bar.
@@ -1597,54 +1856,12 @@ pub fn paint_tick_box(
 /// A checkbox with a label, a drop-in for `ui.checkbox` that is readable:
 /// see [`paint_tick_box`]. Clicking the box or the label toggles `on` and
 /// marks the response changed; `label` may be empty.
-pub fn checkbox(ui: &mut Ui, theme: &Palette, on: &mut bool, label: &str) -> Response {
+pub fn checkbox(ui: &mut Ui, _theme: &Palette, on: &mut bool, label: &str) -> Response {
+    // Material's checkbox: primary fill and an on-primary check when ticked,
+    // an on-surface-variant outline when not, its own state layer. It
+    // takes its colours from the scheme `theme::apply` installed.
     let enabled = ui.is_enabled();
-    let galley = (!label.is_empty()).then(|| {
-        ui.painter().layout_no_wrap(
-            label.to_owned(),
-            theme::font(theme::BODY_SIZE),
-            theme::rgb(theme.text),
-        )
-    });
-    let text_w = galley.as_ref().map_or(0.0, |g| g.size().x + SPACE_SM);
-    let height = CHECKBOX_SIZE.max(galley.as_ref().map_or(0.0, |g| g.size().y));
-    let (rect, mut response) =
-        ui.allocate_exact_size(Vec2::new(CHECKBOX_SIZE + text_w, height), Sense::click());
-    if response.clicked() {
-        *on = !*on;
-        response.mark_changed();
-    }
-    let checked = *on;
-    response
-        .widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, enabled, checked, label));
-    let painter = ui.painter();
-    let tick = Rect::from_min_size(
-        egui::pos2(rect.left(), rect.center().y - CHECKBOX_SIZE / 2.0),
-        Vec2::splat(CHECKBOX_SIZE),
-    );
-    if response.hovered() && enabled {
-        painter.rect_filled(
-            tick.expand(2.0),
-            CornerRadius::same(theme::RADIUS),
-            theme::ink_hover(theme),
-        );
-    }
-    paint_tick_box(painter, theme, tick, checked, enabled);
-    if let Some(galley) = galley {
-        let ink = if enabled {
-            theme::rgb(theme.text)
-        } else {
-            theme::rgb(theme.text_faint)
-        };
-        painter.galley(
-            egui::pos2(
-                tick.right() + SPACE_SM,
-                rect.center().y - galley.size().y / 2.0,
-            ),
-            galley,
-            ink,
-        );
-    }
+    let response = ui.add(egui_material3::MaterialCheckbox::new(on, label).enabled(enabled));
     super::hint::auto(&response, label);
     response
 }

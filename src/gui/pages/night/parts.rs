@@ -265,19 +265,18 @@ pub(crate) fn progress_bar(ui: &mut Ui, theme: &Palette, id: egui::Id, fraction:
     response
 }
 
-/// [`progress_bar`] painted into `rect`.
+/// [`progress_bar`] painted into `rect`: Material's linear progress
+/// indicator, fed the settled value so it still glides.
 pub(crate) fn paint_progress(ui: &Ui, theme: &Palette, rect: Rect, id: egui::Id, fraction: f32) {
     let shown = widgets::level(ui.ctx(), id, fraction.clamp(0.0, 1.0));
-    let radius = CornerRadius::same((rect.height() / 2.0).round() as u8);
-    let painter = ui.painter();
-    painter.rect_filled(rect, radius, theme::ink(theme, theme::INK_10));
-    if shown > 0.0 {
-        let filled = Rect::from_min_size(
-            rect.min,
-            Vec2::new((rect.width() * shown).max(rect.height()), rect.height()),
-        );
-        painter.rect_filled(filled, radius, theme::translucent(theme.text, 204));
-    }
+    egui_material3::MaterialProgress::linear()
+        .value(shown)
+        .max(1.0)
+        .width(rect.width())
+        .height(rect.height())
+        .active_color(theme::translucent(theme.text, 204))
+        .track_color(theme::ink(theme, theme::INK_10))
+        .paint_at(ui.painter(), rect);
 }
 
 /// How a [`notice`] reads.
@@ -293,51 +292,25 @@ pub(crate) enum Kind {
     Danger,
 }
 
-/// A notice in the column, as Selects' toasts: the panel surface, a
-/// hairline, 8 px corners, an icon in its colour, 12 px text, and a
-/// dismiss button. Returns whether it was dismissed.
-pub(crate) fn notice(ui: &mut Ui, theme: &Palette, kind: Kind, text: &str) -> bool {
-    let (glyph, color) = match kind {
-        Kind::Info => (icons::INFO, theme.text_muted),
-        Kind::Success => (icons::CIRCLE_CHECK, theme.success),
-        Kind::Warning => (icons::TRIANGLE_ALERT, theme.warning),
-        Kind::Danger => (icons::CIRCLE_ALERT, theme.danger),
+/// A notice in the column: Material's banner in the tone of `kind`, its
+/// icon the app's own, with a dismiss button. Returns whether it was
+/// dismissed.
+pub(crate) fn notice(ui: &mut Ui, _theme: &Palette, kind: Kind, text: &str) -> bool {
+    use egui_material3::BannerTone;
+    let (glyph, tone) = match kind {
+        Kind::Info => (icons::INFO, BannerTone::Info),
+        Kind::Success => (icons::CIRCLE_CHECK, BannerTone::Success),
+        Kind::Warning => (icons::TRIANGLE_ALERT, BannerTone::Warning),
+        Kind::Danger => (icons::CIRCLE_ALERT, BannerTone::Error),
     };
-    let mut dismissed = false;
-    egui::Frame::new()
-        .fill(theme::rgb(theme.panel))
-        .stroke(theme::ink_line(theme))
-        .corner_radius(CornerRadius::same(theme::RADIUS_MD))
-        .inner_margin(egui::Margin {
-            left: theme::as_margin(theme::SPACE_MD),
-            right: theme::as_margin(theme::SPACE_XS),
-            top: theme::as_margin(theme::SPACE_XS),
-            bottom: theme::as_margin(theme::SPACE_XS),
-        })
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = theme::SPACE_SM;
-                icons::icon(ui, glyph, icons::SIZE, theme::rgb(color));
-                let room =
-                    (ui.available_width() - theme::CONTROL_HEIGHT - theme::SPACE_SM).max(0.0);
-                ui.allocate_ui(Vec2::new(room, theme::CONTROL_HEIGHT), |ui| {
-                    ui.set_min_height(theme::CONTROL_HEIGHT);
-                    ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(text)
-                                .font(theme::font(theme::BODY_SIZE))
-                                .color(theme::rgb(theme.text)),
-                        )
-                        .wrap(),
-                    );
-                });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    dismissed = widgets::icon_btn(ui, theme, icons::X, "Dismiss", "").clicked();
-                });
-            });
-        });
-    dismissed
+    egui_material3::MaterialBanner::new(text)
+        .tone(tone)
+        .icon(widgets::lucide(glyph))
+        .dismissible(true)
+        .dismiss_label("Dismiss")
+        .id_salt(("notice", text))
+        .show(ui)
+        .dismissed()
 }
 
 /// One line of status in its colour, led by its icon: a warning under a
@@ -387,13 +360,10 @@ pub(crate) fn mark(ui: &mut Ui, theme: &Palette, rect: Rect, mark: Mark) {
     let (glyph, color) = match mark {
         Mark::Running => {
             // Painted, not placed: placing would move the layout's cursor.
-            egui::Spinner::new()
-                .size(size - 2.0)
-                .color(theme::rgb(theme.text_muted))
-                .paint_at(
-                    ui,
-                    Rect::from_center_size(rect.center(), Vec2::splat(size - 2.0)),
-                );
+            widgets::spinner(size - 2.0, theme::rgb(theme.text_muted)).paint_at(
+                ui.painter(),
+                Rect::from_center_size(rect.center(), Vec2::splat(size - 2.0)),
+            );
             ui.ctx().request_repaint();
             return;
         }

@@ -1,7 +1,7 @@
 // ============================================================================
 // Module:       gui::ui::topbar
 // Description:  The top bar, laid out as Selects' header: home and the night on
-//               the left, a centred search pill with its popover, and panel
+//               the left, a centred search bar with its search view, and panel
 //               toggles, view mode, preferences and export on the right.
 //
 // Dependencies: egui; super::{keymap, layout, theme, widgets, icons},
@@ -26,7 +26,7 @@
 //! filled secondary square. The four panel toggles are ave's own (Selects
 //! folds panels from their headers); they use the same buttons.
 //!
-//! The search popover lists recent searches and the facets the shot-log
+//! The search view lists recent searches and the facets the shot-log
 //! search understands (see `crate::search`), so the query language is
 //! discoverable without a manual.
 
@@ -36,7 +36,7 @@ use super::{icons, keymap, widgets};
 use crate::gui::app::{Action, App, BrowserTab, Page};
 use crate::gui::ui::hint::Hint as _;
 use crate::theme::Palette;
-use egui::{Align, CornerRadius, Layout, Rect, Ui, Vec2};
+use egui::{Align, Layout, Rect, Ui, Vec2};
 
 /// The search pill's width when there is room for it (Selects' minimum).
 const SEARCH_WIDTH: f32 = 400.0;
@@ -44,10 +44,10 @@ const SEARCH_WIDTH: f32 = 400.0;
 /// The least width the search pill shrinks to in a narrow window.
 const SEARCH_MIN: f32 = 200.0;
 
-/// How many recent searches the popover lists.
+/// How many recent searches the search view lists.
 const RECENT_SHOWN: usize = 6;
 
-/// The facets the popover offers, with what each one keeps. Every token
+/// The facets the search view offers, with what each one keeps. Every token
 /// here parses in `crate::search::Query`.
 const FACETS: [(&str, &str); 8] = [
     ("fire>0.3", "light share, relative to the project"),
@@ -206,7 +206,7 @@ fn right(app: &mut App, ui: &mut Ui, theme: &Palette, actions: &mut Vec<Action>)
 /// current one checked (Selects' "View mode" menu, 200 px wide).
 fn view_menu(app: &App, ui: &mut Ui, theme: &Palette, actions: &mut Vec<Action>) {
     let id = ui.scope_id().with("view-menu");
-    let open = egui::Popup::is_id_open(ui.ctx(), id);
+    let open = widgets::menu_is_open(ui.ctx(), id);
     let response = bar_button(
         ui,
         theme,
@@ -216,7 +216,7 @@ fn view_menu(app: &App, ui: &mut Ui, theme: &Palette, actions: &mut Vec<Action>)
         open,
     );
     // The response is not needed: drawing it is the point.
-    let _ = egui::Popup::menu(&response)
+    let _ = widgets::menu(&response)
         .id(id)
         .width(220.0)
         .gap(SPACE_XS)
@@ -252,8 +252,14 @@ fn view_menu(app: &App, ui: &mut Ui, theme: &Palette, actions: &mut Vec<Action>)
         });
 }
 
-/// The search box, centred on the bar and kept inside `gap`, with its
-/// popover.
+/// The id the top bar's search keeps its state under.
+const SEARCH_ID: &str = "topbar-search";
+
+/// The search box, centred on the bar and kept inside `gap`: Material's
+/// search bar, 36 px tall, the shortcut as a chip at its end. Focused, it
+/// opens Material's docked search view under it, listing the recent
+/// searches and then the filter tokens: picking a recent search runs it,
+/// picking a filter adds its token to the query and keeps typing.
 fn search(app: &mut App, ui: &mut Ui, theme: &Palette, bar: Rect, gap: Rect) {
     let width = SEARCH_WIDTH
         .min(gap.width() - SPACE_MD * 2.0)
@@ -268,194 +274,79 @@ fn search(app: &mut App, ui: &mut Ui, theme: &Palette, bar: Rect, gap: Rect) {
         egui::pos2(left, bar.center().y - height / 2.0),
         Vec2::new(width, height),
     );
-    let response = ui
-        .push_id("topbar-search", |ui| {
-            widgets::field_frame(
-                ui,
-                theme,
-                rect,
-                &mut app.search,
-                "Search shots, captions, moments",
-                Some(icons::SEARCH),
-            )
-        })
-        .inner;
-    // The shortcut, as a chip at the field's right end, while it is empty
-    // and unfocused: the hint lives in the field, not in a line under it.
-    let shortcut = keys("search", app);
-    if app.search.is_empty() && !response.has_focus() && !shortcut.is_empty() {
-        let chip = Rect::from_min_max(
-            egui::pos2(rect.right() - 96.0, rect.top()),
-            egui::pos2(rect.right() - SPACE_XS - 2.0, rect.bottom()),
-        );
-        let mut slot = ui.new_child(
-            egui::UiBuilder::new()
-                .max_rect(chip)
-                .layout(Layout::right_to_left(Align::Center)),
-        );
-        widgets::kbd(&mut slot, theme, &shortcut);
-    }
     if app.focus_search {
-        response.request_focus();
+        egui_material3::search::set_expanded(ui.ctx(), SEARCH_ID, true);
         app.focus_search = false;
     }
-    if response.gained_focus() {
-        app.search_open = true;
-    }
-    if response.changed() {
-        app.browser_tab = BrowserTab::Shots;
-        app.layout.set_open(Region::Browser, true);
-        app.search_open = true;
-    }
-    let (enter, escape) = ui.input(|i| {
-        (
-            i.key_pressed(egui::Key::Enter),
-            i.key_pressed(egui::Key::Escape),
-        )
-    });
-    if response.lost_focus() && enter {
-        let query = app.search.clone();
-        app.remember_search(&query);
-        app.search_open = false;
-    }
-    if escape && app.search_open {
-        app.search_open = false;
-        response.surrender_focus();
-    }
-    if app.search_open {
-        popover(app, ui.ctx(), theme, &response);
-    }
-}
-
-/// The popover under the search box: recent searches and facet hints.
-fn popover(app: &mut App, ctx: &egui::Context, theme: &Palette, field: &egui::Response) {
-    let mut chosen: Option<String> = None;
-    let mut append: Option<&str> = None;
-    let area = egui::Area::new(egui::Id::unique("topbar-search-popover"))
-        .order(egui::Order::Foreground)
-        .fixed_pos(field.rect.left_bottom() + Vec2::new(0.0, SPACE_XS))
-        .show(ctx, |ui| {
-            widgets::popover_frame(theme)
-                .inner_margin(theme::margin(SPACE_XS))
-                .show(ui, |ui| {
-                    ui.set_width(field.rect.width() - SPACE_XS * 2.0);
-                    ui.spacing_mut().item_spacing.y = 0.0;
-                    section(ui, theme, "Recent");
-                    if app.recent_searches.is_empty() {
-                        let font = theme::font(theme::BODY_SIZE);
-                        ui.horizontal(|ui| {
-                            ui.add_space(SPACE_SM);
-                            ui.label(
-                                egui::RichText::new("Searches you keep with Enter show here")
-                                    .font(font)
-                                    .color(theme::rgb(theme.text_faint)),
-                            );
-                        });
-                        ui.add_space(SPACE_XS);
-                    }
-                    for query in app.recent_searches.iter().take(RECENT_SHOWN) {
-                        if row(ui, theme, icons::HISTORY, query, "").clicked() {
-                            chosen = Some(query.clone());
-                        }
-                    }
-                    widgets::menu_separator(ui, theme);
-                    section(ui, theme, "Filters");
-                    for (token, what) in FACETS {
-                        if row(ui, theme, icons::LIST_FILTER, token, what).clicked() {
-                            append = Some(token);
-                        }
-                    }
-                });
-        });
-    if let Some(query) = chosen {
-        app.search = query.clone();
-        app.remember_search(&query);
-        app.search_open = false;
-        app.browser_tab = BrowserTab::Shots;
-        app.layout.set_open(Region::Browser, true);
-        return;
-    }
-    if let Some(token) = append {
-        if !app.search.is_empty() && !app.search.ends_with(' ') {
-            app.search.push(' ');
+    let recent: Vec<String> = app
+        .recent_searches
+        .iter()
+        .take(RECENT_SHOWN)
+        .cloned()
+        .collect();
+    let mut suggestions: Vec<egui_material3::search::Suggestion> = recent
+        .iter()
+        .map(|query| {
+            egui_material3::search::Suggestion::new(query.as_str())
+                .icon(widgets::lucide(icons::HISTORY))
+        })
+        .collect();
+    suggestions.extend(FACETS.iter().map(|(token, what)| {
+        egui_material3::search::Suggestion::new(*token)
+            .supporting_text(*what)
+            .icon(widgets::lucide(icons::LIST_FILTER))
+    }));
+    let before = app.search.clone();
+    let shortcut = keys("search", app);
+    let mut slot = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(Layout::left_to_right(Align::Center)),
+    );
+    let out = egui_material3::search::MaterialSearch::new(SEARCH_ID, &mut app.search)
+        .placeholder("Search shots, captions, moments")
+        .leading_icon(widgets::lucide(icons::SEARCH))
+        .width(width)
+        .height(height)
+        .suggestions(suggestions)
+        .trailing_content(|ui| {
+            // The hint lives in the bar, not in a line under it.
+            if !shortcut.is_empty() {
+                widgets::kbd(ui, theme, &shortcut);
+            }
+        })
+        .show(&mut slot);
+    app.search_open = out.expanded;
+    if let Some(index) = out.selected {
+        if let Some(token) = index
+            .checked_sub(recent.len())
+            .and_then(|facet| FACETS.get(facet))
+            .map(|(token, _)| *token)
+        {
+            // A filter adds to the query rather than replacing it, and
+            // the view stays open to go on typing.
+            app.search = before;
+            if !app.search.is_empty() && !app.search.ends_with(' ') {
+                app.search.push(' ');
+            }
+            app.search.push_str(token);
+            egui_material3::search::set_expanded(ui.ctx(), SEARCH_ID, true);
+            app.search_open = true;
+        } else {
+            let query = app.search.clone();
+            app.remember_search(&query);
+            app.search_open = false;
         }
-        app.search.push_str(token);
-        app.focus_search = true;
+        app.browser_tab = BrowserTab::Shots;
+        app.layout.set_open(Region::Browser, true);
         return;
     }
-    // A press anywhere but the box or the popover closes it.
-    let outside = ctx.input(|i| {
-        i.pointer.any_pressed()
-            && i.pointer
-                .interact_pos()
-                .is_some_and(|pos| !area.response.rect.contains(pos) && !field.rect.contains(pos))
-    });
-    if outside {
+    if out.changed {
+        app.browser_tab = BrowserTab::Shots;
+        app.layout.set_open(Region::Browser, true);
+    }
+    if let Some(query) = out.submitted {
+        app.remember_search(&query);
         app.search_open = false;
     }
-}
-
-/// A popover section heading, with the menu's own inset.
-fn section(ui: &mut Ui, theme: &Palette, text: &str) {
-    ui.add_space(SPACE_XS);
-    ui.horizontal(|ui| {
-        ui.add_space(SPACE_SM);
-        widgets::menu_heading(ui, theme, text);
-    });
-    ui.add_space(SPACE_XS);
-}
-
-/// One popover row: an icon, a token in monospace and
-/// what it does, muted.
-fn row(ui: &mut Ui, theme: &Palette, glyph: char, token: &str, what: &str) -> egui::Response {
-    let width = ui.available_width();
-    let (rect, response) = ui.allocate_exact_size(
-        Vec2::new(width, theme::CONTROL_HEIGHT),
-        egui::Sense::click(),
-    );
-    let lift = widgets::hover_t(ui, response.id, response.hovered());
-    let painter = ui.painter();
-    if lift > 0.0 {
-        painter.rect_filled(
-            rect,
-            CornerRadius::same(theme::RADIUS),
-            theme::ink(theme, (f32::from(theme::INK_15) * lift).round() as u8),
-        );
-    }
-    let slot = Rect::from_center_size(
-        egui::pos2(rect.left() + SPACE_SM + icons::SMALL / 2.0, rect.center().y),
-        Vec2::splat(icons::SMALL),
-    );
-    icons::paint(
-        painter,
-        slot,
-        glyph,
-        icons::SMALL,
-        theme::rgb(theme.text_faint),
-    );
-    let token_galley = painter.layout_no_wrap(
-        token.to_owned(),
-        theme::mono(theme::BODY_SIZE),
-        theme::rgb(theme.text),
-    );
-    let text_left = slot.right() + SPACE_SM;
-    let token_width = token_galley.size().x;
-    painter.galley(
-        egui::pos2(text_left, rect.center().y - token_galley.size().y / 2.0),
-        token_galley,
-        egui::Color32::PLACEHOLDER,
-    );
-    if !what.is_empty() {
-        painter.text(
-            egui::pos2(
-                text_left + token_width.max(132.0) + SPACE_MD,
-                rect.center().y,
-            ),
-            egui::Align2::LEFT_CENTER,
-            what,
-            theme::font(theme::BODY_SIZE),
-            theme::rgb(theme.text_muted),
-        );
-    }
-    response
 }

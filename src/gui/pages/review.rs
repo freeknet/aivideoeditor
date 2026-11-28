@@ -1043,7 +1043,7 @@ fn filter_menu(
     (picks, rejects): (usize, usize),
 ) {
     let id = ui.make_persistent_id("review-filter");
-    let open = egui::Popup::is_id_open(ui.ctx(), id);
+    let open = widgets::menu_is_open(ui.ctx(), id);
     let active = state.opts.cutoff > 0.0 || state.opts.group;
     let response = widgets::icon_toggle(
         ui,
@@ -1054,7 +1054,7 @@ fn filter_menu(
         open || active,
     );
     // The response is not needed: drawing it is the point.
-    let _ = egui::Popup::menu(&response)
+    let _ = widgets::menu(&response)
         .id(id)
         .width(240.0)
         .gap(SPACE_XS)
@@ -1068,10 +1068,10 @@ fn filter_menu(
             pad(ui, |ui| {
                 let label = format!("Hide shots scoring under {:.2}", state.opts.cutoff);
                 ui.add(
-                    egui::Slider::new(&mut state.opts.cutoff, 0.0..=0.95)
-                        .step_by(0.05)
+                    egui_material3::MaterialSlider::new(&mut state.opts.cutoff, 0.0..=0.95)
+                        .step(0.05)
                         .show_value(false)
-                        .trailing_fill(true),
+                        .width(200.0),
                 )
                 .hint("Quality when nothing is searched")
                 .accessible_name(label.clone());
@@ -1095,8 +1095,12 @@ fn filter_menu(
                 });
                 pad(ui, |ui| {
                     ui.add(
-                        egui::Slider::new(&mut state.opts.card, CARD_MIN..=CARD_MAX)
-                            .show_value(false),
+                        egui_material3::MaterialSlider::new(
+                            &mut state.opts.card,
+                            CARD_MIN..=CARD_MAX,
+                        )
+                        .show_value(false)
+                        .width(200.0),
                     )
                     .accessible_name("Card size");
                 });
@@ -1124,10 +1128,10 @@ fn pad(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
 /// The order, as a ghost dropdown.
 fn sort_menu(ui: &mut egui::Ui, theme: &Palette, state: &mut State, label: &str) {
     let id = ui.make_persistent_id("review-sort");
-    let open = egui::Popup::is_id_open(ui.ctx(), id);
+    let open = widgets::menu_is_open(ui.ctx(), id);
     let response = widgets::dropdown_button(ui, theme, label, "Order", open);
     // The response is not needed: drawing it is the point.
-    let _ = egui::Popup::menu(&response)
+    let _ = widgets::menu(&response)
         .id(id)
         .width(200.0)
         .gap(SPACE_XS)
@@ -1163,10 +1167,10 @@ fn sort_menu(ui: &mut egui::Ui, theme: &Palette, state: &mut State, label: &str)
 /// The saved searches.
 fn smart_menu(ui: &mut egui::Ui, theme: &Palette, dos: &mut Vec<Do>, lit: bool) {
     let id = ui.make_persistent_id("review-smart");
-    let open = egui::Popup::is_id_open(ui.ctx(), id);
+    let open = widgets::menu_is_open(ui.ctx(), id);
     let response = widgets::icon_toggle(ui, theme, icons::SPARKLES, "Smart searches", "", open);
     // The response is not needed: drawing it is the point.
-    let _ = egui::Popup::menu(&response)
+    let _ = widgets::menu(&response)
         .id(id)
         .width(220.0)
         .gap(SPACE_XS)
@@ -1191,7 +1195,7 @@ fn smart_menu(ui: &mut egui::Ui, theme: &Palette, dos: &mut Vec<Do>, lit: bool) 
 /// The review modes folded into one menu, for a narrow pane.
 fn modes_menu(ui: &mut egui::Ui, theme: &Palette, state: &State, dos: &mut Vec<Do>) {
     let id = ui.make_persistent_id("review-modes");
-    let open = egui::Popup::is_id_open(ui.ctx(), id);
+    let open = widgets::menu_is_open(ui.ctx(), id);
     let kind = state.mode.kind();
     let glyph = MODES
         .iter()
@@ -1206,7 +1210,7 @@ fn modes_menu(ui: &mut egui::Ui, theme: &Palette, state: &State, dos: &mut Vec<D
         open || kind != Kind::Browse,
     );
     // The response is not needed: drawing it is the point.
-    let _ = egui::Popup::menu(&response)
+    let _ = widgets::menu(&response)
         .id(id)
         .width(240.0)
         .gap(SPACE_XS)
@@ -1621,7 +1625,7 @@ fn interact(paint: &Paint<'_>, item: usize, response: &egui::Response, dos: &mut
         dos.push(Do::Only(item));
     }
     let id = seg.id.clone();
-    response.context_menu(|ui| {
+    widgets::context_menu(response, |ui| {
         ui.set_min_width(190.0);
         let n = paint.selected.len().max(1);
         let what = if n > 1 {
@@ -1652,7 +1656,7 @@ fn interact(paint: &Paint<'_>, item: usize, response: &egui::Response, dos: &mut
             Do::Verdict(Some(Verdict::Reject), false),
         );
         item_btn(ui, dos, "Clear mark", "U", Do::Verdict(None, false));
-        ui.menu_button("Rating", |ui| {
+        widgets::submenu(ui, "Rating", |ui| {
             for r in (0..=5u8).rev() {
                 let label = match r {
                     0 => "No rating".to_owned(),
@@ -1676,7 +1680,7 @@ fn interact(paint: &Paint<'_>, item: usize, response: &egui::Response, dos: &mut
             item_btn(ui, dos, label, "", Do::ToggleStack(item));
         }
         ui.separator();
-        ui.menu_button("Reference in chat", |ui| {
+        widgets::submenu(ui, "Reference in chat", |ui| {
             for m in Modifier::ALL {
                 let label = if m.prefix().is_empty() {
                     m.label().to_owned()
@@ -2429,7 +2433,22 @@ fn bar_value(night: &Night<'_>, s: &crate::index::Scored, m: search::Metric) -> 
 }
 
 /// The hover card: caption, why it matched, the numbers.
-pub(super) fn tooltip(ui: &mut egui::Ui, paint: &Paint<'_>, item: &Item) {
+pub(super) fn tooltip_on(
+    response: egui::Response,
+    paint: &Paint<'_>,
+    item: &Item,
+) -> egui::Response {
+    let name = paint
+        .night
+        .index
+        .segments
+        .get(item.seg)
+        .map_or_else(String::new, |s| s.id.clone());
+    widgets::rich_tip(response, &name, |ui| tooltip(ui, paint, item))
+}
+
+/// The preview [`tooltip_on`] lays out for `item`.
+fn tooltip(ui: &mut egui::Ui, paint: &Paint<'_>, item: &Item) {
     let Some(s) = paint.night.index.segments.get(item.seg) else {
         return;
     };

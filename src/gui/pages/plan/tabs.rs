@@ -463,7 +463,7 @@ pub(super) fn strip(
         } else if resp.clicked() {
             open = Some(tab.name.clone());
         }
-        resp.context_menu(|ui| {
+        widgets::context_menu(&resp, |ui| {
             ui.set_min_width(200.0);
             if widgets::menu_item(ui, t, Some(icons::PENCIL), "Rename…", "", false).clicked() {
                 state.tab_form = Some(Form {
@@ -521,7 +521,7 @@ pub(super) fn strip(
     plus.widget_info(|| {
         egui::WidgetInfo::labeled(egui::Role::Button, true, "New cut, or reopen one")
     });
-    let open_menu = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&plus));
+    let open_menu = widgets::menu_is_open(ui.ctx(), widgets::menu_id(&plus));
     if plus.hovered() || open_menu {
         ui.painter().rect_filled(
             rect,
@@ -547,7 +547,7 @@ pub(super) fn strip(
         .collect();
     let mut draft = false;
     // The response is not needed: drawing it is the point.
-    let _ = egui::Popup::menu(&plus)
+    let _ = widgets::menu(&plus)
         .width(220.0)
         .gap(theme::SPACE_XS)
         .show(|ui| {
@@ -640,7 +640,11 @@ pub(super) fn form_window(
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label("Name");
-                let r = ui.add(egui::TextEdit::singleline(&mut form.name).desired_width(200.0));
+                let r = widgets::input(&mut form.name)
+                    .label("Name")
+                    .width(200.0)
+                    .show(ui)
+                    .response;
                 if !r.has_focus() && form.error.is_none() && !r.lost_focus() {
                     r.request_focus();
                 }
@@ -657,10 +661,12 @@ pub(super) fn form_window(
                     FormKind::Rename(_) => "Rename",
                     FormKind::Duplicate(_) => "Duplicate",
                 };
-                if ui.button(label).clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                if widgets::key_button(ui, palette, label).clicked()
+                    || ui.input(|i| i.key_pressed(egui::Key::Enter))
+                {
                     go = true;
                 }
-                if ui.button("Cancel").clicked() {
+                if widgets::ghost_button(ui, palette, "Cancel").clicked() {
                     cancel = true;
                 }
             });

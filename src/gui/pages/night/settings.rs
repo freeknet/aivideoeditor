@@ -733,23 +733,24 @@ fn template_section(ui: &mut egui::Ui, theme: &crate::theme::Palette, state: &mu
                 .template_pick
                 .clone()
                 .unwrap_or_else(|| if current.is_empty() { "General".to_owned() } else { current.clone() });
-            egui::ComboBox::from_id_salt("recipe-template")
-                .width(220.0)
-                .selected_text(pick.as_str())
-                .show_ui(ui, |ui| {
-                    for t in &catalog {
-                        if ui
-                            .selectable_label(pick == t.name, &t.name)
-                            .hint(&t.description)
-                            .clicked()
-                        {
-                            state.template_pick = Some(t.name.clone());
-                        }
-                    }
-                })
-                .response
-                .accessible_name("Template")
-                .hint("The template to apply");
+            // Each template's description is the tooltip on its row.
+            let mut index = catalog.iter().position(|t| t.name == pick);
+            let field = catalog.iter().enumerate().fold(
+                egui_material3::MaterialSelect::new(&mut index)
+                    .id_salt("recipe-template")
+                    .variant(egui_material3::SelectVariant::Outlined)
+                    .compact(true)
+                    .label("Template")
+                    .width(220.0)
+                    .menu_max_height(300.0),
+                |field, (i, t)| field.option_item(egui_material3::SelectOption::new(i, &t.name).description(&t.description)),
+            );
+            ui.add(field).hint("The template to apply");
+            if let Some(t) = index.and_then(|i| catalog.get(i))
+                && t.name != pick
+            {
+                state.template_pick = Some(t.name.clone());
+            }
             let chosen = catalog.iter().find(|t| t.name == pick);
             if widgets::outline_button(ui, theme, "Apply")
                 .hint("Replace this project's deliverables, rules, footage words and measures with the template's")
@@ -848,22 +849,20 @@ fn template_section(ui: &mut egui::Ui, theme: &crate::theme::Palette, state: &mu
                     .push(recipe::DEFAULT_METRICS.get(n).copied().unwrap_or("q").to_owned());
             }
             for (i, slot) in loaded.recipe.metrics.iter_mut().take(4).enumerate() {
-                let shown = crate::search::Metric::bars(std::slice::from_ref(slot))[0].display();
-                egui::ComboBox::from_id_salt(("recipe-bar", i))
-                    .width(96.0)
-                    .selected_text(shown)
-                    .show_ui(ui, |ui| {
-                        for name in BAR_CHOICES {
-                            let label = crate::search::Metric::bars(&[name.to_owned()])[0].display();
-                            if ui.selectable_label(slot == name, label).clicked() {
-                                *slot = name.to_owned();
-                                changed = true;
-                            }
-                        }
-                    })
-                    .response
+                let labels: Vec<String> = BAR_CHOICES
+                    .iter()
+                    .map(|name| crate::search::Metric::bars(&[(*name).to_owned()])[0].display().to_owned())
+                    .collect();
+                let mut index = BAR_CHOICES.iter().position(|name| slot == name).unwrap_or(0);
+                let picked = widgets::select(ui, ("recipe-bar", i), &mut index, &labels, 96.0)
                     .accessible_name(format!("Bar {}", i + 1))
                     .hint("A measure the shot browser shows as a bar on each shot");
+                if picked.changed()
+                    && let Some(name) = BAR_CHOICES.get(index)
+                {
+                    *slot = (*name).to_owned();
+                    changed = true;
+                }
             }
         });
     });
@@ -910,30 +909,30 @@ fn rules_section(
         parts::form_row(ui, theme, "Same clip", |ui| {
             changed |= ui
                 .add(
-                    egui::DragValue::new(&mut rules.same_clip_gap)
+                    widgets::number(&mut rules.same_clip_gap, "Same clip gap")
                         .range(0.0..=600.0)
-                        .speed(1.0)
-                        .suffix(" s apart"),
+                        .drag_points_per_step(1.0)
+                        .suffix(" s apart")
+                        .width(160.0),
                 )
                 .hint("Two shots from one clip start at least this far apart in it")
-                .accessible_name("Same clip gap")
                 .changed();
         });
         ui.add_space(theme::SPACE_XS + 2.0);
         parts::form_row(ui, theme, "Same person", |ui| {
             changed |= ui
                 .add(
-                    egui::DragValue::new(&mut rules.person_gap)
+                    widgets::number(&mut rules.person_gap, "Person gap")
                         .range(0..=30)
-                        .speed(0.1)
+                        .drag_points_per_step(10.0)
                         .prefix("not again within ")
-                        .suffix(" shots"),
+                        .suffix(" shots")
+                        .width(260.0),
                 )
                 .hint(
                     "Unnamed footage counts as one person per clip, and per 3 minutes of a long clip. 0 turns it off.",
                 )
-                .accessible_name("Person gap")
-                .changed();
+                                .changed();
         });
         ui.add_space(theme::SPACE_XS + 2.0);
         parts::form_row(ui, theme, "Look-alikes", |ui| {
@@ -1051,55 +1050,62 @@ fn deliverable_row(
         })
         .inner
         .changed();
-    egui::ComboBox::from_id_salt(("recipe-aspect", i))
-        .width(64.0)
-        .selected_text(recipe::aspect_key(d.aspect))
-        .show_ui(ui, |ui| {
-            for aspect in recipe::ASPECTS {
-                changed |= ui
-                    .selectable_value(&mut d.aspect, aspect, recipe::aspect_key(aspect))
-                    .changed();
-            }
-        })
-        .response
-        .accessible_name(format!("Deliverable {} shape", i + 1));
+    let shapes: Vec<&str> = recipe::ASPECTS
+        .iter()
+        .map(|a| recipe::aspect_key(*a))
+        .collect();
+    let mut shape = recipe::ASPECTS
+        .iter()
+        .position(|a| *a == d.aspect)
+        .unwrap_or(0);
+    if widgets::select(ui, ("recipe-aspect", i), &mut shape, &shapes, 80.0)
+        .accessible_name(format!("Deliverable {} shape", i + 1))
+        .changed()
+        && let Some(aspect) = recipe::ASPECTS.get(shape)
+    {
+        d.aspect = *aspect;
+        changed = true;
+    }
     changed |= ui
         .add(
-            egui::DragValue::new(&mut d.seconds)
+            widgets::number(&mut d.seconds, &format!("Deliverable {} length", i + 1))
                 .range(5.0..=600.0)
-                .speed(0.5)
-                .suffix(" s"),
+                .drag_points_per_step(2.0)
+                .suffix(" s")
+                .width(100.0),
         )
-        .accessible_name(format!("Deliverable {} length", i + 1))
         .changed();
-    let shown = d
+    // Index 0 is "auto"; the rest are the card keys, in order.
+    let cards: Vec<String> = std::iter::once(format!("auto ({})", recipe::aspect_key(d.aspect)))
+        .chain(card_keys.iter().cloned())
+        .collect();
+    let mut card = d
         .end_card
-        .clone()
-        .unwrap_or_else(|| format!("auto ({})", recipe::aspect_key(d.aspect)));
-    egui::ComboBox::from_id_salt(("recipe-card", i))
-        .width(96.0)
-        .selected_text(shown)
-        .show_ui(ui, |ui| {
-            changed |= ui
-                .selectable_value(&mut d.end_card, None, "auto (by shape)")
-                .changed();
-            for key in card_keys {
-                changed |= ui
-                    .selectable_value(&mut d.end_card, Some(key.clone()), key)
-                    .changed();
-            }
-        })
-        .response
-        .accessible_name(format!("Deliverable {} end card", i + 1));
+        .as_ref()
+        .and_then(|key| card_keys.iter().position(|k| k == key))
+        .map_or(0, |at| at + 1);
+    if widgets::select(ui, ("recipe-card", i), &mut card, &cards, 112.0)
+        .accessible_name(format!("Deliverable {} end card", i + 1))
+        .changed()
+    {
+        d.end_card = card
+            .checked_sub(1)
+            .and_then(|at| card_keys.get(at))
+            .cloned();
+        changed = true;
+    }
     changed |= ui
         .add(
-            egui::DragValue::new(&mut d.card_bars)
-                .range(0..=8)
-                .speed(0.05)
-                .suffix(" bars"),
+            widgets::number(
+                &mut d.card_bars,
+                &format!("Deliverable {} card length", i + 1),
+            )
+            .range(0..=8)
+            .drag_points_per_step(20.0)
+            .suffix(" bars")
+            .width(100.0),
         )
         .hint("How long the end card holds, in bars (two seconds each with no music)")
-        .accessible_name(format!("Deliverable {} card length", i + 1))
         .changed();
     let mut template = d.filename.clone().unwrap_or_default();
     let response = ui

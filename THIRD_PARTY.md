@@ -22,7 +22,7 @@ Compiled into `ave.exe`. Where each came from is in [`assets/fonts/NOTICE`](asse
 
 ## Crates
 
-Every crate compiled into `ave.exe` (`aivideoeditor` for `x86_64-pc-windows-msvc`), 246 in all, with the licence its authors published it under. The release zip's `THIRD-PARTY-NOTICES.txt` has each one's version and full licence text.
+Every crate compiled into `ave.exe` (`aivideoeditor` for `x86_64-pc-windows-msvc`), 250 in all, with the licence its authors published it under. The release zip's `THIRD-PARTY-NOTICES.txt` has each one's version and full licence text.
 
 | Crate | Licence | Source |
 |---|---|---|
@@ -78,6 +78,7 @@ Every crate compiled into `ave.exe` (`aivideoeditor` for `x86_64-pc-windows-msvc
 | ecolor | MIT OR Apache-2.0 | https://github.com/emilk/egui |
 | eframe | MIT OR Apache-2.0 | https://github.com/emilk/egui/tree/main/crates/eframe |
 | egui | MIT OR Apache-2.0 | https://github.com/emilk/egui |
+| egui-material3 | MIT OR Apache-2.0 | https://github.com/nikescar/egui-material3 |
 | egui-wgpu | MIT OR Apache-2.0 | https://github.com/emilk/egui/tree/main/crates/egui-wgpu |
 | egui-winit | MIT OR Apache-2.0 | https://github.com/emilk/egui/tree/main/crates/egui-winit |
 | egui_glow | MIT OR Apache-2.0 | https://github.com/emilk/egui/tree/main/crates/egui_glow |
@@ -109,6 +110,7 @@ Every crate compiled into `ave.exe` (`aivideoeditor` for `x86_64-pc-windows-msvc
 | harfrust | MIT | https://github.com/harfbuzz/harfrust |
 | hashbrown | MIT OR Apache-2.0 | https://github.com/rust-lang/hashbrown |
 | heck | MIT OR Apache-2.0 | https://github.com/withoutboats/heck |
+| hex | MIT OR Apache-2.0 | https://github.com/KokaKiwi/rust-hex |
 | http | MIT OR Apache-2.0 | https://github.com/hyperium/http |
 | httparse | MIT OR Apache-2.0 | https://github.com/seanmonstar/httparse |
 | icu_collections | Unicode-3.0 | https://github.com/unicode-org/icu4x |
@@ -121,12 +123,14 @@ Every crate compiled into `ave.exe` (`aivideoeditor` for `x86_64-pc-windows-msvc
 | idna | MIT OR Apache-2.0 | https://github.com/servo/rust-url |
 | idna_adapter | Apache-2.0 OR MIT | https://github.com/hsivonen/idna_adapter |
 | image | MIT OR Apache-2.0 | https://github.com/image-rs/image |
+| image-webp | MIT OR Apache-2.0 | https://github.com/image-rs/image-webp |
 | indexmap | Apache-2.0 OR MIT | https://github.com/indexmap-rs/indexmap |
 | is_terminal_polyfill | MIT OR Apache-2.0 | https://github.com/polyfill-rs/is_terminal_polyfill |
 | itertools | MIT OR Apache-2.0 | https://github.com/rust-itertools/itertools |
 | itoa | MIT OR Apache-2.0 | https://github.com/dtolnay/itoa |
 | khronos-egl | MIT OR Apache-2.0 | https://github.com/timothee-haudebourg/khronos-egl |
 | kurbo | Apache-2.0 OR MIT | https://github.com/linebender/kurbo |
+| lazy_static | MIT OR Apache-2.0 | https://github.com/rust-lang-nursery/lazy-static.rs |
 | libc | MIT OR Apache-2.0 | https://github.com/rust-lang/libc |
 | libloading | ISC | https://github.com/nagisa/rust_libloading |
 | libm | MIT | https://github.com/rust-lang/compiler-builtins |

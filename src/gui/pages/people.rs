@@ -287,11 +287,11 @@ fn toolbar(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui, ops: &mut Vec<
                 state.searching = true;
             }
             let id = ui.make_persistent_id("people-order");
-            let open = egui::Popup::is_id_open(ui.ctx(), id);
+            let open = widgets::menu_is_open(ui.ctx(), id);
             let response =
                 widgets::dropdown_button(ui, palette, state.order.label(), "Order people by", open);
             // The response is not needed: drawing it is the point.
-            let _ = egui::Popup::menu(&response)
+            let _ = widgets::menu(&response)
                 .id(id)
                 .width(200.0)
                 .gap(theme::SPACE_XS)
@@ -598,7 +598,7 @@ fn card_actions(
         *renaming = None;
     }
     let palette = cx.palette;
-    response.context_menu(|ui| {
+    widgets::context_menu(response, |ui| {
         let Some(name) = group.name.clone() else {
             ui.label(text(
                 "Performer footage nobody is mapped to",
@@ -631,7 +631,7 @@ fn card_actions(
             all.extend(others);
             ops.push(Op::Merge(all));
         }
-        ui.menu_button("Merge into", |ui| {
+        widgets::submenu(ui, "Merge into", |ui| {
             egui::ScrollArea::vertical()
                 .max_height(320.0)
                 .show(ui, |ui| {
@@ -643,7 +643,7 @@ fn card_actions(
                 });
         });
         ui.separator();
-        ui.menu_button("Reference in chat", |ui| {
+        widgets::submenu(ui, "Reference in chat", |ui| {
             for m in Modifier::ALL {
                 if ui.button(m.label()).clicked() {
                     ops.push(Op::Ref(
@@ -833,18 +833,32 @@ fn detail(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui, ops: &mut Vec<O
                 if header.clicked() {
                     state.picked.clone_from(&row.segs);
                 }
-                for &i in &row.segs {
-                    let look = view::RowLook {
-                        picked: state.picked.contains(&i),
-                        playing: playing.as_ref().is_some_and(|(p, t0)| {
-                            index.segments.get(i).is_some_and(|s| {
-                                p.as_path() == row.path.as_path()
-                                    && (f64::from(s.seg.start) - t0).abs() < 0.01
-                            })
-                        }),
-                    };
-                    let response =
-                        view::segment_row(ui, ctx.thumbs, ctx.theme, index, model, i, &look);
+                let looks: Vec<(usize, view::RowLook)> = row
+                    .segs
+                    .iter()
+                    .map(|&i| {
+                        let look = view::RowLook {
+                            picked: state.picked.contains(&i),
+                            playing: playing.as_ref().is_some_and(|(p, t0)| {
+                                index.segments.get(i).is_some_and(|s| {
+                                    p.as_path() == row.path.as_path()
+                                        && (f64::from(s.seg.start) - t0).abs() < 0.01
+                                })
+                            }),
+                        };
+                        (i, look)
+                    })
+                    .collect();
+                let responses = view::segment_rows(
+                    ui,
+                    ctx.thumbs,
+                    ctx.theme,
+                    index,
+                    model,
+                    &looks,
+                    ("people-segments", &row.clip),
+                );
+                for (&i, response) in row.segs.iter().zip(responses) {
                     let payload = if state.picked.contains(&i) {
                         state.picked.clone()
                     } else {
@@ -854,7 +868,7 @@ fn detail(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut Ui, ops: &mut Vec<O
                     if response.clicked() {
                         ops.push(Op::Segment(i, ui.input(|inp| inp.modifiers)));
                     }
-                    response.context_menu(|ui| {
+                    widgets::context_menu(&response, |ui| {
                         segment_menu(ui, group, &names, &payload, index, ops);
                     });
                 }
@@ -878,7 +892,7 @@ fn segment_menu(
         META,
         ui.visuals().weak_text_color(),
     ));
-    ui.menu_button("Move to", |ui| {
+    widgets::submenu(ui, "Move to", |ui| {
         egui::ScrollArea::vertical()
             .max_height(360.0)
             .show(ui, |ui| {
@@ -909,7 +923,7 @@ fn segment_menu(
         }));
     }
     ui.separator();
-    ui.menu_button("Reference in chat", |ui| {
+    widgets::submenu(ui, "Reference in chat", |ui| {
         for m in Modifier::ALL {
             if ui.button(m.label()).clicked() {
                 for &i in segs {
@@ -1138,13 +1152,12 @@ fn dialog(ctx: &mut PageCtx<'_>, state: &mut State, ui: &Ui, ops: &mut Vec<Op>) 
                         if segs.len() == 1 { "" } else { "s" }
                     ),
                 );
-                let edit = ui
-                    .add(
-                        egui::TextEdit::singleline(name)
-                            .hint_text("e.g. white-mask")
-                            .desired_width(f32::INFINITY),
-                    )
-                    .accessible_name("New person's name");
+                let edit = widgets::input(name)
+                    .label("New person's name")
+                    .placeholder("e.g. white-mask")
+                    .fill_width(true)
+                    .show(ui)
+                    .response;
                 if !edit.has_focus() && !edit.lost_focus() {
                     edit.request_focus();
                 }
@@ -1180,53 +1193,63 @@ fn dialog(ctx: &mut PageCtx<'_>, state: &mut State, ui: &Ui, ops: &mut Vec<Op>) 
                     .spacing([theme::SPACE_SM, theme::SPACE_XS])
                     .show(ui, |ui| {
                         let label = ui.label("Clip");
-                        egui::ComboBox::from_id_salt("people-range-clip")
-                            .selected_text(clip.as_str())
-                            .width(180.0)
-                            .show_ui(ui, |ui| {
-                                egui::ScrollArea::vertical()
-                                    .max_height(300.0)
-                                    .show(ui, |ui| {
-                                        for c in &clips {
-                                            ui.selectable_value(clip, c.clone(), c);
-                                        }
-                                    });
-                            })
-                            .response
-                            .labelled_by(label.id);
+                        // Material's compact select; nothing picked until the
+                        // clip is one of the night's.
+                        let mut pick = clips.iter().position(|c| c == clip);
+                        let field = clips.iter().enumerate().fold(
+                            egui_material3::MaterialSelect::new(&mut pick)
+                                .id_salt("people-range-clip")
+                                .variant(egui_material3::SelectVariant::Outlined)
+                                .compact(true)
+                                .placeholder("Pick a clip")
+                                .width(180.0)
+                                .menu_max_height(300.0),
+                            |field, (i, c)| field.option(i, c.as_str()),
+                        );
+                        ui.add(field).labelled_by(label.id);
+                        if let Some(c) = pick.and_then(|i| clips.get(i)) {
+                            c.clone_into(clip);
+                        }
                         ui.end_row();
                         let label = ui.label("From (s)");
-                        ui.add(egui::DragValue::new(from).speed(0.1).range(0.0..=f32::MAX))
-                            .labelled_by(label.id);
+                        ui.add(
+                            widgets::number(from, "From (s)")
+                                .range(0.0..=f32::MAX)
+                                .step(0.1)
+                                .drag_points_per_step(1.0),
+                        )
+                        .labelled_by(label.id);
                         ui.end_row();
                         let label = ui.label("To (s)");
-                        ui.add(egui::DragValue::new(to).speed(0.1).range(0.0..=f32::MAX))
-                            .labelled_by(label.id);
+                        ui.add(
+                            widgets::number(to, "To (s)")
+                                .range(0.0..=f32::MAX)
+                                .step(0.1)
+                                .drag_points_per_step(1.0),
+                        )
+                        .labelled_by(label.id);
                         ui.end_row();
                         let label = ui.label("Person");
-                        ui.horizontal(|ui| {
-                            ui.add(egui::TextEdit::singleline(name).desired_width(130.0))
-                                .labelled_by(label.id);
-                            egui::ComboBox::from_id_salt("people-range-name")
-                                .selected_text("▾")
-                                .width(24.0)
-                                .show_ui(ui, |ui| {
-                                    egui::ScrollArea::vertical()
-                                        .max_height(300.0)
-                                        .show(ui, |ui| {
-                                            for n in &names {
-                                                ui.selectable_value(name, n.clone(), n);
-                                            }
-                                        });
-                                })
-                                .response
-                                .accessible_name("Pick a known person");
-                        });
+                        // Any name can be typed; the menu suggests the
+                        // known people whose names hold what is typed.
+                        let field = names.iter().enumerate().fold(
+                            egui_material3::MaterialSelect::editable(name)
+                                .id_salt("people-range-name")
+                                .variant(egui_material3::SelectVariant::Outlined)
+                                .compact(true)
+                                .label("Person")
+                                .width(180.0)
+                                .menu_max_height(300.0),
+                            |field, (i, n)| field.option(i, n.as_str()),
+                        );
+                        ui.add(field).labelled_by(label.id);
                         ui.end_row();
                     });
                 let valid = !clip.is_empty() && *to > *from && !name.trim().is_empty();
                 ui.horizontal(|ui| {
-                    let assign = ui.add_enabled(valid, egui::Button::new("Assign"));
+                    let assign = ui
+                        .add_enabled_ui(valid, |ui| widgets::key_button(ui, ctx.theme, "Assign"))
+                        .inner;
                     if assign.clicked() {
                         ops.push(Op::AssignRange(
                             clip.clone(),
@@ -1236,7 +1259,7 @@ fn dialog(ctx: &mut PageCtx<'_>, state: &mut State, ui: &Ui, ops: &mut Vec<Op>) 
                         ));
                         close = true;
                     }
-                    if ui.button("Cancel").clicked() {
+                    if widgets::ghost_button(ui, ctx.theme, "Cancel").clicked() {
                         close = true;
                     }
                 });

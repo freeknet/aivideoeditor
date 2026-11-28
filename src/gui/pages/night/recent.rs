@@ -344,11 +344,7 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
     widgets::panel_header(ui, theme, "Projects", |ui| {
         if state.scanning.is_some() {
             ui.add_space(theme::SPACE_XS);
-            ui.add(
-                egui::Spinner::new()
-                    .size(icons::SMALL)
-                    .color(theme::rgb(theme.text_muted)),
-            );
+            ui.add(widgets::spinner(icons::SMALL, theme::rgb(theme.text_muted)));
             ui.add_space(theme::SPACE_XS);
         } else if widgets::icon_btn(ui, theme, icons::REFRESH, "Rescan the projects", "").clicked()
         {
@@ -410,10 +406,11 @@ pub(crate) fn draw(ctx: &mut PageCtx<'_>, state: &mut State, ui: &mut egui::Ui) 
         .id_salt("home-recent-list")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 2.0;
-            for night in state.list.clone() {
-                let here = open.as_deref() == Some(night.work.as_path());
-                if row(ctx, ui, &night, here) && !here {
+            let nights = state.list.clone();
+            let here = |night: &Summary| open.as_deref() == Some(night.work.as_path());
+            let clicked = rows(ctx, ui, &nights, here, "home-recent-rows");
+            for (night, clicked) in nights.iter().zip(clicked) {
+                if clicked && !here(night) {
                     ctx.actions.push(Action::OpenProject(night.work.clone()));
                 }
             }
@@ -483,117 +480,164 @@ pub(crate) fn paint_badge(
     size.x
 }
 
-/// One night as a list row, [`ROW_HEIGHT`] tall: its frame, its name, the
-/// clip and delivery counts in muted text, and a badge for how far it got;
-/// ink 8 % under the pointer, the selected-row fill when `open`. A context
-/// menu opens it, shows it in Explorer or drops it from the recent list.
-/// Returns whether it was clicked (or opened from its menu).
-pub(crate) fn row(ctx: &mut PageCtx<'_>, ui: &mut egui::Ui, night: &Summary, open: bool) -> bool {
+/// Nights as a Material 3 list, one [`ROW_HEIGHT`] row each: its frame,
+/// its name, the clip and delivery counts in muted text, and a badge for
+/// how far it got, on the list's own container, state layer and selected
+/// fill (for the night `open` says is open). Each row names the night to a
+/// screen reader and takes the arrow keys; a context menu opens it, shows
+/// it in Explorer or drops it from the recent list. Returns, per night,
+/// whether it was clicked (or opened from its menu).
+pub(crate) fn rows(
+    ctx: &mut PageCtx<'_>,
+    ui: &mut egui::Ui,
+    nights: &[Summary],
+    open: impl Fn(&Summary) -> bool,
+    id_salt: &str,
+) -> Vec<bool> {
+    use egui_material3::{ListItem, MaterialList, VisualDensity};
     let theme = ctx.theme;
-    let width = ui.available_width();
-    let (rect, response) =
-        ui.allocate_exact_size(egui::vec2(width, ROW_HEIGHT), egui::Sense::click());
-    response
-        .widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, open, &night.name));
-    if ui.is_rect_visible(rect) {
-        super::parts::row_fill(ui, theme, &response, open);
-        let thumb = egui::Rect::from_min_size(
-            egui::pos2(rect.left() + theme::SPACE_XS + 2.0, rect.center().y - 13.5),
-            egui::vec2(48.0, 27.0),
-        );
-        super::parts::thumb(
-            ctx.thumbs,
-            ui,
-            theme,
-            thumb,
-            night.thumb.as_ref().map(|(p, t)| (p.as_path(), *t)),
-        );
-        let (word, tone) = badge(night.progress);
-        let badge_w = paint_badge(
-            ui,
-            theme,
-            rect.right() - theme::SPACE_SM,
-            rect.center().y,
-            word,
-            tone,
-        );
-        let x = thumb.right() + theme::SPACE_SM + 2.0;
-        let text_room = egui::Rect::from_min_max(
-            egui::pos2(x, rect.top()),
-            egui::pos2(
-                rect.right() - theme::SPACE_SM * 2.0 - badge_w,
-                rect.bottom(),
-            ),
-        );
-        let painter = ui
-            .painter()
-            .with_clip_rect(text_room.intersect(ui.clip_rect()));
-        let name = painter.layout_no_wrap(
-            night.name.clone(),
-            theme::font(theme::LARGE_SIZE),
-            theme::rgb(theme.text),
-        );
-        let name_w = name.size().x;
-        painter.galley(
-            egui::pos2(x, rect.center().y - name.size().y / 2.0),
-            name,
-            theme::rgb(theme.text),
-        );
-        let mut meta = if night.clips > 0 {
-            format!("{} clips", night.clips)
-        } else {
-            "no footage yet".to_owned()
-        };
-        if night.delivered.0 > 0 && night.progress != Progress::Delivered {
-            meta.push_str(&format!(
-                " \u{b7} {}/{} out",
-                night.delivered.0, night.delivered.1
-            ));
-        }
-        painter.text(
-            egui::pos2(x + name_w + theme::SPACE_SM, rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            meta,
-            theme::font(theme::BODY_SIZE),
-            theme::rgb(theme.text_muted),
-        );
+    // Every row's painter needs the thumbnail cache; the rows are built
+    // before any of them paints, so they share it.
+    let thumbs = std::cell::RefCell::new(&mut *ctx.thumbs);
+    let list = nights.iter().fold(
+        MaterialList::new()
+            .id(ui.make_persistent_id(id_salt))
+            .dividers(false)
+            .fill_width(true),
+        |list, night| {
+            let thumbs = &thumbs;
+            list.item(
+                ListItem::new(night.name.clone())
+                    .dense(true)
+                    .visual_density(VisualDensity::new(0.0, -2.0))
+                    .min_tile_height(ROW_HEIGHT)
+                    .selected(open(night))
+                    .content_ui(move |ui, item| {
+                        paint_row(ui, theme, &mut thumbs.borrow_mut(), night, item.rect);
+                    }),
+            )
+        },
+    );
+    let shown = list.show(ui);
+    nights
+        .iter()
+        .zip(shown.items)
+        .map(|(night, response)| {
+            let tip = if night.date.is_empty() || night.name.starts_with(&night.date) {
+                night.work.display().to_string()
+            } else {
+                format!("{} \u{b7} {}", night.date, night.work.display())
+            };
+            let response = response.hint(tip);
+            let mut clicked = response.clicked();
+            widgets::context_menu(&response, |ui| {
+                if widgets::menu_item(ui, theme, Some(icons::FOLDER_OPEN), "Open", "", false)
+                    .clicked()
+                {
+                    clicked = true;
+                    ui.close();
+                }
+                if widgets::menu_item(
+                    ui,
+                    theme,
+                    Some(icons::EXTERNAL_LINK),
+                    "Show in Explorer",
+                    "",
+                    false,
+                )
+                .clicked()
+                {
+                    crate::gui::pages::deliver::files::open_folder(&recipe::night_dir(&night.work));
+                    ui.close();
+                }
+                widgets::menu_separator(ui, theme);
+                if widgets::menu_item(ui, theme, Some(icons::X), "Remove from recent", "", false)
+                    .clicked()
+                {
+                    let key = night.work.display().to_string();
+                    if let Some(list) = ctx.config.recent_projects.as_mut() {
+                        list.retain(|p| *p != key);
+                    }
+                    ui.close();
+                }
+            });
+            clicked
+        })
+        .collect()
+}
+
+/// Paints one night's row content into `rect`: the frame, the name and
+/// counts, the badge.
+fn paint_row(
+    ui: &egui::Ui,
+    theme: &crate::theme::Palette,
+    thumbs: &mut crate::gui::thumbs::Thumbs,
+    night: &Summary,
+    rect: egui::Rect,
+) {
+    if !ui.is_rect_visible(rect) {
+        return;
     }
-    let tip = if night.date.is_empty() || night.name.starts_with(&night.date) {
-        night.work.display().to_string()
+    let thumb = egui::Rect::from_min_size(
+        egui::pos2(rect.left() + theme::SPACE_XS + 2.0, rect.center().y - 13.5),
+        egui::vec2(48.0, 27.0),
+    );
+    super::parts::thumb(
+        thumbs,
+        ui,
+        theme,
+        thumb,
+        night.thumb.as_ref().map(|(p, t)| (p.as_path(), *t)),
+    );
+    let (word, tone) = badge(night.progress);
+    let badge_w = paint_badge(
+        ui,
+        theme,
+        rect.right() - theme::SPACE_SM,
+        rect.center().y,
+        word,
+        tone,
+    );
+    let x = thumb.right() + theme::SPACE_SM + 2.0;
+    let text_room = egui::Rect::from_min_max(
+        egui::pos2(x, rect.top()),
+        egui::pos2(
+            rect.right() - theme::SPACE_SM * 2.0 - badge_w,
+            rect.bottom(),
+        ),
+    );
+    let painter = ui
+        .painter()
+        .with_clip_rect(text_room.intersect(ui.clip_rect()));
+    let name = painter.layout_no_wrap(
+        night.name.clone(),
+        theme::font(theme::LARGE_SIZE),
+        theme::rgb(theme.text),
+    );
+    let name_w = name.size().x;
+    painter.galley(
+        egui::pos2(x, rect.center().y - name.size().y / 2.0),
+        name,
+        theme::rgb(theme.text),
+    );
+    let mut meta = if night.clips > 0 {
+        format!("{} clips", night.clips)
     } else {
-        format!("{} \u{b7} {}", night.date, night.work.display())
+        "no footage yet".to_owned()
     };
-    let response = response.hint(tip);
-    let mut clicked = response.clicked();
-    response.context_menu(|ui| {
-        if widgets::menu_item(ui, theme, Some(icons::FOLDER_OPEN), "Open", "", false).clicked() {
-            clicked = true;
-            ui.close();
-        }
-        if widgets::menu_item(
-            ui,
-            theme,
-            Some(icons::EXTERNAL_LINK),
-            "Show in Explorer",
-            "",
-            false,
-        )
-        .clicked()
-        {
-            crate::gui::pages::deliver::files::open_folder(&recipe::night_dir(&night.work));
-            ui.close();
-        }
-        widgets::menu_separator(ui, theme);
-        if widgets::menu_item(ui, theme, Some(icons::X), "Remove from recent", "", false).clicked()
-        {
-            let key = night.work.display().to_string();
-            if let Some(list) = ctx.config.recent_projects.as_mut() {
-                list.retain(|p| *p != key);
-            }
-            ui.close();
-        }
-    });
-    clicked
+    if night.delivered.0 > 0 && night.progress != Progress::Delivered {
+        meta.push_str(&format!(
+            " \u{b7} {}/{} out",
+            night.delivered.0, night.delivered.1
+        ));
+    }
+    painter.text(
+        egui::pos2(x + name_w + theme::SPACE_SM, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        meta,
+        theme::font(theme::BODY_SIZE),
+        theme::rgb(theme.text_muted),
+    );
 }
 
 #[cfg(test)]

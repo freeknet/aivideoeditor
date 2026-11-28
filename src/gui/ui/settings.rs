@@ -327,8 +327,12 @@ fn behaviour(app: &App, ui: &mut Ui, actions: &mut Vec<Action>) {
     ui.horizontal(|ui| {
         let mut jobs = crate::gui::pages::night::pipeline::analysis_jobs();
         if ui
-            .add(egui::DragValue::new(&mut jobs).range(1..=32).speed(0.05))
-            .accessible_name("Clips analysed at once")
+            .add(
+                widgets::number(&mut jobs, "Clips analysed at once")
+                    .range(1..=32)
+                    .drag_points_per_step(20.0)
+                    .width(80.0),
+            )
             .changed()
         {
             actions.push(Action::SetAnalysisJobs(jobs));

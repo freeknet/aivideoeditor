@@ -404,7 +404,7 @@ fn card(
             StrokeKind::Outside,
         );
     }
-    let response = response.on_hover_ui(|ui| super::tooltip(ui, paint, item));
+    let response = super::tooltip_on(response, paint, item);
     Card {
         response,
         scrub,

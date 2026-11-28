@@ -4,7 +4,8 @@
 //               weights, Roboto Mono for timecode, Lucide for icons, Inter
 //               underneath), or a typeface named in the config.
 //
-// Dependencies: egui (FontDefinitions); std::fs for the font directories;
+// Dependencies: egui (FontDefinitions); egui_material3 (its weight family
+//               names); std::fs for the font directories;
 //               assets/fonts/*.ttf (SIL OFL 1.1 and ISC, see assets/fonts/NOTICE)
 // ============================================================================
 
@@ -35,6 +36,11 @@
 //! [`setup`] only arrive at the start of the *next* frame, so the first
 //! frame must fall back to the regular face. [`weight`] does.
 //!
+//! egui-material3's widgets ask for their weights by its own names
+//! (`plain-400`, `plain-500`, `plain-700`); those are registered too, as
+//! Mona Sans Regular, Medium and SemiBold, so the library draws in the
+//! app's face rather than falling back to egui's default.
+//!
 //! Lucide sits in every chain behind the text faces, so an icon codepoint
 //! in an ordinary label draws as the icon; [`ICONS`] is the family with
 //! Lucide first, for drawing an icon on its own.
@@ -48,6 +54,7 @@
 //! not installed leaves the app in its bundled face; that is a normal
 //! outcome, not an error worth showing anybody.
 
+use egui_material3::tokens::typography::{WEIGHT_BOLD, WEIGHT_MEDIUM, WEIGHT_REGULAR};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -112,6 +119,12 @@ pub fn weight(ctx: &egui::Context, family: &str, size: f32) -> egui::FontId {
     }
 }
 
+/// The family egui-material3 asks for at `weight` (its type scale names
+/// each weight as a family; see the module docs).
+fn material_weight(weight: u16) -> egui::FontFamily {
+    egui::FontFamily::Name(egui_material3::tokens::typography::weight_family_name(weight).into())
+}
+
 /// Installs the fonts: Mona Sans, Inter and Lucide in front of egui's own
 /// faces; `family` (when given and found) in front of those; Roboto Mono
 /// for monospace; the weights and the icon family by name; and a system
@@ -172,6 +185,12 @@ pub fn setup(ctx: &egui::Context, family: Option<&str>) -> Option<PathBuf> {
         (egui::FontFamily::Proportional, chain(&["mona"])),
         (egui::FontFamily::Name(MEDIUM.into()), chain(&[MEDIUM])),
         (egui::FontFamily::Name(SEMIBOLD.into()), chain(&[SEMIBOLD])),
+        // egui-material3's type scale asks for its weights by these names
+        // (`plain-400`, `plain-500`, `plain-700`); pointing them at Mona
+        // Sans keeps the library's widgets in the app's face.
+        (material_weight(WEIGHT_REGULAR), chain(&["mona"])),
+        (material_weight(WEIGHT_MEDIUM), chain(&[MEDIUM])),
+        (material_weight(WEIGHT_BOLD), chain(&[SEMIBOLD])),
         (
             egui::FontFamily::Name(TABULAR.into()),
             chain(&["inter", "mona"]),
@@ -221,6 +240,12 @@ pub fn setup(ctx: &egui::Context, family: Option<&str>) -> Option<PathBuf> {
             list.push(key.clone());
         }
     }
+    // egui-material3's bundled Material Symbols, Outlined only (the one
+    // style it draws its few built-in icons in, such as a dialog's close
+    // button), as their own families. They go to the very back of the
+    // proportional chain, so Lucide keeps the private-use codepoints the
+    // two fonts share in labels.
+    egui_material3::fonts::add_symbols_outlined(&mut fonts);
     ctx.set_fonts(fonts);
     face
 }

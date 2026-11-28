@@ -275,7 +275,7 @@ pub struct App {
     pub(crate) keymap: ui::keymap::Preset,
     /// Whether the shortcut sheet is open.
     pub(crate) shortcuts_open: bool,
-    /// Whether the search popover is open under the search box.
+    /// Whether the search view is open under the search bar.
     pub(crate) search_open: bool,
     /// Set by [`Action::FocusSearch`]; the top bar takes it next frame.
     pub(crate) focus_search: bool,

@@ -4,11 +4,19 @@
 //               design tokens every margin, radius, size and overlay in the
 //               app comes from.
 //
-// Dependencies: egui; crate::theme (the palette), crate::color::Rgb,
-//               crate::gui::font (the weights)
+// Dependencies: egui; egui_material3 (tokens and its theme); crate::theme
+//               (the palette), crate::color::Rgb, crate::gui::font (the
+//               weights)
 // ============================================================================
 
 //! Where a theme becomes a window.
+//!
+//! The design tokens are Material 3's, from egui-material3: the corner
+//! radii are its shape scale ([`CornerSize`]), the text sizes its type
+//! scale ([`TypeRole`]), and the default themes its baseline colour scheme
+//! (`crate::theme::material`). [`apply`] also hands the active palette to
+//! the library as a Material colour scheme ([`material_scheme`]), so its
+//! buttons, chips, tabs and switches draw in whichever theme is picked.
 //!
 //! [`apply`] installs the palette into egui's own `Visuals` once per frame,
 //! before anything paints, so built-in widgets follow the theme without any
@@ -39,6 +47,8 @@
 use crate::color::Rgb;
 use crate::theme::{Mode, Palette};
 use egui::{Color32, CornerRadius, Margin, Stroke, TextStyle, Vec2};
+use egui_material3::MaterialTheme;
+use egui_material3::tokens::{ColorRole, ColorScheme, CornerSize, TypeRole};
 
 /// The tightest gap: between an icon and its label (Tailwind `1`).
 pub const SPACE_XS: f32 = 4.0;
@@ -55,27 +65,44 @@ pub const SPACE_LG: f32 = 16.0;
 /// Around a page's content (`6`).
 pub const SPACE_XL: f32 = 24.0;
 
-/// The corner radius on thumbnails (Selects' `rounded-xs`, 2 px).
+/// A Material 3 corner size as an egui radius. `Full` (a pill) has no
+/// fixed value; it maps to the largest radius, which egui clamps to half
+/// the shorter side, which is what a pill is.
+const fn corner(size: CornerSize) -> u8 {
+    match size.value() {
+        Some(radius) => radius as u8,
+        None => u8::MAX,
+    }
+}
+
+/// The corner radius on thumbnails (2 px). Below Material's smallest step
+/// on purpose: a thumbnail is footage, not a control.
 pub const RADIUS_XS: u8 = 2;
 
 /// The corner radius on small controls: menu items, tab pills, chips,
-/// badges (Selects' `rounded-sm`, 6 px).
-pub const RADIUS: u8 = 6;
+/// badges (Material's extra-small shape, 4 px).
+pub const RADIUS: u8 = corner(CornerSize::ExtraSmall);
 
 /// The corner radius on buttons, fields, segmented tracks and menus
-/// (`rounded-md`, 8 px).
-pub const RADIUS_MD: u8 = 8;
+/// (Material's small shape, 8 px).
+pub const RADIUS_MD: u8 = corner(CornerSize::Small);
 
-/// The corner radius on cards, popovers and modals (`rounded-lg`, 10 px).
-pub const RADIUS_LG: u8 = 10;
+/// The corner radius on cards, popovers and modals (Material's medium
+/// shape, 12 px).
+pub const RADIUS_LG: u8 = corner(CornerSize::Medium);
 
 /// The corner radius on floating glass islands: the buttons that stand in
-/// for folded panels over the viewer, the timeline's tool island (12 px).
-pub const RADIUS_ISLAND: u8 = 12;
+/// for folded panels over the viewer, the timeline's tool island
+/// (Material's large shape, 16 px).
+pub const RADIUS_ISLAND: u8 = corner(CornerSize::Large);
 
-/// The corner radius on the composer and option cards (`rounded-xl`,
-/// 14 px).
-pub const RADIUS_XL: u8 = 14;
+/// The corner radius on the composer and option cards (Material's
+/// large-increased shape, 20 px).
+pub const RADIUS_XL: u8 = corner(CornerSize::LargeIncreased);
+
+/// The corner radius on a modal dialog (Material's extra-large shape,
+/// 28 px).
+pub const RADIUS_DIALOG: u8 = corner(CornerSize::ExtraLarge);
 
 /// The height of panel-header controls: tab pills, icon buttons, `xs`
 /// buttons and fields (Selects' `h-7`, 28 px).
@@ -116,28 +143,29 @@ pub const SIDEBAR_MINI_WIDTH: f32 = CONTROL_HEIGHT + SPACE_MD * 2.0;
 /// selection fill is a light tint, so this is what makes it unmistakable.
 pub const SELECTION_BAR: f32 = 3.0;
 
-/// The dense UI text size: labels, buttons, lists (Selects' `text-xs`,
+/// The dense UI text size: labels, buttons, lists (Material's body small,
 /// 12/16). The default.
-pub const BODY_SIZE: f32 = 12.0;
+pub const BODY_SIZE: f32 = TypeRole::BodySmall.style().size;
 
-/// Reading text: the composer, messages, body copy (`text-sm`, 14/20).
-pub const LARGE_SIZE: f32 = 14.0;
+/// Reading text: the composer, messages, body copy (body medium, 14/20).
+pub const LARGE_SIZE: f32 = TypeRole::BodyMedium.style().size;
 
-/// Captions, units, badges (`text-2xs`, 11/16).
-pub const SMALL_SIZE: f32 = 11.0;
+/// Captions, units, badges (label small, 11/16).
+pub const SMALL_SIZE: f32 = TypeRole::LabelSmall.style().size;
 
-/// The smallest text: keyboard chips, track labels (`text-3xs`, 10/12).
+/// The smallest text: keyboard chips, track labels (10/12). Below
+/// Material's scale on purpose: a timeline track label has to fit a lane.
 pub const TINY_SIZE: f32 = 10.0;
 
-/// Page heading size (`text-lg`, 18/28).
-pub const HEADING_SIZE: f32 = 18.0;
+/// Page heading size (title large, 22/28).
+pub const HEADING_SIZE: f32 = TypeRole::TitleLarge.style().size;
 
-/// Card and section title size (`text-sm`, 14/20, in Medium).
-pub const TITLE_SIZE: f32 = 14.0;
+/// Card and section title size (title small, 14/20, in Medium).
+pub const TITLE_SIZE: f32 = TypeRole::TitleSmall.style().size;
 
-/// The size of a panel header's title (`text-xs`, in Medium): headers are
-/// labels, not headlines.
-pub const PANEL_TITLE_SIZE: f32 = 12.0;
+/// The size of a panel header's title (label medium, 12/16, in Medium):
+/// headers are labels, not headlines.
+pub const PANEL_TITLE_SIZE: f32 = TypeRole::LabelMedium.style().size;
 
 /// Ink at 3 %: the quietest wash, a striped row.
 pub const INK_03: u8 = 8;
@@ -333,8 +361,99 @@ pub fn tabular(ctx: &egui::Context, size: f32) -> egui::FontId {
     crate::gui::font::weight(ctx, crate::gui::font::TABULAR, size)
 }
 
+/// The Material 3 colour scheme the library's widgets draw `theme` with.
+///
+/// The Material themes hand over their own baseline scheme, with `surface`
+/// set to the panel (see below). Any
+/// other theme is mapped role by role from its palette, starting from the
+/// baseline of its mode so a role ave has no colour for still has a sane
+/// one: surfaces back to front onto the surface containers, the accent onto
+/// primary, the selection fill onto the secondary container (the tonal
+/// fill M3 uses for a selected chip or nav item), hairlines onto outlines.
+#[must_use]
+pub fn material_scheme(theme: &Palette) -> ColorScheme {
+    let dark = theme.mode == Mode::Dark;
+    let mut scheme = ColorScheme::baseline(dark);
+    // The library paints a widget's backdrop (a tab bar, a disabled
+    // button) in `surface`; the app's panels are the low container, so
+    // `surface` is the panel or those widgets would sit in a darker box.
+    scheme.set(ColorRole::Surface, rgb(theme.panel));
+    scheme.set(ColorRole::Background, rgb(theme.panel));
+    if theme.id == crate::theme::MATERIAL_NIGHT || theme.id == crate::theme::MATERIAL_LIGHT {
+        return scheme;
+    }
+    let mid = rgb(theme.panel.lerp(theme.raised, 0.5));
+    for (role, color) in [
+        (ColorRole::Primary, rgb(theme.accent)),
+        (ColorRole::SurfaceTint, rgb(theme.accent)),
+        (ColorRole::OnPrimary, rgb(theme.text_on_accent)),
+        (ColorRole::PrimaryContainer, rgb(theme.accent_soft)),
+        (ColorRole::OnPrimaryContainer, rgb(theme.text)),
+        (ColorRole::InversePrimary, rgb(theme.accent)),
+        (ColorRole::PrimaryFixed, rgb(theme.accent)),
+        (ColorRole::PrimaryFixedDim, rgb(theme.accent_hover)),
+        (ColorRole::OnPrimaryFixed, rgb(theme.text_on_accent)),
+        (ColorRole::OnPrimaryFixedVariant, rgb(theme.text_on_accent)),
+        (ColorRole::Secondary, rgb(theme.text_muted)),
+        (ColorRole::OnSecondary, rgb(theme.panel)),
+        (ColorRole::SecondaryContainer, rgb(theme.selection)),
+        (ColorRole::OnSecondaryContainer, rgb(theme.selection_text)),
+        (ColorRole::Tertiary, rgb(theme.success)),
+        (ColorRole::TertiaryContainer, rgb(theme.accent_soft)),
+        (ColorRole::OnTertiaryContainer, rgb(theme.text)),
+        (ColorRole::Error, rgb(theme.danger)),
+        (ColorRole::OnError, rgb(theme.text_on_danger)),
+        (
+            ColorRole::ErrorContainer,
+            rgb(theme.panel.lerp(theme.danger, 0.25)),
+        ),
+        (ColorRole::OnErrorContainer, rgb(theme.text)),
+        (ColorRole::Background, rgb(theme.panel)),
+        (ColorRole::OnBackground, rgb(theme.text)),
+        (ColorRole::Surface, rgb(theme.panel)),
+        (ColorRole::OnSurface, rgb(theme.text)),
+        (ColorRole::SurfaceVariant, rgb(theme.raised)),
+        (ColorRole::OnSurfaceVariant, rgb(theme.text_muted)),
+        (ColorRole::Outline, rgb(theme.border_strong)),
+        (ColorRole::OutlineVariant, rgb(theme.border)),
+        (ColorRole::InverseSurface, rgb(theme.text)),
+        (ColorRole::InverseOnSurface, rgb(theme.panel)),
+        (ColorRole::SurfaceDim, rgb(theme.app)),
+        (ColorRole::SurfaceBright, rgb(theme.hover)),
+        (ColorRole::SurfaceContainerLowest, rgb(theme.app)),
+        (ColorRole::SurfaceContainerLow, rgb(theme.panel)),
+        (ColorRole::SurfaceContainer, mid),
+        (ColorRole::SurfaceContainerHigh, rgb(theme.raised)),
+        (ColorRole::SurfaceContainerHighest, rgb(theme.hover)),
+    ] {
+        scheme.set(role, color);
+    }
+    scheme
+}
+
+/// Hands `theme` to egui-material3 on this context (what its widgets read
+/// through [`MaterialTheme::of`]), so they draw in the active palette.
+/// Only when the scheme changed.
+fn install_material(ctx: &egui::Context, theme: &Palette) {
+    let scheme = material_scheme(theme);
+    let dark = theme.mode == Mode::Dark;
+    let current = MaterialTheme::of(ctx);
+    if current.colors == scheme && current.is_dark == dark {
+        return;
+    }
+    MaterialTheme::set(
+        ctx,
+        MaterialTheme {
+            colors: scheme,
+            is_dark: dark,
+            ..MaterialTheme::baseline(dark)
+        },
+    );
+}
+
 /// Installs `theme` into egui's style. Called once per frame, first.
 pub fn apply(ctx: &egui::Context, theme: &Palette) {
+    install_material(ctx, theme);
     // egui keeps a light and a dark `Style` and picks by the OS setting.
     // The palette already decides, so the preference is pinned to it —
     // otherwise the fields set here would sit on top of the wrong defaults.
@@ -449,7 +568,8 @@ pub fn visuals(theme: &Palette) -> egui::Visuals {
     };
     visuals.panel_fill = rgb(theme.panel);
     visuals.window_corner_radius = CornerRadius::same(RADIUS_LG);
-    visuals.menu_corner_radius = CornerRadius::same(RADIUS_MD);
+    // Every egui menu and popup takes Material's menu shape (extra-small).
+    visuals.menu_corner_radius = CornerRadius::same(RADIUS);
     visuals.faint_bg_color = ink(theme, INK_03);
     // Text fields draw on this: the panel itself, with the `input` outline
     // doing the work, as shadcn's transparent inputs do.
@@ -524,7 +644,10 @@ pub fn visuals(theme: &Palette) -> egui::Visuals {
     visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, rgb(theme.text_muted));
     // Flat panels; only floating things (menus, popovers, windows) carry a
     // shadow, and a soft one.
-    visuals.popup_shadow = float_shadow();
+    // Menus and popups sit at Material's level 2 (its key shadow; egui
+    // draws one shadow per frame).
+    let [key, _ambient] = egui_material3::tokens::Elevation::Level2.shadows(Color32::BLACK);
+    visuals.popup_shadow = key;
     visuals.window_shadow = float_shadow();
     visuals.window_stroke = ink_line(theme);
     visuals.window_fill = popover_fill(theme);
