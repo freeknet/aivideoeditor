@@ -83,7 +83,8 @@ specs (they win over `05-selects-ui.md` §8 where the two differ).
 | `destructive` | `#ef4444` | `theme.danger` | delete, errors, the blade line |
 | `ring`, `tone-500` | `#737373` | `theme::ring`, `theme::panel_focus` | the focused panel's outline |
 | focus | Material `secondary` | `theme::focus_ink`, `widgets::focus_ring` | the keyboard focus ring: 2 px, 2 px off the control, 3:1 on every surface |
-| glass | `#262626` @ 85 % + white 10 % border | `theme::glass_fill`, `widgets::glass_frame` | floating over footage (Selects uses 50 % + 16 px blur; egui has no blur) |
+| glass | `#262626` @ 85 % + white 10 % border | `theme::glass_fill`, `widgets::glass_frame` | controls floating over the viewer (Selects uses 50 % + 16 px blur; egui has no blur) |
+| scrim | black @ 63 %, white text, in every theme | `theme::scrim`, `theme::ON_SCRIM`, `theme::on_scrim(colour)` for icons | badges on thumbnails and anything small over footage: footage is not a theme surface, so a light theme's plate would leave the text unreadable over a bright frame; white on it clears 4.5:1 over any frame |
 
 The `hover` palette surface is `#3a3a3a`, a step short of `#404040`,
 because muted text must clear 4.5:1 on every surface; the `accent` *fill*
@@ -188,6 +189,8 @@ should lay digits out in fixed cells (or use `theme::mono`).
   **Viewer owners: keep the top 48 px of the two corners free of controls
   that matter.** The timeline folds to a 24 px labelled rail.
 - **Status bar**: 24 px, the chrome surface, hairline above, 11 px text.
+  Its hint says what the hovered control does until the control's
+  tooltip appears, then clears, so the same words are never shown twice.
 - **Which panel is focused**: `workspace::panel_focused(ctx, key)` says
   whether the panel `key` (`"timeline"`, `"viewer"`, …) took the last
   pointer-down. A panel that paints a selection asks it to pick the
@@ -232,7 +235,7 @@ your own on those pages.
 | a status, a count | `pill(ui, theme, "3", Tone::Neutral)` | Material's labelled badge on the tone's container colour (`MaterialTheme::success()`/`warning()` for those tones); `Tone::{Neutral, Key, Success, Warning, Danger}` |
 | a shortcut | `kbd(ui, theme, "Ctrl+B")` | one chip per key |
 | a hint | `tip(response, theme, label, keys)` | Material's plain tooltip, keys as chips; `rich_tip(response, name, \|ui\| ..)` for a several-line preview (Material's rich tooltip); `pointer_tip(&response, name, \|ui\| ..)` for a timeline or transport, following the pointer (`TooltipAnchor::Pointer`) |
-| why a control is disabled | `why_disabled(response, "Name the template first")` | the reason as the tooltip while it is disabled, and in the status bar; a control greyed out with no reason leaves the user guessing |
+| why a control is disabled | `why_disabled(response, "Name the template first")` | the reason as the tooltip while it is disabled, and in the status bar until that tooltip shows; every greyed-out control gets one unless its label already says why ("Analysing…"); a control greyed out with no reason leaves the user guessing |
 | nothing to show | `empty_state(ui, theme, icons::FILM, "No shots yet", "Index the night to fill this.", \|ui\| { .. })` | centred in the space left |
 | a single-line field | `text_field(ui, theme, &mut text, "Placeholder")`, `input(&mut text).label(..).show(ui)` | Material's outlined field at 32 px; `dense_input(&mut text, 28.0)` for a 28 or 24 px row (the desktop densities, 12 px text), `field_frame(ui, theme, rect, ..)` to place one at a rect with an optional Lucide leading icon |
 | a number | `ui.add(number(&mut value, "Name").range(..).suffix(" s"))` | Material's number field, 32 px: drag, Up/Down steps, typing |
@@ -240,7 +243,7 @@ your own on those pages.
 | a long grid of tiles | `egui_material3::MaterialLayoutGrid::show_rows(ui, viewport, rows, row_height, \|row, i\| row.labeled_cell(1, name, \|ui\| ..))` inside `ScrollArea::show_viewport` | only the rows in view are built; the gutter is also the row gap, so a taller gap rides on `row_height` |
 | a menu | `ui.menu_button(..)` / `egui::Popup::menu(&response)` with `menu_item`, `menu_heading`, `menu_separator` | items 14 px, 32 tall, `accent` hover, check when current |
 | a custom popover | `popover_frame(theme).show(ui, ..)` | popover fill, hairline, radius 8, shadow |
-| something floating over footage | `glass_frame(theme)`, `glass_button(..)` | radius 12, glass fill, white-10 % border |
+| something floating over footage | `glass_frame(theme)`, `glass_button(..)` | radius 12, glass fill, white-10 % border; a badge on a thumbnail sits on `theme::scrim()` instead |
 | on/off | `switch(..)` | 32 × 18 track, key when on |
 | a divider in a bar | `bar_divider(ui, theme)` | |
 | a card | `card(..)`, `card_grid(..)` | |
