@@ -258,8 +258,10 @@ const SEARCH_ID: &str = "topbar-search";
 /// The search box, centred on the bar and kept inside `gap`: Material's
 /// search bar, 36 px tall, the shortcut as a chip at its end. Focused, it
 /// opens Material's docked search view under it, listing the recent
-/// searches and then the filter tokens: picking a recent search runs it,
-/// picking a filter adds its token to the query and keeps typing.
+/// searches and then the filter tokens, each under its heading and both
+/// narrowed to the query (a line says so when nothing matches): picking a
+/// recent search runs it, picking a filter adds its token to the query and
+/// keeps typing.
 fn search(app: &mut App, ui: &mut Ui, theme: &Palette, bar: Rect, gap: Rect) {
     let width = SEARCH_WIDTH
         .min(gap.width() - SPACE_MD * 2.0)
@@ -278,24 +280,25 @@ fn search(app: &mut App, ui: &mut Ui, theme: &Palette, bar: Rect, gap: Rect) {
         egui_material3::search::set_expanded(ui.ctx(), SEARCH_ID, true);
         app.focus_search = false;
     }
-    let recent: Vec<String> = app
+    let recent_all: Vec<String> = app
         .recent_searches
         .iter()
         .take(RECENT_SHOWN)
         .cloned()
         .collect();
-    let mut suggestions: Vec<egui_material3::search::Suggestion> = recent
+    let (recent, facets) = matching(&app.search, &recent_all);
+    let recent_rows = recent.iter().map(|query| {
+        egui_material3::search::Suggestion::new(query.as_str())
+            .icon(widgets::lucide(icons::HISTORY))
+    });
+    let facet_rows = facets
         .iter()
-        .map(|query| {
-            egui_material3::search::Suggestion::new(query.as_str())
-                .icon(widgets::lucide(icons::HISTORY))
-        })
-        .collect();
-    suggestions.extend(FACETS.iter().map(|(token, what)| {
-        egui_material3::search::Suggestion::new(*token)
-            .supporting_text(*what)
-            .icon(widgets::lucide(icons::LIST_FILTER))
-    }));
+        .filter_map(|&k| FACETS.get(k))
+        .map(|(token, what)| {
+            egui_material3::search::Suggestion::new(*token)
+                .supporting_text(*what)
+                .icon(widgets::lucide(icons::LIST_FILTER))
+        });
     let before = app.search.clone();
     let shortcut = keys("search", app);
     let mut slot = ui.new_child(
@@ -308,7 +311,9 @@ fn search(app: &mut App, ui: &mut Ui, theme: &Palette, bar: Rect, gap: Rect) {
         .leading_icon(widgets::lucide(icons::SEARCH))
         .width(width)
         .height(height)
-        .suggestions(suggestions)
+        .section("Recent", recent_rows)
+        .section("Filters", facet_rows)
+        .empty_text("No recent search or filter matches")
         .trailing_content(|ui| {
             // The hint lives in the bar, not in a line under it.
             if !shortcut.is_empty() {
@@ -320,7 +325,8 @@ fn search(app: &mut App, ui: &mut Ui, theme: &Palette, bar: Rect, gap: Rect) {
     if let Some(index) = out.selected {
         if let Some(token) = index
             .checked_sub(recent.len())
-            .and_then(|facet| FACETS.get(facet))
+            .and_then(|k| facets.get(k))
+            .and_then(|&facet| FACETS.get(facet))
             .map(|(token, _)| *token)
         {
             // A filter adds to the query rather than replacing it, and
@@ -348,5 +354,66 @@ fn search(app: &mut App, ui: &mut Ui, theme: &Palette, bar: Rect, gap: Rect) {
     if let Some(query) = out.submitted {
         app.remember_search(&query);
         app.search_open = false;
+    }
+}
+
+/// The recent searches and the facets (indices into [`FACETS`]) the view
+/// lists for `query`: recent searches containing it, and the facets whose
+/// token or description holds its last word (all of them while that word
+/// is empty, as after a space, so the next filter is easy to add).
+fn matching(query: &str, recent: &[String]) -> (Vec<String>, Vec<usize>) {
+    let needle = query.trim().to_lowercase();
+    let recent = recent
+        .iter()
+        .filter(|r| needle.is_empty() || r.to_lowercase().contains(&needle))
+        .cloned()
+        .collect();
+    let word = query
+        .rsplit(char::is_whitespace)
+        .next()
+        .unwrap_or_default()
+        .trim_start_matches('-')
+        .to_lowercase();
+    let facets = FACETS
+        .iter()
+        .enumerate()
+        .filter(|(_, (token, what))| {
+            word.is_empty() || token.contains(word.as_str()) || what.contains(word.as_str())
+        })
+        .map(|(k, _)| k)
+        .collect();
+    (recent, facets)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FACETS, matching};
+
+    #[test]
+    fn suggestions_narrow_to_the_query() -> anyhow::Result<()> {
+        let recent = vec!["fire>0.5 pick".to_owned(), "person:ana".to_owned()];
+        let (shown, facets) = matching("", &recent);
+        assert_eq!(shown.len(), 2, "no query lists every recent search");
+        assert_eq!(facets.len(), FACETS.len(), "and every filter");
+        let (shown, facets) = matching("pers", &recent);
+        assert_eq!(shown, vec!["person:ana".to_owned()], "recent: {shown:?}");
+        assert!(
+            facets.iter().all(|&k| FACETS
+                .get(k)
+                .is_some_and(|(t, w)| t.contains("pers") || w.contains("pers"))),
+            "only matching filters: {facets:?}"
+        );
+        let (_, facets) = matching("fire>0.3 ", &recent);
+        assert_eq!(
+            facets.len(),
+            FACETS.len(),
+            "after a space every filter is offered again"
+        );
+        let (shown, facets) = matching("zzz", &recent);
+        assert!(
+            shown.is_empty() && facets.is_empty(),
+            "nothing matches: the empty line shows"
+        );
+        Ok(())
     }
 }
