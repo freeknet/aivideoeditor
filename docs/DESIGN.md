@@ -196,18 +196,18 @@ your own on those pages.
 | views of one panel | `tab_strip(ui, theme, &mut current, &[(A, "A"), (B, "B")])` | 28 px pills, 12 px Medium, open one ink 12 % |
 | a toolbar under a panel header | `toolbar_row(ui, height, &mut cx, \|ui, cx\| { left }, \|ui, cx\| { right })` | borderless, 2 px between items; `right` is laid out first (right to left) so it always fits, `left` gets the rest, clipped short of it; both sides share `cx` |
 | a menu trigger that names its current choice | `dropdown_button(ui, theme, "Best", "Sort by", open)` | ghost, 28 px, 12 px Medium, muted until hovered or `open`, trailing chevron; hand the response to `egui::Popup::menu` |
-| an icon-only action | `icon_btn(ui, theme, icons::X, "Close", keys)` | egui-material3's standard icon button, 28 px, square shape, the Lucide glyph via `Icon::glyph` (`widgets::lucide`); hit area clipped to the visible square; tooltip with `kbd` keys; `keys` may be `""` |
+| an icon-only action | `icon_btn(ui, theme, icons::X, "Close", keys)` | egui-material3's standard icon button, 28 px, square shape, the 16 px Lucide glyph via `Icon::glyph` (`widgets::lucide`) and `icon_size`; `min_touch_target(false)`, so it takes exactly its square; tooltip with `kbd` keys; `keys` may be `""` |
 | an icon toggle | `icon_toggle(ui, theme, glyph, label, keys, on)` | Material's toggle icon button (primary icon when on, toggled state for screen readers); `icon_toggle_sized(.., size)` for 24/32/36 px |
 | a text action | `ghost_button`, `outline_button`, `primary_button`, `key_button` | 28 px, SemiBold 12, radius 8 |
 | a text action with an icon, or another variant or size | `button_with(ui, theme, ButtonKind::Outline, Some(icons::PLUS), "Add")`, `button_sized(.., 36.0)` | `ButtonKind::{Ghost, Outline, Secondary, Primary, Key, Destructive}`; empty label = square icon button |
 | a mode, a small option set | `segmented(ui, theme, &mut current, &[..])` | muted track, raised pill |
 | a status, a count | `pill(ui, theme, "3", Tone::Neutral)` | Material's labelled badge on the tone's container colour (`MaterialTheme::success()`/`warning()` for those tones); `Tone::{Neutral, Key, Success, Warning, Danger}` |
 | a shortcut | `kbd(ui, theme, "Ctrl+B")` | one chip per key |
-| a hint | `tip(response, theme, label, keys)` | Material's plain tooltip, keys as chips; `rich_tip(response, name, \|ui\| ..)` for a several-line preview (Material's rich tooltip) |
+| a hint | `tip(response, theme, label, keys)` | Material's plain tooltip, keys as chips; `rich_tip(response, name, \|ui\| ..)` for a several-line preview (Material's rich tooltip); `pointer_tip(&response, name, \|ui\| ..)` for a timeline or transport, following the pointer (`TooltipAnchor::Pointer`) |
 | nothing to show | `empty_state(ui, theme, icons::FILM, "No shots yet", "Index the night to fill this.", \|ui\| { .. })` | centred in the space left |
-| a single-line field | `text_field(ui, theme, &mut text, "Placeholder")`, `input(&mut text).label(..).show(ui)` | Material's outlined field at 32 px; `field_frame` only for a hand-placed field in a 24/28 px row or with a Lucide leading icon |
+| a single-line field | `text_field(ui, theme, &mut text, "Placeholder")`, `input(&mut text).label(..).show(ui)` | Material's outlined field at 32 px; `dense_input(&mut text, 28.0)` for a 28 or 24 px row (the desktop densities, 12 px text), `field_frame(ui, theme, rect, ..)` to place one at a rect with an optional Lucide leading icon |
 | a number | `ui.add(number(&mut value, "Name").range(..).suffix(" s"))` | Material's number field, 32 px: drag, Up/Down steps, typing |
-| a list of rows | `egui_material3::MaterialList` with `ListItem::content_ui` | its own state layer, selected fill, arrow keys and screen-reader names; `row_sense(Sense::drag())` for rows that drag |
+| a list of rows | `egui_material3::MaterialList` with `ListItem::content_ui` | its own state layer, selected fill, arrow keys and screen-reader names; `ListItem::row_height(28.0)` for an exact row height; `MaterialList::show_rows` inside `ScrollArea::show_viewport` for a long list (only the rows in view are built); `row_sense(Sense::drag())` for rows that drag |
 | a menu | `ui.menu_button(..)` / `egui::Popup::menu(&response)` with `menu_item`, `menu_heading`, `menu_separator` | items 14 px, 32 tall, `accent` hover, check when current |
 | a custom popover | `popover_frame(theme).show(ui, ..)` | popover fill, hairline, radius 8, shadow |
 | something floating over footage | `glass_frame(theme)`, `glass_button(..)` | radius 12, glass fill, white-10 % border |
