@@ -42,6 +42,10 @@
 //! `AVE_SCREENSHOT_ONLY` (comma-separated shot names) limits the run to
 //! those shots.
 //!
+//! `AVE_SCREENSHOT_THEME` (a theme id, such as `material-light`) shoots
+//! every page in that theme instead of the default one; pass a separate
+//! output directory to keep both sets.
+//!
 //! And the chat's cards: a staged edit (`chat-proposal.png`), a slow step
 //! waiting for approval (`chat-approval.png`) and the first-cut settings
 //! card (`chat-first-cut.png`). The first two need a conversation: for each
@@ -390,6 +394,8 @@ fn main() -> anyhow::Result<()> {
     std::fs::create_dir_all(&out)?;
     // A night to open (its _ave folder), so the pages show real content.
     let night = std::env::var_os("AVE_SCREENSHOT_NIGHT").map(std::path::PathBuf::from);
+    // A theme to shoot in (`AVE_SCREENSHOT_THEME=material-light`).
+    let theme = std::env::var("AVE_SCREENSHOT_THEME").ok();
     let [width, height] = if night.is_some() {
         [1680.0, 1000.0]
     } else {
@@ -525,11 +531,11 @@ fn main() -> anyhow::Result<()> {
             .build_ui_state(
                 |ui, app: &mut Option<App>| {
                     let app = app.get_or_insert_with(|| {
-                        let mut app = App::new(
-                            ui.ctx(),
-                            aivideoeditor::config::Config::default(),
-                            night.clone(),
-                        );
+                        let config = aivideoeditor::config::Config {
+                            theme: theme.clone(),
+                            ..aivideoeditor::config::Config::default()
+                        };
+                        let mut app = App::new(ui.ctx(), config, night.clone());
                         for action in &actions {
                             app.apply(ui.ctx(), action.clone());
                         }
