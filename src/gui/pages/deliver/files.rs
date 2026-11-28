@@ -202,6 +202,35 @@ impl Manifest {
         }
     }
 
+    /// Whether ave delivered the file meant for `dest`: the file there is
+    /// one ave copied and nobody has changed since, or ave delivered it
+    /// beside a taken name ([`free_name`](Self::free_name)) and that copy
+    /// is untouched. A video someone else put at `dest` is not.
+    pub(crate) fn delivered(&self, dest: &Path) -> bool {
+        if self.owner(dest) == Owner::Ave {
+            return true;
+        }
+        let wanted = key(dest);
+        let (stem, ext) = match wanted.rsplit_once('.') {
+            Some((stem, ext)) if !stem.ends_with('/') => (stem.to_owned(), format!(".{ext}")),
+            Some(_) | None => (wanted.clone(), String::new()),
+        };
+        let beside = format!("{stem}-ave");
+        self.files
+            .keys()
+            .filter(|k| {
+                k.strip_prefix(&beside)
+                    .and_then(|rest| rest.strip_suffix(&ext))
+                    .is_some_and(|n| {
+                        n.is_empty()
+                            || n.strip_prefix('-').is_some_and(|d| {
+                                !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit())
+                            })
+                    })
+            })
+            .any(|k| self.owner(Path::new(k)) == Owner::Ave)
+    }
+
     /// A name beside `dest` that replaces nothing ave did not make:
     /// `reel-30-ave.mp4`, else `reel-30-ave-2.mp4`, and so on.
     pub(crate) fn free_name(&self, dest: &Path) -> PathBuf {
@@ -228,6 +257,24 @@ impl Manifest {
             n += 1;
         }
     }
+}
+
+/// How many of `recipe`'s deliverables ave has delivered for the night at
+/// `work`: those whose main version is in the output folder as a file ave
+/// put there ([`Manifest::delivered`]). Videos people left in the folder
+/// themselves (a hand edit, last week's export from another program) are
+/// not counted, even under a deliverable's name.
+pub(crate) fn delivered_count(work: &Path, recipe: &crate::recipe::Recipe) -> usize {
+    let names = crate::recipe::Names::for_work(work);
+    let out = recipe.output_dir(work, &names);
+    let manifest = Manifest::load(work);
+    recipe
+        .deliverables
+        .iter()
+        .filter(|d| {
+            manifest.delivered(&out.join(recipe.filename(d, crate::recipe::MAIN_VERSION, &names)))
+        })
+        .count()
 }
 
 /// A path as the manifest keys it: separators made one kind, so a work
@@ -308,6 +355,60 @@ mod tests {
             back.free_name(&theirs),
             videos.join("reel-15-ave-2.mp4"),
             "past a taken one"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn videos_people_left_in_the_output_folder_are_not_counted_as_delivered() -> anyhow::Result<()>
+    {
+        use super::{Manifest, delivered_count};
+        use crate::recipe::{MAIN_VERSION, Names, Recipe};
+        let dir = tempfile::tempdir()?;
+        let work = dir.path().join("2026-11-11").join("_ave");
+        std::fs::create_dir_all(&work)?;
+        let recipe = Recipe::default();
+        let names = Names::for_work(&work);
+        let out = recipe.output_dir(&work, &names);
+        std::fs::create_dir_all(&out)?;
+        let [wide, vertical] = [0, 1].map(|i| {
+            recipe
+                .deliverables
+                .get(i)
+                .map(|d| out.join(recipe.filename(d, MAIN_VERSION, &names)))
+                .unwrap_or_default()
+        });
+
+        // The human's own videos under both deliverables' names.
+        std::fs::write(&wide, b"hand edit")?;
+        std::fs::write(&vertical, b"last week's export")?;
+        assert_eq!(
+            delivered_count(&work, &recipe),
+            0,
+            "files ave did not make are not deliveries"
+        );
+
+        // ave delivers the vertical cut over its own name...
+        std::fs::write(&vertical, b"render")?;
+        let mut manifest = Manifest::default();
+        manifest.record(&vertical);
+        // ...and the wide one beside the human's file.
+        let beside = manifest.free_name(&wide);
+        std::fs::write(&beside, b"render")?;
+        manifest.record(&beside);
+        manifest.save(&work)?;
+        assert_eq!(
+            delivered_count(&work, &recipe),
+            2,
+            "both cuts ave delivered count, the one beside a taken name too"
+        );
+
+        // A delivery edited by hand since is no longer ave's.
+        std::fs::write(&vertical, b"trimmed in another editor")?;
+        assert_eq!(
+            delivered_count(&work, &recipe),
+            1,
+            "the edited one drops out"
         );
         Ok(())
     }

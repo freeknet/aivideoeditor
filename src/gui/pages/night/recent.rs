@@ -106,15 +106,7 @@ pub(crate) fn summarize(work: &Path) -> Summary {
         }
     };
     let (recipe, _, _) = Recipe::load(work);
-    let out = recipe.output_dir(work, &names);
-    let delivered = recipe
-        .deliverables
-        .iter()
-        .filter(|d| {
-            out.join(recipe.filename(d, recipe::MAIN_VERSION, &names))
-                .is_file()
-        })
-        .count();
+    let delivered = crate::gui::pages::deliver::files::delivered_count(work, &recipe);
     let plans = std::fs::read_dir(work.join("plans"))
         .map(|e| {
             e.filter_map(Result::ok)

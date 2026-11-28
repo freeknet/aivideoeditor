@@ -109,7 +109,7 @@ pub(crate) struct Facts {
     pub(crate) plans: usize,
     /// Deliverables the recipe asks for.
     pub(crate) deliverables: usize,
-    /// Of those, how many are in the output folder.
+    /// Of those, how many ave has delivered to the output folder.
     pub(crate) delivered: usize,
     /// Heavy clips (4K, HEVC) still without a playback copy.
     pub(crate) proxies_missing: usize,
@@ -117,16 +117,7 @@ pub(crate) struct Facts {
 
 /// Reads [`Facts`] from `project`, with `recipe` for the deliverables.
 pub(crate) fn facts(project: &Project, recipe: &Recipe) -> Facts {
-    let names = recipe::Names::for_work(&project.work);
-    let out = recipe.output_dir(&project.work, &names);
-    let delivered = recipe
-        .deliverables
-        .iter()
-        .filter(|d| {
-            out.join(recipe.filename(d, recipe::MAIN_VERSION, &names))
-                .is_file()
-        })
-        .count();
+    let delivered = crate::gui::pages::deliver::files::delivered_count(&project.work, recipe);
     Facts {
         footage: project.settings.footage.is_some(),
         indexed: project.index.as_ref().map(|i| i.clips.len()),

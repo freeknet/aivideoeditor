@@ -144,7 +144,7 @@ struct Facts {
     missing_plans: Vec<String>,
     /// Deliverables' plans that fail their check.
     failing: Vec<String>,
-    /// Deliverables in the output folder.
+    /// Deliverables ave has delivered to the output folder.
     delivered: usize,
     /// Videos in the footage folder.
     videos: Option<usize>,
@@ -362,14 +362,7 @@ impl State {
             }
         }
         let out = recipe.output_dir(work, &names);
-        let delivered = recipe
-            .deliverables
-            .iter()
-            .filter(|d| {
-                out.join(recipe.filename(d, recipe::MAIN_VERSION, &names))
-                    .is_file()
-            })
-            .count();
+        let delivered = crate::gui::pages::deliver::files::delivered_count(work, recipe);
         let videos = p
             .settings
             .footage
