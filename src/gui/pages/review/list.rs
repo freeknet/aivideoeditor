@@ -12,9 +12,10 @@
 //! takes whatever width is left. Clicking a sortable header sorts by it.
 //!
 //! Rows are MaterialList's virtualised rows, 28 px each (an act's header
-//! is one too): only those in view are laid out. Each paints Selects' list
-//! row over its item: a 16 px thumbnail, the name in 14 px and the numbers
-//! in 12 px tabular, muted.
+//! is one too), 2 px apart with 8 px corners, one list per act: only those
+//! in view are laid out. Each paints Selects' list row over its item: a
+//! 16 px thumbnail, the name in 14 px and the numbers in 12 px tabular,
+//! muted.
 
 use crate::gui::ui::hint::Hint as _;
 use std::cell::RefCell;
@@ -32,6 +33,25 @@ use crate::search::marks::Verdict;
 
 /// Row height (Selects' `h-7`).
 const ROW_H: f32 = theme::CONTROL_HEIGHT;
+
+/// Gap between rows (Selects' list rows sit 2 px apart).
+const ROW_GAP: f32 = 2.0;
+
+/// Extra space above an act's header that is not the first.
+const HEADER_LEAD: f32 = SPACE_SM;
+
+/// The list's runs: the indices of `rows` each list shows, one run per act
+/// (from its header to the row before the next header), or one for all.
+fn runs(rows: &[Row]) -> Vec<std::ops::Range<usize>> {
+    let mut out: Vec<std::ops::Range<usize>> = Vec::new();
+    for (k, row) in rows.iter().enumerate() {
+        match (row, out.last_mut()) {
+            (Row::Tiles { .. }, Some(run)) => run.end = k + 1,
+            (Row::Header(_) | Row::Tiles { .. }, _) => out.push(k..k + 1),
+        }
+    }
+    out
+}
 
 /// A row's inner padding at each end.
 const PAD_X: f32 = SPACE_XS + 2.0;
@@ -226,18 +246,19 @@ pub(super) fn draw(
         .hline(head.x_range(), head.bottom() - 0.5, theme::ink_line(theme));
 
     let n = paint.items.len();
-    // Every row (an act's header or a result) is one 28 px list row, so
-    // the list can be MaterialList's virtualised rows: uniform, no gaps.
+    // Every row (an act's header or a result) is one 28 px list row, 2 px
+    // apart, so each act can be one MaterialList of virtualised rows; acts
+    // sit a lead further apart.
     let layout = acts::layout(
         paint.acts,
         n,
         1,
         acts::Metrics {
             header: ROW_H,
-            header_gap: 0.0,
-            header_lead: 0.0,
+            header_gap: ROW_GAP,
+            header_lead: HEADER_LEAD,
             tiles: ROW_H,
-            tiles_gap: 0.0,
+            tiles_gap: ROW_GAP,
         },
     );
     let mut area = egui::ScrollArea::vertical()
@@ -255,18 +276,32 @@ pub(super) fn draw(
     ui.add_space(SPACE_XS);
     let out = area.show_viewport(ui, |ui, viewport| {
         ui.set_width(inner_w);
+        ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
         let (thumbs, headers, cols) = (&thumbs, &headers, cols.as_slice());
-        let shown = MaterialList::new()
-            .id(egui::Id::unique("review-list-rows"))
-            .dividers(false)
-            .show_rows(ui, viewport, layout.rows.len(), ROW_H, |k| {
-                list_row(paint, layout.rows.get(k).copied(), thumbs, headers, cols)
-            });
-        for (k, response) in shown.rows {
-            if let Some(Row::Tiles { start, .. }) = layout.rows.get(k)
-                && let Some(item) = paint.items.get(*start)
-            {
-                responses.push((*start, super::tooltip_on(response, paint, item)));
+        for (b, run) in runs(&layout.rows).into_iter().enumerate() {
+            if b > 0 {
+                // The gap under the last row, then the lead above the act.
+                ui.add_space(ROW_GAP + HEADER_LEAD);
+            }
+            let shown = MaterialList::new()
+                .id(egui::Id::unique(("review-list-rows", b)))
+                .dividers(false)
+                .row_gap(ROW_GAP)
+                .show_rows(ui, viewport, run.len(), ROW_H, |j| {
+                    list_row(
+                        paint,
+                        layout.rows.get(run.start + j).copied(),
+                        thumbs,
+                        headers,
+                        cols,
+                    )
+                });
+            for (j, response) in shown.rows {
+                if let Some(Row::Tiles { start, .. }) = layout.rows.get(run.start + j)
+                    && let Some(item) = paint.items.get(*start)
+                {
+                    responses.push((*start, super::tooltip_on(response, paint, item)));
+                }
             }
         }
     });
@@ -327,6 +362,7 @@ fn list_row<'a>(
             };
             ListItem::new(s.id.clone())
                 .dense(true)
+                .corner_radius(theme::RADIUS_MD)
                 .selected(paint.selected.contains(&s.id))
                 .selected_tile_color(theme::selected_row(theme))
                 .selected_color(theme::rgb(theme.text))
@@ -556,7 +592,51 @@ fn row(
 
 #[cfg(test)]
 mod tests {
-    use super::{CAPTION_MIN, Col, fitting};
+    use super::{CAPTION_MIN, Col, HEADER_LEAD, ROW_GAP, ROW_H, Row, fitting, runs};
+
+    #[test]
+    fn each_act_is_one_run_and_the_runs_stack_to_the_layout() -> anyhow::Result<()> {
+        let rows = [
+            Row::Header(0),
+            Row::Tiles { start: 0, end: 1 },
+            Row::Tiles { start: 1, end: 2 },
+            Row::Header(1),
+            Row::Header(2),
+            Row::Tiles { start: 2, end: 3 },
+        ];
+        let got = runs(&rows);
+        assert_eq!(got, vec![0..3, 3..4, 4..6], "a run from each header");
+        let flat = [
+            Row::Tiles { start: 0, end: 1 },
+            Row::Tiles { start: 1, end: 2 },
+        ];
+        assert_eq!(runs(&flat), vec![0..2], "ungrouped is one run");
+        assert!(runs(&[]).is_empty(), "no rows, no runs");
+
+        // Stacked as `draw` stacks them, each act's rows land where the act
+        // layout (which the reveal scroll uses) puts them.
+        let mut y = 0.0;
+        let mut tops = Vec::new();
+        for (b, run) in got.iter().enumerate() {
+            if b > 0 {
+                y += ROW_GAP + HEADER_LEAD;
+            }
+            for j in 0..run.len() {
+                tops.push(y + j as f32 * (ROW_H + ROW_GAP));
+            }
+            y += run.len() as f32 * (ROW_H + ROW_GAP) - ROW_GAP;
+        }
+        let mut want = 0.0;
+        for (k, row) in rows.iter().enumerate() {
+            if matches!(row, Row::Header(_)) && k > 0 {
+                want += HEADER_LEAD;
+            }
+            let top = tops.get(k).copied().unwrap_or(f32::NAN);
+            assert!((top - want).abs() < 0.01, "row {k}: {top} vs {want}");
+            want += ROW_H + ROW_GAP;
+        }
+        Ok(())
+    }
 
     #[test]
     fn narrow_panes_drop_the_least_useful_columns_first() {
