@@ -747,7 +747,10 @@ pub(super) fn check_bar(
             "",
         );
         act = super::findings::popover(state, s, &list, toggle);
-        if let Some(first) = &first {
+        // With the list open the worst finding is in it: the bar's copy
+        // would only peek out beside the popover as a cut-off fragment.
+        let listed = widgets::menu_is_open(&list.ctx, widgets::menu_id(&list));
+        if !listed && let Some(first) = &first {
             let resp = ui.add(
                 egui::Label::new(
                     egui::RichText::new(format!("{} · {}", first.place(), first.message))

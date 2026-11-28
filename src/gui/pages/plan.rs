@@ -2467,6 +2467,39 @@ mod tests {
     }
 
     #[test]
+    fn the_check_bar_drops_its_finding_line_while_the_findings_list_is_open() -> anyhow::Result<()>
+    {
+        use egui_kittest::kittest::Queryable;
+        let (_dir, work) = jumpy_night()?;
+        let mut h = harness(work);
+        h.run_steps(4);
+        // The bar's line is plain text naming the cut; the list's copy is a
+        // menu item.
+        let bar_line = |h: &egui_kittest::Harness<'static, Option<crate::gui::app::App>>| {
+            h.query_all_by(|n| {
+                n.role() == egui::accesskit::Role::Label
+                    && [n.label(), n.value()]
+                        .into_iter()
+                        .flatten()
+                        .any(|text| text.contains("cut 2|3 \u{b7}"))
+            })
+            .next()
+            .is_some()
+        };
+        assert!(bar_line(&h), "closed, the bar names the worst finding");
+        h.query_by_label("Findings")
+            .ok_or_else(|| anyhow::anyhow!("no Findings button"))?
+            .click();
+        h.run_steps(4);
+        assert!(h.query_by_label("Accept").is_some(), "the list is open");
+        assert!(
+            !bar_line(&h),
+            "open, the list holds it and the bar shows no fragment of it"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn accept_in_the_findings_list_stops_the_count_and_undo_brings_it_back() -> anyhow::Result<()> {
         use egui_kittest::kittest::Queryable;
         let (_dir, work) = jumpy_night()?;
