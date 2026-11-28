@@ -377,6 +377,9 @@ pub(super) enum Tone {
 /// A notice row at the top of the composer box: at least 32 px, 8 x 12
 /// padding, 12 px text in its tone, a hairline under it. `trailing` draws
 /// controls at its right end (a dismiss button, a retry).
+/// In a narrow chat the controls go on a line of their own under the text,
+/// so a couple of buttons cannot squeeze the text into a column of one
+/// word per line.
 pub(super) fn notice_row(
     ui: &mut Ui,
     theme: &Palette,
@@ -384,6 +387,8 @@ pub(super) fn notice_row(
     tone: Tone,
     trailing: impl FnOnce(&mut Ui),
 ) {
+    // Below this width the controls go under the text.
+    const STACK_BELOW: f32 = 420.0;
     let (glyph, color) = match tone {
         Tone::Error => (icons::CIRCLE_ALERT, theme::rgb(theme.danger)),
         Tone::Warning => (icons::TRIANGLE_ALERT, theme::rgb(theme.warning)),
@@ -394,6 +399,26 @@ pub(super) fn notice_row(
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.set_min_height(theme::SPACE_LG);
+            let label = |ui: &mut Ui| {
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(text)
+                            .size(theme::BODY_SIZE)
+                            .color(color),
+                    )
+                    .wrap(),
+                );
+            };
+            if ui.available_width() < STACK_BELOW {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = SPACE_SM;
+                    icons::icon(ui, glyph, icons::SMALL, color);
+                    label(ui);
+                });
+                // Top-aligned, so an empty `trailing` takes no height.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), trailing);
+                return;
+            }
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = SPACE_SM;
                 icons::icon(ui, glyph, icons::SMALL, color);
@@ -401,16 +426,7 @@ pub(super) fn notice_row(
                     trailing(ui);
                     ui.with_layout(
                         egui::Layout::left_to_right(egui::Align::Center).with_main_wrap(true),
-                        |ui| {
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(text)
-                                        .size(theme::BODY_SIZE)
-                                        .color(color),
-                                )
-                                .wrap(),
-                            );
-                        },
+                        label,
                     );
                 });
             });
