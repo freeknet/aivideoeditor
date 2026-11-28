@@ -17,7 +17,7 @@
 //! most [`MAX`] of them) without leaving the mode.
 
 use crate::gui::ui::hint::Hint as _;
-use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
+use egui::{Align2, CornerRadius, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 
 use super::{Do, Paint};
 use crate::gui::thumbs::Thumbs;
@@ -254,10 +254,10 @@ fn tile(
         let plate = if hit.hovered() {
             theme::translucent(theme.danger, 220)
         } else {
-            theme::glass_fill(theme)
+            theme::scrim()
         };
         painter.rect_filled(close, CornerRadius::same(theme::RADIUS), plate);
-        icons::paint(&painter, close, icons::X, icons::SMALL, Color32::WHITE);
+        icons::paint(&painter, close, icons::X, icons::SMALL, theme::ON_SCRIM);
         if hit.clicked() {
             dos.push(Do::SurveyRemove(Some(i)));
             dropped = true;

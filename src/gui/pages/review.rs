@@ -2574,16 +2574,17 @@ pub(super) fn scroll_bar_width(ui: &egui::Ui) -> f32 {
     s.bar_width + s.bar_inner_margin + s.bar_outer_margin
 }
 
-/// A play icon on a glass disc, centred at `c`, `r` across the disc's
+/// A play icon on a scrim disc, centred at `c`, `r` across the disc's
 /// radius: the shot the tape is on.
 pub(super) fn play_mark(
     painter: &egui::Painter,
-    theme: &Palette,
+    _theme: &Palette,
     c: egui::Pos2,
     r: f32,
     color: egui::Color32,
 ) {
-    painter.circle(c, r, theme::glass_fill(theme), theme::ink_line(theme));
+    painter.circle_filled(c, r, theme::scrim());
+    let color = theme::on_scrim(crate::color::Rgb::new(color.r(), color.g(), color.b()));
     let size = (r * 1.1).round();
     icons::paint(
         painter,
@@ -2602,13 +2603,15 @@ pub(super) fn verdict_style(theme: &Palette, v: Verdict) -> (egui::Color32, char
     }
 }
 
-/// A small glass plate (Selects' card badges: the glass recipe, 2 px
-/// corners, 4 px side padding) anchored at `pos`, holding an optional icon
-/// in its colour and an optional label in white 12 px Medium. Returns its
-/// rect.
+/// A small plate on footage (Selects' card badges: 2 px corners, 4 px
+/// side padding) anchored at `pos`, holding an optional icon in its
+/// colour and an optional label in white 12 px Medium. The plate is the
+/// dark [`theme::scrim`] in every theme, so it reads over any frame; the
+/// icon's colour is lifted to show on it ([`theme::on_scrim`]). Returns
+/// its rect.
 pub(super) fn glass_badge(
     painter: &egui::Painter,
-    theme: &Palette,
+    _theme: &Palette,
     pos: egui::Pos2,
     anchor: egui::Align2,
     icon: Option<(char, egui::Color32)>,
@@ -2616,7 +2619,7 @@ pub(super) fn glass_badge(
 ) -> egui::Rect {
     let font = theme::medium(painter.ctx(), theme::BODY_SIZE);
     let galley = (!label.is_empty())
-        .then(|| painter.layout_no_wrap(label.to_owned(), font, egui::Color32::WHITE));
+        .then(|| painter.layout_no_wrap(label.to_owned(), font, theme::ON_SCRIM));
     let icon_w = if icon.is_some() {
         icons::SMALL - 2.0
     } else {
@@ -2633,10 +2636,11 @@ pub(super) fn glass_badge(
     painter.rect_filled(
         rect,
         egui::CornerRadius::same(theme::RADIUS_XS),
-        theme::glass_fill(theme),
+        theme::scrim(),
     );
     let mut x = rect.left() + SPACE_XS;
     if let Some((glyph, color)) = icon {
+        let color = theme::on_scrim(crate::color::Rgb::new(color.r(), color.g(), color.b()));
         icons::paint(
             painter,
             egui::Rect::from_min_size(
@@ -2651,7 +2655,7 @@ pub(super) fn glass_badge(
     }
     if let Some(galley) = galley {
         let y = rect.center().y - galley.size().y / 2.0;
-        painter.galley(egui::pos2(x, y), galley, egui::Color32::WHITE);
+        painter.galley(egui::pos2(x, y), galley, theme::ON_SCRIM);
     }
     rect
 }

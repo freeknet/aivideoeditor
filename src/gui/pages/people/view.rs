@@ -229,20 +229,17 @@ pub(super) fn card(
     }
 }
 
-/// The segment count on a card, a glass badge in the thumbnail's corner.
-fn count_badge(painter: &egui::Painter, palette: &Palette, thumb: Rect, segs: usize) {
+/// The segment count on a card, a scrim badge in the thumbnail's corner
+/// (dark in every theme, so it reads over any frame).
+fn count_badge(painter: &egui::Painter, _palette: &Palette, thumb: Rect, segs: usize) {
     let label = segs.to_string();
     let font = theme::medium(painter.ctx(), theme::BODY_SIZE);
-    let galley = painter.layout_no_wrap(label, font, Color32::WHITE);
+    let galley = painter.layout_no_wrap(label, font, theme::ON_SCRIM);
     let size = vec2(galley.size().x + SPACE_XS * 2.0, SPACE_LG + 2.0);
     let rect =
         Align2::RIGHT_BOTTOM.anchor_size(thumb.right_bottom() - vec2(SPACE_XS, SPACE_XS), size);
-    painter.rect_filled(
-        rect,
-        CornerRadius::same(theme::RADIUS_XS),
-        theme::glass_fill(palette),
-    );
-    painter.galley(rect.center() - galley.size() / 2.0, galley, Color32::WHITE);
+    painter.rect_filled(rect, CornerRadius::same(theme::RADIUS_XS), theme::scrim());
+    painter.galley(rect.center() - galley.size() / 2.0, galley, theme::ON_SCRIM);
 }
 
 /// `fans 12 · staff 3`: the props a person was seen with.

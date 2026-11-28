@@ -271,13 +271,52 @@ pub fn selected_row(theme: &Palette) -> Color32 {
     rgb(theme.panel.lerp(theme.text, 0.26))
 }
 
-/// The glass recipe for anything floating over footage (folded-panel
-/// buttons, the tool island, badges on video): the popover surface at
-/// about 85 % (egui has no backdrop blur, so it is more opaque than
-/// Selects' 50 %), a white-10 % hairline, white text.
+/// The glass recipe for controls floating over the viewer (folded-panel
+/// buttons, the tool island): the popover surface at about 85 % (egui has
+/// no backdrop blur, so it is more opaque than Selects' 50 %), an ink
+/// hairline, the theme's text. Badges on footage use [`scrim`] instead.
 #[must_use]
 pub fn glass_fill(theme: &Palette) -> Color32 {
     translucent(theme.raised, 217)
+}
+
+/// How opaque [`scrim`] is: about 63 %, so white text on it clears 4.5:1
+/// even over a white frame, the brightest footage there is.
+const SCRIM_ALPHA: u8 = 160;
+
+/// The plate under small text and icons painted on footage (a
+/// thumbnail's duration, mark, rating and count badges, the tape's play
+/// disc): black at about 63 % in every theme, light or dark, with
+/// [`ON_SCRIM`] text, the video-app convention. Footage is not a theme
+/// surface, so a theme-coloured plate (a light one in Material Light)
+/// would leave white text unreadable over a bright frame.
+#[must_use]
+pub fn scrim() -> Color32 {
+    Color32::from_black_alpha(SCRIM_ALPHA)
+}
+
+/// Text on [`scrim`]: white, in every theme.
+pub const ON_SCRIM: Color32 = Color32::WHITE;
+
+/// What [`scrim`] looks like over a frame of colour `under`: the colour
+/// text on it is read against.
+#[must_use]
+pub fn scrim_over(under: Rgb) -> Rgb {
+    under.lerp(Rgb::new(0, 0, 0), f32::from(SCRIM_ALPHA) / 255.0)
+}
+
+/// `color` as an icon on [`scrim`]: lifted toward white, in tenths, until
+/// it clears 3:1 against the scrim over a white frame. A light theme's
+/// warning or danger is dark enough to vanish on the scrim otherwise.
+#[must_use]
+pub fn on_scrim(color: Rgb) -> Color32 {
+    let worst = scrim_over(Rgb::new(255, 255, 255));
+    let white = Rgb::new(255, 255, 255);
+    let lifted = (0..=10)
+        .map(|k| color.lerp(white, k as f32 / 10.0))
+        .find(|c| c.contrast(worst) >= 3.0)
+        .unwrap_or(white);
+    rgb(lifted)
 }
 
 /// A region of the window, named for the surface it is painted on.
@@ -864,6 +903,43 @@ mod tests {
         // The ring is neutral-500, #737373, to within a few steps.
         let ring = ring(&theme);
         assert!((i32::from(ring.r()) - 0x73).abs() <= 4, "ring is {ring:?}");
+    }
+
+    #[test]
+    fn badges_on_footage_read_over_any_frame_in_every_theme() {
+        let on = Rgb::new(ON_SCRIM.r(), ON_SCRIM.g(), ON_SCRIM.b());
+        for frame in [
+            Rgb::new(255, 255, 255),
+            Rgb::new(250, 230, 120),
+            Rgb::new(128, 128, 128),
+            Rgb::new(0, 0, 0),
+        ] {
+            let plate = scrim_over(frame);
+            assert!(
+                on.contrast(plate) >= 4.5,
+                "badge text over {} is {:.2}:1",
+                frame.to_hex(),
+                on.contrast(plate)
+            );
+        }
+        let worst = scrim_over(Rgb::new(255, 255, 255));
+        for theme in crate::theme::Catalog::built_in().themes() {
+            for (name, color) in [
+                ("warning", theme.warning),
+                ("success", theme.success),
+                ("danger", theme.danger),
+                ("accent", theme.accent),
+            ] {
+                let icon = on_scrim(color);
+                let icon = Rgb::new(icon.r(), icon.g(), icon.b());
+                assert!(
+                    icon.contrast(worst) >= 3.0,
+                    "{}: the {name} badge icon is {:.2}:1 on the scrim",
+                    theme.id,
+                    icon.contrast(worst)
+                );
+            }
+        }
     }
 
     #[test]
