@@ -354,6 +354,55 @@ pub(super) fn paint_ticks(
     }
 }
 
+/// The gap between a pin and its label.
+const LABEL_GAP: f32 = 3.0;
+
+/// Whether two x spans overlap (touching ends do not).
+fn overlaps(a: (f32, f32), b: (f32, f32)) -> bool {
+    a.0 < b.1 && b.0 < a.1
+}
+
+/// The x span a pin's body covers.
+fn pin_body(x: f32) -> (f32, f32) {
+    (x - PIN_W / 2.0, x + PIN_W / 2.0)
+}
+
+/// Where each labelled pin's label goes, for pins `(x, label width)`: to
+/// the right of its pin, else to the left, whichever first stays short of
+/// `right` and clear of every pin and every label placed before it; `None`
+/// when neither side is clear, so labels never overlap.
+fn pin_labels(pins: &[(f32, f32)], right: f32) -> Vec<Option<(f32, f32)>> {
+    let mut placed: Vec<Option<(f32, f32)>> = Vec::with_capacity(pins.len());
+    for (i, &(x, w)) in pins.iter().enumerate() {
+        let after = (x + PIN_W / 2.0 + LABEL_GAP, x + PIN_W / 2.0 + LABEL_GAP + w);
+        let before = (x - PIN_W / 2.0 - LABEL_GAP - w, x - PIN_W / 2.0 - LABEL_GAP);
+        let clear = |span: (f32, f32)| {
+            let others = pins
+                .iter()
+                .enumerate()
+                .filter(|(j, _)| *j != i)
+                .all(|(_, &(px, _))| !overlaps(span, pin_body(px)));
+            others && placed.iter().flatten().all(|&p| !overlaps(span, p))
+        };
+        let side = if after.1 <= right && clear(after) {
+            Some(after)
+        } else if clear(before) {
+            Some(before)
+        } else {
+            None
+        };
+        placed.push(side);
+    }
+    placed
+}
+
+/// Whether a bar number spanning `number` would run into a pin or a pin's
+/// label.
+fn number_clashes(number: (f32, f32), pins: &[(f32, f32)], labels: &[Option<(f32, f32)>]) -> bool {
+    pins.iter().any(|&(x, _)| overlaps(number, pin_body(x)))
+        || labels.iter().flatten().any(|&l| overlaps(number, l))
+}
+
 /// A marker pin with its top at `top`, centred on `x`: a 12 px rounded
 /// square tapering to a point 16 px down. Hollow pins are outlined.
 pub(super) fn paint_pin(painter: &egui::Painter, x: f32, top: f32, color: Color32, hollow: bool) {
@@ -1547,6 +1596,35 @@ fn ruler(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut Ui, lay: &L
         .unwrap_or(64);
     let bar_font = theme::tabular(ui.ctx(), theme::SMALL_SIZE);
     let faint = theme::ink(t, LABEL_ALPHA);
+    let origin = s.map.beat_time(s.plan.start_bar, 0);
+    // No music, no drop to mark.
+    let no_music = s.plan.music.is_empty();
+
+    // The labelled pins (the plan's drop, the end card) are placed first,
+    // each label beside its pin on whichever side keeps it clear of the
+    // other and of the ruler's end; the bar numbers then skip the ones
+    // they would run into.
+    let label_font = theme::medium(ui.ctx(), theme::SMALL_SIZE);
+    let width_of = |text: &str, font: &egui::FontId| {
+        rp.layout_no_wrap(text.to_owned(), font.clone(), Color32::PLACEHOLDER)
+            .size()
+            .x
+    };
+    let drop_x = m.x(s.map.beat_time(s.plan.drop_bar, 0) - origin);
+    let card_x = m.x(s.card);
+    let mut pins = Vec::new();
+    if !no_music {
+        pins.push((drop_x, width_of("Drop", &label_font)));
+    }
+    pins.push((card_x, width_of("Card", &label_font)));
+    let spans = pin_labels(&pins, ruler.right());
+    let label_span = |x: f32| {
+        pins.iter()
+            .zip(&spans)
+            .find(|((px, _), _)| (*px - x).abs() < f32::EPSILON)
+            .and_then(|(_, span)| *span)
+    };
+
     let bars = s.plan.end_bar.saturating_sub(s.plan.start_bar);
     for b in 0..=bars {
         let Some(&bt) = s.grid.get(b * 4) else { break };
@@ -1560,10 +1638,15 @@ fn ruler(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut Ui, lay: &L
             marker_y..=marker_y + 4.0,
             Stroke::new(1.0, theme::ink(t, theme::INK_LINE)),
         );
+        let text = bar.to_string();
+        let number = (x + 3.0, x + 3.0 + width_of(&text, &bar_font));
+        if number_clashes(number, &pins, &spans) {
+            continue;
+        }
         rp.text(
             pos2(x + 3.0, marker_y + 1.0),
             Align2::LEFT_TOP,
-            bar.to_string(),
+            text,
             bar_font.clone(),
             faint,
         );
@@ -1571,19 +1654,22 @@ fn ruler(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut Ui, lay: &L
 
     // The drop (the plan's, solid; the track's other candidates, hollow)
     // and the end card, each with a line through the tracks.
-    let origin = s.map.beat_time(s.plan.start_bar, 0);
     let flag = |x: f32, color: Color32, hollow: bool, label: &str| {
         if x < ruler.left() - PIN_W || x > ruler.right() + PIN_W {
             return;
         }
         paint_pin(&rp, x, marker_y, color, hollow);
-        if !label.is_empty() {
+        if !label.is_empty()
+            && let Some((x0, _)) = label_span(x)
+        {
+            // Muted text, not the pin's colour: a yellow drop label on a
+            // light ruler would not read.
             rp.text(
-                pos2(x + PIN_W / 2.0 + 3.0, marker_y + 6.0),
+                pos2(x0, marker_y + 6.0),
                 Align2::LEFT_CENTER,
                 label,
-                theme::medium(ui.ctx(), theme::SMALL_SIZE),
-                color,
+                label_font.clone(),
+                theme::rgb(t.text_muted),
             );
         }
         lane_paint.vline(
@@ -1593,8 +1679,6 @@ fn ruler(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut Ui, lay: &L
         );
     };
     let (drop, _) = marker("yellow");
-    // No music, no drop to mark.
-    let no_music = s.plan.music.is_empty();
     for d in s.map.drops.iter().filter(|_| !no_music) {
         if d.bar != s.plan.drop_bar && d.bar >= s.plan.start_bar && d.bar <= s.plan.end_bar {
             flag(
@@ -1606,14 +1690,9 @@ fn ruler(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut Ui, lay: &L
         }
     }
     if !no_music {
-        flag(
-            m.x(s.map.beat_time(s.plan.drop_bar, 0) - origin),
-            drop,
-            false,
-            "Drop",
-        );
+        flag(drop_x, drop, false, "Drop");
     }
-    flag(m.x(s.card), theme::rgb(t.text_muted), false, "Card");
+    flag(card_x, theme::rgb(t.text_muted), false, "Card");
 
     // Comment pins.
     for (i, c) in s.plan.comments.iter().enumerate() {
@@ -2027,7 +2106,59 @@ fn island(state: &mut State, s: &Shown<'_>, ui: &mut Ui, rect: Rect, lay: &Layou
 
 #[cfg(test)]
 mod tests {
-    use super::{Map, clock, major_step, minor_step, name_fits, timecode};
+    use super::{
+        Map, clock, major_step, minor_step, name_fits, number_clashes, overlaps, pin_body,
+        pin_labels, timecode,
+    };
+
+    #[test]
+    fn the_drop_label_never_overlaps_the_card_a_pin_or_a_bar_number() -> anyhow::Result<()> {
+        // Far apart: both labels to the right of their pins.
+        let pins = [(100.0, 24.0), (400.0, 24.0)];
+        let spans = pin_labels(&pins, 800.0);
+        assert!(
+            spans
+                .iter()
+                .zip(&pins)
+                .all(|(s, (x, _))| s.is_some_and(|s| s.0 > *x)),
+            "room to the right: {spans:?}"
+        );
+        // The drop just before the card: its label goes left of its pin.
+        let pins = [(380.0, 24.0), (400.0, 24.0)];
+        let spans = pin_labels(&pins, 800.0);
+        let (Some(drop), Some(card)) = (spans[0], spans[1]) else {
+            anyhow::bail!("both labels fit: {spans:?}");
+        };
+        assert!(drop.1 <= 380.0, "the drop label flips left: {drop:?}");
+        assert!(!overlaps(drop, card), "{drop:?} and {card:?} overlap");
+        for span in [drop, card] {
+            for (px, _) in pins {
+                assert!(
+                    !overlaps(span, pin_body(px)),
+                    "{span:?} covers the pin at {px}"
+                );
+            }
+        }
+        // At the ruler's end: the card's label goes left.
+        let spans = pin_labels(&[(795.0, 24.0)], 800.0);
+        assert!(
+            spans[0].is_some_and(|s| s.1 <= 795.0),
+            "the end card's label stays on the ruler: {spans:?}"
+        );
+        // A bar number that would run into the drop's label is skipped,
+        // one clear of it is not.
+        let pins = [(200.0, 24.0)];
+        let spans = pin_labels(&pins, 800.0);
+        assert!(
+            number_clashes((203.0, 215.0), &pins, &spans),
+            "the drop bar's own number sits under the pin and label"
+        );
+        assert!(
+            !number_clashes((300.0, 312.0), &pins, &spans),
+            "a number further on is kept"
+        );
+        Ok(())
+    }
 
     #[test]
     fn a_name_needs_its_width_plus_twelve_px() -> anyhow::Result<()> {
