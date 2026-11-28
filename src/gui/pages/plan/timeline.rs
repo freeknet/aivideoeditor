@@ -1167,12 +1167,14 @@ fn video(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut Ui, lay: &L
     {
         let dur = s.timing.get(k).map_or(0.0, |x| x.1);
         let issues = s.issues.get(&k).cloned().unwrap_or_default();
-        v1_resp.on_hover_ui_at_pointer(|ui| {
-            ui.set_max_width(320.0);
+        let title = format!("Shot {} · {} @ {:.2}s", k + 1, sh.clip, sh.t_in);
+        widgets::pointer_tip(&v1_resp, &title, |ui| {
+            // The tooltip's inverse surface: its own ink, not the palette's.
+            let ink = ui.visuals().text_color();
             ui.label(
-                egui::RichText::new(format!("Shot {} · {} @ {:.2}s", k + 1, sh.clip, sh.t_in))
+                egui::RichText::new(&title)
                     .font(theme::medium(ui.ctx(), theme::BODY_SIZE))
-                    .color(theme::rgb(t.text)),
+                    .color(ink),
             );
             ui.label(
                 egui::RichText::new(format!(
@@ -1185,10 +1187,10 @@ fn video(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut Ui, lay: &L
                         format!(" · {}", sh.who)
                     }
                 ))
-                .color(theme::rgb(t.text_muted)),
+                .color(ink.gamma_multiply(0.72)),
             );
             if !sh.note.is_empty() {
-                ui.label(egui::RichText::new(&sh.note).color(theme::rgb(t.text)));
+                ui.label(egui::RichText::new(&sh.note).color(ink));
             }
             for msg in &issues {
                 ui.label(egui::RichText::new(msg).color(theme::rgb(t.danger)));
@@ -1196,7 +1198,6 @@ fn video(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut Ui, lay: &L
         });
     }
 }
-
 /// The striped band along the bottom of a shot the check fails on: black
 /// at 50 % with red diagonal stripes, 1.5 px wide and 8 px apart.
 fn bad_band(painter: &egui::Painter, block: Rect, t: &crate::theme::Palette) {
@@ -1651,18 +1652,17 @@ fn ruler(state: &mut State, s: &Shown<'_>, io: &mut Io<'_>, ui: &mut Ui, lay: &L
             c.author,
             if c.resolved { " · resolved" } else { "" }
         );
-        resp.on_hover_ui_at_pointer(|ui| {
-            ui.set_max_width(280.0);
+        widgets::pointer_tip(&resp, &head, |ui| {
+            let ink = ui.visuals().text_color();
             ui.label(
-                egui::RichText::new(head)
+                egui::RichText::new(&head)
                     .font(theme::medium(ui.ctx(), theme::BODY_SIZE))
-                    .color(theme::rgb(t.text)),
+                    .color(ink),
             );
-            ui.label(egui::RichText::new(note).color(theme::rgb(t.text_muted)));
+            ui.label(egui::RichText::new(note).color(ink.gamma_multiply(0.72)));
         });
     }
 }
-
 /// The track-header column: labels and the track toggles.
 fn headers(state: &mut State, s: &Shown<'_>, ui: &mut Ui, lay: &Layout, id: egui::Id) {
     let t = s.theme;

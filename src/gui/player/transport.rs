@@ -479,8 +479,10 @@ fn scrub_bar(p: &mut Player, ui: &mut Ui, theme: &Palette, strip: Rect, fps: f64
             track.y_range(),
             egui::Stroke::new(1.0, theme::rgb(theme.text_muted)),
         );
-        // The response is not needed: drawing it is the point.
-        let _ = response.on_hover_text_at_pointer(clock::timecode(t, fps));
+        let at = clock::timecode(t, fps);
+        widgets::pointer_tip(&response, &at, |ui| {
+            ui.label(&at);
+        });
     }
 }
 
